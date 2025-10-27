@@ -144,14 +144,16 @@ export function SelectionToolbar({
             </button>
           )}
 
-          {/* {onMoveToGroup && groups && groups.length > 0 && (
-            <div className="relative">
+          {/* Move to Group */}
+          {groups && groups.length > 0 && (
+            <div className="relative" style={{ pointerEvents: 'auto' }}>
               <button
                 onClick={(e) => { e.stopPropagation(); setGroupMenuOpen(v => !v); }}
                 className="w-8 h-8 flex items-center justify-center rounded hover:bg-gray-100 transition-colors group relative"
+                style={{ pointerEvents: 'auto' }}
                 title="Move to group"
               >
-                <img width="48" height="48" src="https://img.icons8.com/fluency-systems-filled/48/shuffle.png" alt="shuffle"/>
+                <img width="18" height="18" src="https://img.icons8.com/fluency-systems-filled/48/shuffle.png" alt="shuffle"/>
                 <span className="absolute -bottom-8 left-1/2 -translate-x-1/2 px-2 py-1 bg-gray-900 text-white text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
                   Move to group
                 </span>
@@ -159,25 +161,46 @@ export function SelectionToolbar({
               {groupMenuOpen && (
                 <div
                   className="absolute top-full left-0 mt-2 bg-white border border-gray-200 rounded shadow-lg z-40 min-w-[140px] py-1"
+                  style={{ pointerEvents: 'auto' }}
                   onClick={(e) => e.stopPropagation()}
                 >
                   {groups.map(g => (
-                    <button
+                    <div
                       key={g}
-                      className="w-full text-left px-3 py-1.5 text-sm hover:bg-gray-50"
-                      onClick={() => {
-                        onMoveToGroup(g, { includeSubtree: false });
-                        setGroupMenuOpen(false);
-                      }}
-                      title={`Move selection to "${g}"`}
+                      className="group flex items-center justify-between px-3 py-1.5 hover:bg-gray-50"
                     >
-                      {g}
-                    </button>
+                      <button
+                        className="flex-1 text-left text-sm"
+                        onClick={() => {
+                          if (onMoveToGroup) {
+                            onMoveToGroup(g, { includeSubtree: false });
+                          }
+                          setGroupMenuOpen(false);
+                        }}
+                        title={`Move selection to "${g}"`}
+                      >
+                        {g}
+                      </button>
+                      {onDeleteGroup && (
+                        <button
+                          className="opacity-0 group-hover:opacity-100 transition-opacity px-1 py-0.5 hover:bg-red-50 rounded text-red-600 text-sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (onDeleteGroup) {
+                              onDeleteGroup(g);
+                            }
+                          }}
+                          title="Delete group"
+                        >
+                          −
+                        </button>
+                      )}
+                    </div>
                   ))}
                 </div>
               )}
             </div>
-          )} */}
+          )}
 
           <div className="w-px h-6 bg-gray-300 mx-1"></div>
         </>
