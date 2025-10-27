@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { flushSync } from 'react-dom';
-import { Download, Trash2, ChevronDown, ChevronUp, Menu, X, Search, HelpCircle, Edit2, FileText } from 'lucide-react';
+import { Download, Trash2, ChevronDown, ChevronUp, Menu, X, Search, HelpCircle, Edit2 } from 'lucide-react';
 import { SitemapCanvas } from './components/SitemapCanvas';
 import { SearchOverlay } from './components/SearchOverlay';
 import { analyzeURLStructure, PageNode, groupByCategory, createNodesFromCsvData } from './utils/urlAnalyzer';
@@ -109,6 +109,23 @@ function App() {
   }, [activeSitemapId, nodes, extraLinks, linkStyles, colorOverrides, urls]);
 
   const createNewSitemap = useCallback(() => {
+    // Save current state before creating a new sitemap
+    if (activeSitemapId) {
+      setSitemaps(prev => prev.map(sitemap => 
+        sitemap.id === activeSitemapId 
+          ? {
+              ...sitemap,
+              nodes: JSON.parse(JSON.stringify(nodes)),
+              extraLinks: JSON.parse(JSON.stringify(extraLinks)),
+              linkStyles: JSON.parse(JSON.stringify(linkStyles)),
+              colorOverrides: JSON.parse(JSON.stringify(colorOverrides)),
+              urls: JSON.parse(JSON.stringify(urls)),
+              lastModified: Date.now()
+            }
+          : sitemap
+      ));
+    }
+
     // Find the highest number used in "Untitled Sitemap" names
     const untitledPattern = /^Untitled Sitemap (\d+)$/;
     let maxNumber = 0;
@@ -143,7 +160,7 @@ function App() {
     setUndoStack([]);
     setRedoStack([]);
     setSelectedNode(null);
-  }, [sitemaps]);
+  }, [sitemaps, activeSitemapId, nodes, extraLinks, linkStyles, colorOverrides, urls]);
 
   const switchToSitemap = useCallback((sitemapId: string) => {
     // Save current state before switching
