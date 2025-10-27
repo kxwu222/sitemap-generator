@@ -1393,7 +1393,7 @@ function App() {
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
                   if (editingSitemapName.trim()) {
-                    renameSitemap(editingSitemapId, editingSitemapName.trim());
+                    renameSitemap(editingSitemapId, editingSitemapName);
                   }
                   setEditingSitemapId(null);
                   setEditingSitemapName('');
@@ -1418,7 +1418,7 @@ function App() {
               <button
                 onClick={() => {
                   if (editingSitemapName.trim()) {
-                    renameSitemap(editingSitemapId, editingSitemapName.trim());
+                    renameSitemap(editingSitemapId, editingSitemapName);
                   }
                   setEditingSitemapId(null);
                   setEditingSitemapName('');
