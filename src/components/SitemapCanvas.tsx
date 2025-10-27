@@ -1975,7 +1975,7 @@ export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNod
       </div>
 
       {/* Hover Toolbar - appears when hovering over a node */}
-      {hoverToolbarNode && selectedIds.size === 0 && (
+      {hoverToolbarNode && selectedIds.size === 0 && !draggedNode && (
         <HoverToolbar
           node={hoverToolbarNode}
           position={hoverToolbarPosition}
@@ -1997,7 +1997,7 @@ export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNod
       )}
 
       {/* Selection Toolbar - appears when nodes are selected */}
-      {selectedIds.size > 0 && (() => {
+      {selectedIds.size > 0 && !draggedNode && (() => {
         const selectedNodesArray = Array.from(selectedIds).map(id => nodes.find(n => n.id === id)).filter(Boolean) as PageNode[];
         if (selectedNodesArray.length === 0) return null;
         
