@@ -6,7 +6,7 @@ export async function exportToPNG(
 ): Promise<void> {
   // Calculate bounds to include all nodes with proper padding
   const bounds = calculateNodeBounds(nodes);
-  const padding = 150; // Extra padding around the content for safety
+  const padding = 300; // Extra padding around the content for safety
   const width = bounds.width + (padding * 2);
   const height = bounds.height + (padding * 2);
   
@@ -45,7 +45,7 @@ export async function exportToPNG(
 export function exportToSVG(nodes: PageNode[]): void {
   // Calculate bounds to include all nodes with proper padding
   const bounds = calculateNodeBounds(nodes);
-  const padding = 150; // Extra padding around the content for safety
+  const padding = 300; // Extra padding around the content for safety
   const width = bounds.width + (padding * 2);
   const height = bounds.height + (padding * 2);
   
@@ -96,7 +96,7 @@ export function exportToCSV(nodes: PageNode[]): void {
 export function exportToHTML(nodes: PageNode[]): void {
   // Calculate bounds to include all nodes with proper padding
   const bounds = calculateNodeBounds(nodes);
-  const padding = 150; // Extra padding around the content for safety
+  const padding = 300; // Extra padding around the content for safety
   const width = bounds.width + (padding * 2);
   const height = bounds.height + (padding * 2);
   
@@ -263,13 +263,14 @@ function calculateNodeBounds(nodes: PageNode[]): { minX: number; minY: number; m
 
   nodes.forEach(node => {
     if (node.x !== undefined && node.y !== undefined) {
-      // Account for node dimensions - use larger estimate to be safe
+      // Account for node dimensions - use generous estimate to avoid clipping
       // Calculate based on actual content
       const titleLength = node.title.length;
       const urlLength = node.url.length;
       const maxTextLength = Math.max(titleLength, urlLength);
-      const nodeWidth = Math.max(160, maxTextLength * 7 + 40); // Match SVG calculation
-      const nodeHeight = 50;
+      // Be more generous with width calculation to account for longer URLs and titles
+      const nodeWidth = Math.max(180, maxTextLength * 8 + 60); // Increased margin
+      const nodeHeight = 60; // Increased to account for both title and URL lines
       
       minX = Math.min(minX, node.x - nodeWidth / 2);
       minY = Math.min(minY, node.y - nodeHeight / 2);
@@ -466,8 +467,8 @@ function generateSVG(nodes: PageNode[], width = 1200, height = 800): string {
     const titleLength = node.title.length;
     const urlLength = node.url.length;
     const maxTextLength = Math.max(titleLength, urlLength);
-    const nodeWidth = Math.max(120, maxTextLength * 7 + 40);
-    const nodeHeight = 50;
+    const nodeWidth = Math.max(180, maxTextLength * 8 + 60); // Match bounds calculation
+    const nodeHeight = 60; // Match bounds calculation
 
     const x = node.x - nodeWidth / 2;
     const y = node.y - nodeHeight / 2;
