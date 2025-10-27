@@ -304,38 +304,28 @@ export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNod
         e.preventDefault();
         setIsSpacePressed(true);
       }
-      // V key for select mode
-      if (e.key === 'v' || e.key === 'V') {
+      // V key for select mode (but not when typing in input fields)
+      if ((e.key === 'v' || e.key === 'V') && !isTyping) {
         setCursorMode('select');
       }
-      // M key for marquee mode
-      if (e.key === 'm' || e.key === 'M') {
+      // M key for marquee mode (but not when typing in input fields)
+      if ((e.key === 'm' || e.key === 'M') && !isTyping) {
         setCursorMode('marquee');
       }
       // Delete key for selected nodes (but not when typing in input fields)
-      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedIds.size > 0) {
-        // Don't trigger if user is typing in an input field
-        const activeElement = document.activeElement;
-        const isTyping = activeElement && (
-          activeElement.tagName === 'INPUT' ||
-          activeElement.tagName === 'TEXTAREA' ||
-          activeElement.hasAttribute('contenteditable')
-        );
-        
-        if (!isTyping) {
-          e.preventDefault();
-          handleDeleteSelectedNodes();
-        }
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedIds.size > 0 && !isTyping) {
+        e.preventDefault();
+        handleDeleteSelectedNodes();
       }
-      // A key for add child (when a single node is selected)
-      if ((e.key === 'a' || e.key === 'A') && selectedIds.size === 1 && onAddChild) {
+      // A key for add child (when a single node is selected, but not when typing)
+      if ((e.key === 'a' || e.key === 'A') && selectedIds.size === 1 && onAddChild && !isTyping) {
         const selectedNode = nodes.find(n => selectedIds.has(n.id));
         if (selectedNode) {
           onAddChild(selectedNode.id);
         }
       }
-      // C key for color picker (when nodes are selected)
-      if ((e.key === 'c' || e.key === 'C') && selectedIds.size > 0) {
+      // C key for color picker (when nodes are selected, but not when typing)
+      if ((e.key === 'c' || e.key === 'C') && selectedIds.size > 0 && !isTyping) {
         const selectedNode = nodes.find(n => selectedIds.has(n.id));
         if (selectedNode) {
           // Use center of canvas as position
