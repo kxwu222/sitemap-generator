@@ -801,7 +801,7 @@ function App() {
   const handleExport = async (format: 'png' | 'csv' | 'html' | 'xml') => {
     switch (format) {
       case 'png':
-        await exportToPNG(nodes);
+        await exportToPNG(nodes, extraLinks, linkStyles);
         break;
       case 'csv':
         exportToCSV(nodes);

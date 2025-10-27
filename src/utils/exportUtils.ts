@@ -1,7 +1,10 @@
 import { PageNode } from './urlAnalyzer';
+import { LinkStyle } from '../types/linkStyle';
 
 export async function exportToPNG(
   nodes: PageNode[],
+  extraLinks?: Array<{ sourceId: string; targetId: string }>,
+  linkStyles?: Record<string, LinkStyle>,
   scale: number = 2
 ): Promise<void> {
   // Calculate bounds to include all nodes with proper padding
@@ -28,7 +31,14 @@ export async function exportToPNG(
     y: node.y !== undefined ? node.y - bounds.minY + padding : undefined,
   }));
 
-  drawSitemapToContext(ctx, offsetNodes);
+  // Offset extra links
+  const offsetExtraLinks = (extraLinks || []).map(link => {
+    const source = offsetNodes.find(n => n.id === link.sourceId);
+    const target = offsetNodes.find(n => n.id === link.targetId);
+    return { sourceId: link.sourceId, targetId: link.targetId, source, target };
+  });
+
+  drawSitemapToContext(ctx, offsetNodes, offsetExtraLinks, linkStyles);
 
   canvas.toBlob(blob => {
     if (blob) {
@@ -385,7 +395,9 @@ function calculateNodeBounds(nodes: PageNode[]): { minX: number; minY: number; m
 
 function drawSitemapToContext(
   ctx: CanvasRenderingContext2D,
-  nodes: PageNode[]
+  nodes: PageNode[],
+  offsetExtraLinks?: Array<{ sourceId: string; targetId: string; source?: PageNode; target?: PageNode }>,
+  linkStyles?: Record<string, LinkStyle>
 ): void {
   const CATEGORY_COLORS: Record<string, string> = {
     root: '#ffffff',
@@ -400,7 +412,10 @@ function drawSitemapToContext(
 
   const nodeMap = new Map(nodes.map(n => [n.id, n]));
 
-  // Draw links first
+  // Helper function to get link key
+  const linkKey = (sourceId: string, targetId: string) => `${sourceId}-${targetId}`;
+
+  // Draw parent-child hierarchical links first
   ctx.strokeStyle = '#e0e0e0';
   ctx.lineWidth = 2;
 
@@ -415,6 +430,56 @@ function drawSitemapToContext(
       }
     }
   });
+
+  // Draw extra (non-hierarchical) links on top
+  if (offsetExtraLinks) {
+    offsetExtraLinks.forEach(linkObj => {
+      const source = linkObj.source || nodeMap.get(linkObj.sourceId);
+      const target = linkObj.target || nodeMap.get(linkObj.targetId);
+      
+      if (!source || !target || source.x === undefined || source.y === undefined || 
+          target.x === undefined || target.y === undefined) return;
+      
+      const key = linkKey(linkObj.sourceId, linkObj.targetId);
+      const style = linkStyles?.[key] || {};
+      
+      // Apply styling
+      ctx.strokeStyle = style.color || '#999999';
+      ctx.lineWidth = style.width || 1.5;
+      
+      // Apply dash pattern
+      const dash = style.dash || 'dashed';
+      if (dash === 'dashed') {
+        ctx.setLineDash([6, 4]);
+      } else if (dash === 'dotted') {
+        ctx.setLineDash([2, 3]);
+      } else {
+        ctx.setLineDash([]);
+      }
+      
+      const path = style.path || 'straight';
+      
+      ctx.beginPath();
+      if (path === 'straight') {
+        ctx.moveTo(source.x, source.y);
+        ctx.lineTo(target.x, target.y);
+      } else if (path === 'elbow') {
+        const elbowX = source.x;
+        const elbowY = target.y;
+        ctx.moveTo(source.x, source.y);
+        ctx.lineTo(elbowX, elbowY);
+        ctx.lineTo(target.x, target.y);
+      } else if (path === 'curved') {
+        const cx = (source.x + target.x) / 2;
+        const cy = Math.min(source.y, target.y) - 50;
+        ctx.moveTo(source.x, source.y);
+        ctx.quadraticCurveTo(cx, cy, target.x, target.y);
+      }
+      
+      ctx.stroke();
+      ctx.setLineDash([]); // Reset dash
+    });
+  }
 
   // Draw nodes
   nodes.forEach(node => {
