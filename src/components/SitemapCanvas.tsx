@@ -2097,9 +2097,9 @@ export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNod
           allNodes={nodes}
           anchorPosition={colorPickerPosition}
           onColorChange={handleColorChange}
-          onClose={() => {
-            // Restore original colors for preview only (no history change)
-            if (onNodesPreview && Object.keys(originalColors).length > 0) {
+          onClose={(applied) => {
+            // Only restore original colors if color was NOT applied (cancelled or backdrop clicked)
+            if (!applied && onNodesPreview && Object.keys(originalColors).length > 0) {
               const restored = nodes.map(node => {
                 const orig = originalColors[node.id];
                 return orig

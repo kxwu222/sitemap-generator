@@ -6,7 +6,7 @@ interface ColorPickerPopoverProps {
   allNodes: PageNode[];
   anchorPosition: { x: number; y: number };
   onColorChange: (nodeIds: string[], bgColor: string, textColor: string) => void;
-  onClose: () => void;
+  onClose: (applied?: boolean) => void;
   onPreview?: (nodeIds: string[], bgColor: string, textColor: string) => void;
 }
 
@@ -198,14 +198,14 @@ export function ColorPickerPopover({
       ? categoryNodes.map(n => n.id)
       : nodeIds;
     onColorChange(targetIds, bgColor, textColor);
-    onClose();
+    onClose(true); // Pass true to indicate color was applied
   };
 
   const handleCancel = () => {
     // Close without applying - parent will restore original colors.
     // Prevent any final preview from firing before unmount.
     isCancellingRef.current = true;
-    onClose();
+    onClose(false); // Pass false to indicate color was not applied
   };
 
   const getTransform = () => {
@@ -224,7 +224,7 @@ export function ColorPickerPopover({
       {/* Backdrop */}
       <div
         className="fixed inset-0 z-[250]"
-        onClick={onClose}
+        onClick={() => onClose(false)}
       />
 
       {/* Popover - Compact version with smart positioning */}
