@@ -110,8 +110,12 @@ function App() {
 
   const createNewSitemap = useCallback(() => {
     // Save current state before creating a new sitemap
-    if (activeSitemapId) {
-      setSitemaps(prev => prev.map(sitemap => 
+    const newSitemapId = `sitemap-${Date.now()}`;
+    const now = Date.now();
+
+    setSitemaps(prev => {
+      // First, save current sitemap state if it exists
+      const updated = prev.map(sitemap => 
         sitemap.id === activeSitemapId 
           ? {
               ...sitemap,
@@ -120,37 +124,41 @@ function App() {
               linkStyles: JSON.parse(JSON.stringify(linkStyles)),
               colorOverrides: JSON.parse(JSON.stringify(colorOverrides)),
               urls: JSON.parse(JSON.stringify(urls)),
-              lastModified: Date.now()
+              lastModified: now
             }
           : sitemap
-      ));
-    }
+      );
 
-    // Find the highest number used in "Untitled Sitemap" names
-    const untitledPattern = /^Untitled Sitemap (\d+)$/;
-    let maxNumber = 0;
-    
-    sitemaps.forEach(sitemap => {
-      const match = sitemap.name.match(untitledPattern);
-      if (match) {
-        const num = parseInt(match[1], 10);
-        if (num > maxNumber) maxNumber = num;
-      }
+      // Find the highest number used in "Untitled Sitemap" names
+      const untitledPattern = /^Untitled Sitemap (\d+)$/;
+      let maxNumber = 0;
+      
+      updated.forEach(sitemap => {
+        const match = sitemap.name.match(untitledPattern);
+        if (match) {
+          const num = parseInt(match[1], 10);
+          if (num > maxNumber) maxNumber = num;
+        }
+      });
+
+      const newSitemap: SitemapData = {
+        id: newSitemapId,
+        name: `Untitled Sitemap ${maxNumber + 1}`,
+        nodes: [],
+        extraLinks: [],
+        linkStyles: {},
+        colorOverrides: {},
+        urls: [],
+        lastModified: now,
+        createdAt: now
+      };
+
+      return [...updated, newSitemap];
     });
 
-    const newSitemap: SitemapData = {
-      id: `sitemap-${Date.now()}`,
-      name: `Untitled Sitemap ${maxNumber + 1}`,
-      nodes: [],
-      extraLinks: [],
-      linkStyles: {},
-      colorOverrides: {},
-      urls: [],
-      lastModified: Date.now(),
-      createdAt: Date.now()
-    };
-    setSitemaps(prev => [...prev, newSitemap]);
-    setActiveSitemapId(newSitemap.id);
+    // Set the new sitemap as active
+    setActiveSitemapId(newSitemapId);
+    
     // Reset all state
     setNodes([]);
     setExtraLinks([]);
@@ -160,7 +168,7 @@ function App() {
     setUndoStack([]);
     setRedoStack([]);
     setSelectedNode(null);
-  }, [sitemaps, activeSitemapId, nodes, extraLinks, linkStyles, colorOverrides, urls]);
+  }, [activeSitemapId, nodes, extraLinks, linkStyles, colorOverrides, urls]);
 
   const switchToSitemap = useCallback((sitemapId: string) => {
     // Save current state before switching
