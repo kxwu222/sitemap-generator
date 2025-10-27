@@ -6,7 +6,7 @@ export async function exportToPNG(
 ): Promise<void> {
   // Calculate bounds to include all nodes with proper padding
   const bounds = calculateNodeBounds(nodes);
-  const padding = 100; // Extra padding around the content
+  const padding = 150; // Extra padding around the content for safety
   const width = bounds.width + (padding * 2);
   const height = bounds.height + (padding * 2);
   
@@ -45,7 +45,7 @@ export async function exportToPNG(
 export function exportToSVG(nodes: PageNode[]): void {
   // Calculate bounds to include all nodes with proper padding
   const bounds = calculateNodeBounds(nodes);
-  const padding = 100; // Extra padding around the content
+  const padding = 150; // Extra padding around the content for safety
   const width = bounds.width + (padding * 2);
   const height = bounds.height + (padding * 2);
   
@@ -96,7 +96,7 @@ export function exportToCSV(nodes: PageNode[]): void {
 export function exportToHTML(nodes: PageNode[]): void {
   // Calculate bounds to include all nodes with proper padding
   const bounds = calculateNodeBounds(nodes);
-  const padding = 100; // Extra padding around the content
+  const padding = 150; // Extra padding around the content for safety
   const width = bounds.width + (padding * 2);
   const height = bounds.height + (padding * 2);
   
@@ -263,9 +263,13 @@ function calculateNodeBounds(nodes: PageNode[]): { minX: number; minY: number; m
 
   nodes.forEach(node => {
     if (node.x !== undefined && node.y !== undefined) {
-      // Account for node dimensions (approximate)
-      const nodeWidth = 160; // Approximate node width
-      const nodeHeight = 50; // Approximate node height
+      // Account for node dimensions - use larger estimate to be safe
+      // Calculate based on actual content
+      const titleLength = node.title.length;
+      const urlLength = node.url.length;
+      const maxTextLength = Math.max(titleLength, urlLength);
+      const nodeWidth = Math.max(160, maxTextLength * 7 + 40); // Match SVG calculation
+      const nodeHeight = 50;
       
       minX = Math.min(minX, node.x - nodeWidth / 2);
       minY = Math.min(minY, node.y - nodeHeight / 2);

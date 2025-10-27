@@ -208,9 +208,9 @@ function App() {
   }, [sitemaps, activeSitemapId, createNewSitemap, switchToSitemap]);
 
   const renameSitemap = useCallback((sitemapId: string, newName: string) => {
-    if (!newName.trim()) return;
+    if (!newName.trim()) return; // Still validate non-empty
     setSitemaps(prev => prev.map(s => 
-      s.id === sitemapId ? { ...s, name: newName.trim(), lastModified: Date.now() } : s
+      s.id === sitemapId ? { ...s, name: newName, lastModified: Date.now() } : s
     ));
   }, []);
 
