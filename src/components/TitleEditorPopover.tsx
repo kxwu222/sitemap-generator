@@ -22,7 +22,7 @@ export function TitleEditorPopover({ nodeId, currentTitle, anchorPosition, onSav
 
   const handleSave = () => {
     if (title.trim()) {
-      onSave(nodeId, title.trim());
+      onSave(nodeId, title);
       onClose();
     }
   };

@@ -1275,7 +1275,6 @@ function App() {
                   <h3 className="text-sm font-medium text-gray-900 mb-3 uppercase tracking-wide">Links</h3>
                   <div className="space-y-2">
                     <ShortcutItem keys="Ctrl/Cmd + Drag" label="Create link" />
-                    <ShortcutItem keys="Ctrl/Cmd + L" label="Edit link" />
                     <ShortcutItem keys="Right-click link" label="Style link" />
                   </div>
                 </div>
@@ -1284,7 +1283,7 @@ function App() {
                 <div>
                   <h3 className="text-sm font-medium text-gray-900 mb-3 uppercase tracking-wide">Navigation</h3>
                   <div className="space-y-2">
-                    <ShortcutItem keys="Space + Drag" label="Pan canvas" />
+                    <ShortcutItem keys="Option + Drag" label="Drag parent nodes" info="Drag all connected parent and child nodes" />
                     <ShortcutItem keys="Ctrl/Cmd + Wheel" label="Zoom" />
                     <ShortcutItem keys="Ctrl/Cmd + F" label="Search" />
                   </div>
