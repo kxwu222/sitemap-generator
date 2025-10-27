@@ -6,6 +6,9 @@ export interface PageNode {
   parent: string | null;
   children: string[];
   category: string;
+  customTitle?: boolean; // Flag to indicate if title is user-provided
+  customColor?: string; // Custom color for the node
+  textColor?: string; // Custom text color for the node
   x?: number;
   y?: number;
   vx?: number;
@@ -17,6 +20,61 @@ export interface PageNode {
 export interface URLHierarchy {
   nodes: PageNode[];
   categories: string[];
+}
+
+export function createNodesFromCsvData(csvData: Array<{title: string, url: string, group?: string}>): URLHierarchy {
+  const nodeMap = new Map<string, PageNode>();
+  const categories = new Set<string>();
+
+  csvData.forEach((row, index) => {
+    const cleanUrl = row.url.trim();
+    if (!cleanUrl) return;
+
+    const urlObj = parseURL(cleanUrl);
+    const pathSegments = urlObj.segments;
+    const depth = pathSegments.length;
+    const category = row.group?.trim() || determineCategory(pathSegments);
+
+    categories.add(category);
+
+    const node: PageNode = {
+      id: `node-${index}`,
+      url: cleanUrl,
+      title: row.title.trim(),
+      depth,
+      parent: null,
+      children: [],
+      category,
+      customTitle: true, // Mark as custom title from CSV
+    };
+
+    nodeMap.set(cleanUrl, node);
+  });
+
+
+  const sortedUrls = Array.from(nodeMap.keys()).sort((a, b) => {
+    const depthA = parseURL(a).segments.length;
+    const depthB = parseURL(b).segments.length;
+    return depthA - depthB;
+  });
+
+  sortedUrls.forEach(url => {
+    const node = nodeMap.get(url)!;
+    const parentUrl = findParentURL(url, nodeMap);
+
+    if (parentUrl) {
+      const parentNode = nodeMap.get(parentUrl);
+      if (parentNode) {
+        node.parent = parentNode.id;
+        parentNode.children.push(node.id);
+      }
+    }
+  });
+
+  return {
+    nodes: Array.from(nodeMap.values()),
+    categories: Array.from(categories),
+  };
 }
 
 export function analyzeURLStructure(urls: string[]): URLHierarchy {
@@ -46,6 +104,7 @@ export function analyzeURLStructure(urls: string[]): URLHierarchy {
 
     nodeMap.set(cleanUrl, node);
   });
+
 
   const sortedUrls = Array.from(nodeMap.keys()).sort((a, b) => {
     const depthA = parseURL(a).segments.length;
@@ -84,6 +143,7 @@ function parseURL(url: string): { segments: string[]; domain: string } {
     return { segments, domain: '' };
   }
 }
+
 
 function findParentURL(url: string, nodeMap: Map<string, PageNode>): string | null {
   const segments = parseURL(url).segments;

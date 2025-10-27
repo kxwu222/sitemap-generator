@@ -2,10 +2,14 @@ import { PageNode } from './urlAnalyzer';
 
 export async function exportToPNG(
   nodes: PageNode[],
-  width: number = 2400,
-  height: number = 1600,
   scale: number = 2
 ): Promise<void> {
+  // Calculate bounds to include all nodes with proper padding
+  const bounds = calculateNodeBounds(nodes);
+  const padding = 100; // Extra padding around the content
+  const width = bounds.width + (padding * 2);
+  const height = bounds.height + (padding * 2);
+  
   const canvas = document.createElement('canvas');
   canvas.width = width * scale;
   canvas.height = height * scale;
@@ -17,7 +21,14 @@ export async function exportToPNG(
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, width, height);
 
-  drawSitemapToContext(ctx, nodes);
+  // Offset all nodes by padding to center them
+  const offsetNodes = nodes.map(node => ({
+    ...node,
+    x: node.x !== undefined ? node.x - bounds.minX + padding : undefined,
+    y: node.y !== undefined ? node.y - bounds.minY + padding : undefined,
+  }));
+
+  drawSitemapToContext(ctx, offsetNodes);
 
   canvas.toBlob(blob => {
     if (blob) {
@@ -31,8 +42,21 @@ export async function exportToPNG(
   });
 }
 
-export function exportToSVG(nodes: PageNode[], width: number = 1200, height: number = 800): void {
-  const svg = generateSVG(nodes, width, height);
+export function exportToSVG(nodes: PageNode[]): void {
+  // Calculate bounds to include all nodes with proper padding
+  const bounds = calculateNodeBounds(nodes);
+  const padding = 100; // Extra padding around the content
+  const width = bounds.width + (padding * 2);
+  const height = bounds.height + (padding * 2);
+  
+  // Offset all nodes by padding to center them
+  const offsetNodes = nodes.map(node => ({
+    ...node,
+    x: node.x !== undefined ? node.x - bounds.minX + padding : undefined,
+    y: node.y !== undefined ? node.y - bounds.minY + padding : undefined,
+  }));
+  
+  const svg = generateSVG(offsetNodes, width, height);
   const blob = new Blob([svg], { type: 'image/svg+xml' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
@@ -70,7 +94,20 @@ export function exportToCSV(nodes: PageNode[]): void {
 }
 
 export function exportToHTML(nodes: PageNode[]): void {
-  const svg = generateSVG(nodes, 1200, 800);
+  // Calculate bounds to include all nodes with proper padding
+  const bounds = calculateNodeBounds(nodes);
+  const padding = 100; // Extra padding around the content
+  const width = bounds.width + (padding * 2);
+  const height = bounds.height + (padding * 2);
+  
+  // Offset all nodes by padding to center them
+  const offsetNodes = nodes.map(node => ({
+    ...node,
+    x: node.x !== undefined ? node.x - bounds.minX + padding : undefined,
+    y: node.y !== undefined ? node.y - bounds.minY + padding : undefined,
+  }));
+  
+  const svg = generateSVG(offsetNodes, width, height);
 
   const html = `<!DOCTYPE html>
 <html lang="en">
@@ -170,36 +207,8 @@ export function exportToHTML(nodes: PageNode[]): void {
       <div class="legend-title">Categories</div>
       <div class="legend-items">
         <div class="legend-item">
-          <div class="legend-color" style="background: #000000"></div>
-          <span>Root</span>
-        </div>
-        <div class="legend-item">
-          <div class="legend-color" style="background: #1a1a1a"></div>
-          <span>Content</span>
-        </div>
-        <div class="legend-item">
-          <div class="legend-color" style="background: #333333"></div>
-          <span>Products</span>
-        </div>
-        <div class="legend-item">
-          <div class="legend-color" style="background: #4d4d4d"></div>
-          <span>Company</span>
-        </div>
-        <div class="legend-item">
-          <div class="legend-color" style="background: #666666"></div>
-          <span>Support</span>
-        </div>
-        <div class="legend-item">
-          <div class="legend-color" style="background: #808080"></div>
-          <span>Technical</span>
-        </div>
-        <div class="legend-item">
-          <div class="legend-color" style="background: #999999"></div>
-          <span>Users</span>
-        </div>
-        <div class="legend-item">
-          <div class="legend-color" style="background: #b3b3b3"></div>
-          <span>General</span>
+          <div class="legend-color" style="background: #ffffff; border: 1px solid #000000;"></div>
+          <span>All Categories</span>
         </div>
       </div>
     </div>
@@ -242,23 +251,65 @@ export function exportToHTML(nodes: PageNode[]): void {
   URL.revokeObjectURL(url);
 }
 
+function calculateNodeBounds(nodes: PageNode[]): { minX: number; minY: number; maxX: number; maxY: number; width: number; height: number } {
+  if (nodes.length === 0) {
+    return { minX: 0, minY: 0, maxX: 800, maxY: 600, width: 800, height: 600 };
+  }
+
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+
+  nodes.forEach(node => {
+    if (node.x !== undefined && node.y !== undefined) {
+      // Account for node dimensions (approximate)
+      const nodeWidth = 160; // Approximate node width
+      const nodeHeight = 50; // Approximate node height
+      
+      minX = Math.min(minX, node.x - nodeWidth / 2);
+      minY = Math.min(minY, node.y - nodeHeight / 2);
+      maxX = Math.max(maxX, node.x + nodeWidth / 2);
+      maxY = Math.max(maxY, node.y + nodeHeight / 2);
+    }
+  });
+
+  // Ensure we have valid bounds
+  if (minX === Infinity) {
+    minX = 0;
+    minY = 0;
+    maxX = 800;
+    maxY = 600;
+  }
+
+  return {
+    minX,
+    minY,
+    maxX,
+    maxY,
+    width: maxX - minX,
+    height: maxY - minY
+  };
+}
+
 function drawSitemapToContext(
   ctx: CanvasRenderingContext2D,
   nodes: PageNode[]
 ): void {
   const CATEGORY_COLORS: Record<string, string> = {
-    root: '#000000',
-    content: '#1a1a1a',
-    products: '#333333',
-    company: '#4d4d4d',
-    support: '#666666',
-    technical: '#808080',
-    users: '#999999',
-    general: '#b3b3b3',
+    root: '#ffffff',
+    content: '#ffffff',
+    products: '#ffffff',
+    company: '#ffffff',
+    support: '#ffffff',
+    technical: '#ffffff',
+    users: '#ffffff',
+    general: '#ffffff',
   };
 
   const nodeMap = new Map(nodes.map(n => [n.id, n]));
 
+  // Draw links first
   ctx.strokeStyle = '#e0e0e0';
   ctx.lineWidth = 2;
 
@@ -274,67 +325,123 @@ function drawSitemapToContext(
     }
   });
 
+  // Draw nodes
   nodes.forEach(node => {
     if (node.x === undefined || node.y === undefined) return;
 
-    const radius = 40;
-
-    ctx.fillStyle = CATEGORY_COLORS[node.category] || CATEGORY_COLORS.general;
-    ctx.strokeStyle = '#ffffff';
+    const dimensions = calculateNodeDimensions(node, ctx);
+    
+    // Draw rounded rectangle background
+    const nodeColor = node.customColor || CATEGORY_COLORS[node.category] || CATEGORY_COLORS.general;
+    ctx.fillStyle = nodeColor;
+    ctx.strokeStyle = '#000000'; // Black border
     ctx.lineWidth = 2;
 
-    ctx.beginPath();
-    ctx.arc(node.x, node.y, radius, 0, Math.PI * 2);
+    drawRoundedRect(
+      ctx,
+      node.x - dimensions.width / 2,
+      node.y - dimensions.height / 2,
+      dimensions.width,
+      dimensions.height,
+      8
+    );
     ctx.fill();
     ctx.stroke();
 
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+    // Draw title text
+    const titleColor = node.textColor || '#000000'; // Default to black text
+    ctx.fillStyle = titleColor;
+    ctx.font = 'bold 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
 
-    const maxWidth = radius * 1.5;
-    const words = node.title.split(' ');
-    let line = '';
-    const lines: string[] = [];
+    const titleY = node.y - 8;
+    const maxTitleWidth = dimensions.width - 20;
+    const titleText = truncateText(ctx, node.title, maxTitleWidth);
+    ctx.fillText(titleText, node.x, titleY);
 
-    words.forEach(word => {
-      const testLine = line + (line ? ' ' : '') + word;
-      const metrics = ctx.measureText(testLine);
-      if (metrics.width > maxWidth && line !== '') {
-        lines.push(line);
-        line = word;
-      } else {
-        line = testLine;
-      }
-    });
-    lines.push(line);
-
-    const lineHeight = 14;
-    const startY = node.y - ((lines.length - 1) * lineHeight) / 2;
-
-    lines.slice(0, 2).forEach((textLine, i) => {
-      ctx.fillText(textLine, node.x ?? 0, startY + i * lineHeight);
-    });
+    // Draw URL subtitle
+    const urlColor = node.textColor ? `${node.textColor}CC` : 'rgba(0, 0, 0, 0.8)'; // Default to black with transparency
+    ctx.fillStyle = urlColor;
+    ctx.font = '10px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+    
+    const urlY = node.y + 8;
+    const maxUrlWidth = dimensions.width - 20;
+    const urlText = truncateText(ctx, node.url, maxUrlWidth);
+    ctx.fillText(urlText, node.x, urlY);
   });
+}
+
+function calculateNodeDimensions(node: PageNode, ctx: CanvasRenderingContext2D): { width: number; height: number } {
+  const padding = 20;
+  const minWidth = 120;
+  const minHeight = 50;
+
+  // Measure title text
+  ctx.font = 'bold 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+  const titleWidth = ctx.measureText(node.title).width;
+
+  // Measure URL text
+  ctx.font = '10px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+  const urlWidth = ctx.measureText(node.url).width;
+
+  const contentWidth = Math.max(titleWidth, urlWidth);
+  const width = Math.max(minWidth, contentWidth + padding);
+  const height = minHeight;
+
+  return { width, height };
+}
+
+function drawRoundedRect(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number
+) {
+  ctx.beginPath();
+  ctx.moveTo(x + radius, y);
+  ctx.lineTo(x + width - radius, y);
+  ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+  ctx.lineTo(x + width, y + height - radius);
+  ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+  ctx.lineTo(x + radius, y + height);
+  ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+  ctx.lineTo(x, y + radius);
+  ctx.quadraticCurveTo(x, y, x + radius, y);
+  ctx.closePath();
+}
+
+function truncateText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string {
+  if (ctx.measureText(text).width <= maxWidth) {
+    return text;
+  }
+
+  let truncated = text;
+  while (ctx.measureText(truncated + '...').width > maxWidth && truncated.length > 0) {
+    truncated = truncated.slice(0, -1);
+  }
+  return truncated + '...';
 }
 
 function generateSVG(nodes: PageNode[], width = 1200, height = 800): string {
   const CATEGORY_COLORS: Record<string, string> = {
-    root: '#000000',
-    content: '#1a1a1a',
-    products: '#333333',
-    company: '#4d4d4d',
-    support: '#666666',
-    technical: '#808080',
-    users: '#999999',
-    general: '#b3b3b3',
+    root: '#ffffff',
+    content: '#ffffff',
+    products: '#ffffff',
+    company: '#ffffff',
+    support: '#ffffff',
+    technical: '#ffffff',
+    users: '#ffffff',
+    general: '#ffffff',
   };
 
   const nodeMap = new Map(nodes.map(n => [n.id, n]));
 
   let svgContent = '';
 
+  // Draw links first
   nodes.forEach(node => {
     if (node.parent) {
       const parent = nodeMap.get(node.parent);
@@ -344,16 +451,30 @@ function generateSVG(nodes: PageNode[], width = 1200, height = 800): string {
     }
   });
 
+  // Draw nodes
   nodes.forEach(node => {
     if (node.x === undefined || node.y === undefined) return;
 
-    const color = CATEGORY_COLORS[node.category] || CATEGORY_COLORS.general;
-    const radius = 40;
+    const color = node.customColor || CATEGORY_COLORS[node.category] || CATEGORY_COLORS.general;
+    const textColor = node.textColor || '#000000'; // Default to black text
+    
+    // Calculate dimensions (simplified for SVG)
+    const titleLength = node.title.length;
+    const urlLength = node.url.length;
+    const maxTextLength = Math.max(titleLength, urlLength);
+    const nodeWidth = Math.max(120, maxTextLength * 7 + 40);
+    const nodeHeight = 50;
+
+    const x = node.x - nodeWidth / 2;
+    const y = node.y - nodeHeight / 2;
 
     svgContent += `
-      <circle cx="${node.x}" cy="${node.y}" r="${radius}" fill="${color}" stroke="#ffffff" stroke-width="2" />
-      <text x="${node.x}" y="${node.y}" text-anchor="middle" dominant-baseline="middle" fill="#ffffff" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="12" font-weight="bold">
+      <rect x="${x}" y="${y}" width="${nodeWidth}" height="${nodeHeight}" rx="8" ry="8" fill="${color}" stroke="#000000" stroke-width="2" />
+      <text x="${node.x}" y="${node.y - 8}" text-anchor="middle" dominant-baseline="middle" fill="${textColor}" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="13" font-weight="bold">
         ${escapeXml(node.title)}
+      </text>
+      <text x="${node.x}" y="${node.y + 8}" text-anchor="middle" dominant-baseline="middle" fill="${textColor}CC" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="10">
+        ${escapeXml(node.url)}
       </text>
     `;
   });
