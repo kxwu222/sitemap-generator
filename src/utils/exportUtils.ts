@@ -67,27 +67,61 @@ export function exportToSVG(nodes: PageNode[]): void {
 }
 
 export function exportToCSV(nodes: PageNode[]): void {
-  const headers = ['ID', 'URL', 'Title', 'Depth', 'Parent', 'Category', 'X', 'Y'];
+  // Helper function to properly escape CSV fields
+  const escapeCSV = (cell: string): string => {
+    if (!cell) return '';
+    const needsQuotes = cell.includes(',') || 
+                       cell.includes('"') || 
+                       cell.includes('\n') || 
+                       cell.includes('\r');
+    
+    if (needsQuotes) {
+      return `"${cell.replace(/"/g, '""')}"`;
+    }
+    return cell;
+  };
+
+  // Helper function to get parent URL
+  const getParentURL = (node: PageNode, nodeMap: Map<string, PageNode>): string => {
+    if (!node.parent) return '';
+    const parent = nodeMap.get(node.parent);
+    return parent ? parent.url : '';
+  };
+
+  // Create node map for efficient lookups
+  const nodeMap = new Map(nodes.map(n => [n.id, n]));
+  const now = new Date().toISOString().split('T')[0];
+
+  // Professional headers for business use
+  const headers = [
+    'URL',
+    'Title',
+    'Parent URL',
+    'Category',
+    'Depth Level',
+    'Export Date'
+  ];
+
   const rows = nodes.map(node => [
-    node.id,
-    node.url,
-    node.title,
+    node.url || '',
+    node.title || '',
+    getParentURL(node, nodeMap),
+    node.category || '',
     node.depth.toString(),
-    node.parent || '',
-    node.category,
-    (node.x || 0).toFixed(2),
-    (node.y || 0).toFixed(2),
+    now
   ]);
 
+  // Add BOM for Excel UTF-8 compatibility
+  const BOM = '\uFEFF';
   const csv = [
     headers.join(','),
-    ...rows.map(row => row.map(cell => `"${cell}"`).join(',')),
-  ].join('\n');
+    ...rows.map(row => row.map(cell => escapeCSV(cell)).join(',')),
+  ].join('\r\n'); // Use \r\n for Windows/Excel compatibility
 
-  const blob = new Blob([csv], { type: 'text/csv' });
+  const blob = new Blob([BOM + csv], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
-  link.download = `sitemap-${Date.now()}.csv`;
+  link.download = `sitemap-export-${now}.csv`;
   link.href = url;
   link.click();
   URL.revokeObjectURL(url);
@@ -104,26 +138,33 @@ export function exportToXMLSitemap(nodes: PageNode[]): void {
       .replace(/'/g, '&apos;');
   };
 
-  // Get current date in ISO 8601 format for lastmod
-  const now = new Date().toISOString();
+  // Helper function to validate URLs (only HTTP/HTTPS)
+  const isValidURL = (url: string): boolean => {
+    try {
+      const parsed = new URL(url);
+      return ['http:', 'https:'].includes(parsed.protocol);
+    } catch {
+      return false;
+    }
+  };
 
-  // Generate URL entries for each node that has a URL
+  // Generate minimal URL entries (only required <loc> element)
   const urlEntries = nodes
     .filter(node => node.url && node.url.trim())
+    .filter(node => isValidURL(node.url.trim()))
     .map(node => {
       const url = escapeXML(node.url.trim());
-      // Set priority based on depth (root pages get 1.0, deeper pages get lower priority)
-      const priority = Math.max(0.1, Math.min(1.0, 1.0 - (node.depth * 0.2)));
-      
       return `  <url>
     <loc>${url}</loc>
-    <lastmod>${now}</lastmod>
-    <changefreq>weekly</changefreq>
-    <priority>${priority.toFixed(1)}</priority>
   </url>`;
     });
 
-  // Construct the XML sitemap
+  if (urlEntries.length === 0) {
+    console.warn('No valid URLs found for sitemap export');
+    return;
+  }
+
+  // Construct minimal XML sitemap (compliant with sitemaps.org protocol)
   const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
 ${urlEntries.join('\n')}
@@ -132,7 +173,7 @@ ${urlEntries.join('\n')}
   const blob = new Blob([xml], { type: 'application/xml' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
-  link.download = `sitemap-${Date.now()}.xml`;
+  link.download = `sitemap.xml`;
   link.href = url;
   link.click();
   URL.revokeObjectURL(url);
