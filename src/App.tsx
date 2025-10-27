@@ -404,8 +404,63 @@ function App() {
         height: 900,
       });
 
+      // Create a new sitemap with the CSV data
+      const newSitemapId = `sitemap-${Date.now()}`;
+      const now = Date.now();
+
+      setSitemaps(prev => {
+        // First, save current sitemap state if it exists
+        const updated = prev.map(sitemap => 
+          sitemap.id === activeSitemapId 
+            ? {
+                ...sitemap,
+                nodes: JSON.parse(JSON.stringify(nodes)),
+                extraLinks: JSON.parse(JSON.stringify(extraLinks)),
+                linkStyles: JSON.parse(JSON.stringify(linkStyles)),
+                colorOverrides: JSON.parse(JSON.stringify(colorOverrides)),
+                urls: JSON.parse(JSON.stringify(urls)),
+                lastModified: now
+              }
+            : sitemap
+        );
+
+        // Find the highest number used in "Untitled Sitemap" names
+        const untitledPattern = /^Untitled Sitemap (\d+)$/;
+        let maxNumber = 0;
+        
+        updated.forEach(sitemap => {
+          const match = sitemap.name.match(untitledPattern);
+          if (match) {
+            const num = parseInt(match[1], 10);
+            if (num > maxNumber) maxNumber = num;
+          }
+        });
+
+        const newSitemap: SitemapData = {
+          id: newSitemapId,
+          name: `Untitled Sitemap ${maxNumber + 1}`,
+          nodes: JSON.parse(JSON.stringify(layoutNodes)),
+          extraLinks: [],
+          linkStyles: {},
+          colorOverrides: {},
+          urls: JSON.parse(JSON.stringify(result.data.map(row => row.url))),
+          lastModified: now,
+          createdAt: now
+        };
+
+        return [...updated, newSitemap];
+      });
+
+      // Set the new sitemap as active and load its data
+      setActiveSitemapId(newSitemapId);
       setNodes(layoutNodes);
       setUrls(result.data.map(row => row.url));
+      setExtraLinks([]);
+      setLinkStyles({});
+      setColorOverrides({});
+      setUndoStack([]);
+      setRedoStack([]);
+      setSelectedNode(null);
       setSidebarCollapsed(true);
       setCsvErrors([]);
       setShowCsvErrors(false);
