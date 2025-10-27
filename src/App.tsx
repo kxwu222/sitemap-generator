@@ -5,7 +5,7 @@ import { SitemapCanvas } from './components/SitemapCanvas';
 import { SearchOverlay } from './components/SearchOverlay';
 import { analyzeURLStructure, PageNode, groupByCategory, createNodesFromCsvData } from './utils/urlAnalyzer';
 import { applyGroupedFlowLayout } from './utils/forceLayout';
-import { exportToPNG, exportToSVG, exportToCSV, exportToHTML } from './utils/exportUtils';
+import { exportToPNG, exportToCSV, exportToHTML, exportToXMLSitemap } from './utils/exportUtils';
 import { parseCsvFile } from './utils/csvParser';
 import { SitemapData } from './types/sitemap';
 import { LinkStyle } from './types/linkStyle';
@@ -798,19 +798,19 @@ function App() {
     }
   }, []);
 
-  const handleExport = async (format: 'png' | 'svg' | 'csv' | 'html') => {
+  const handleExport = async (format: 'png' | 'csv' | 'html' | 'xml') => {
     switch (format) {
       case 'png':
         await exportToPNG(nodes);
-        break;
-      case 'svg':
-        exportToSVG(nodes);
         break;
       case 'csv':
         exportToCSV(nodes);
         break;
       case 'html':
         exportToHTML(nodes);
+        break;
+      case 'xml':
+        exportToXMLSitemap(nodes);
         break;
     }
   };
@@ -855,7 +855,7 @@ function App() {
                   {showExportMenu && (
                     <div className="absolute right-0 mt-2 w-44 bg-white border border-gray-200 shadow-lg z-50" onClick={(e) => e.stopPropagation()}>
                       <button onClick={() => { setShowExportMenu(false); handleExport('png'); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm">PNG (High-Res)</button>
-                      <button onClick={() => { setShowExportMenu(false); handleExport('svg'); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm">SVG (Vector)</button>
+                      <button onClick={() => { setShowExportMenu(false); handleExport('xml'); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm">XML (Sitemap)</button>
                       <button onClick={() => { setShowExportMenu(false); handleExport('csv'); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm">CSV (Data)</button>
                       <button onClick={() => { setShowExportMenu(false); handleExport('html'); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm">HTML (Interactive)</button>
                     </div>

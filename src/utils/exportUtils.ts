@@ -93,6 +93,51 @@ export function exportToCSV(nodes: PageNode[]): void {
   URL.revokeObjectURL(url);
 }
 
+export function exportToXMLSitemap(nodes: PageNode[]): void {
+  // Helper function to escape XML special characters
+  const escapeXML = (str: string): string => {
+    return str
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&apos;');
+  };
+
+  // Get current date in ISO 8601 format for lastmod
+  const now = new Date().toISOString();
+
+  // Generate URL entries for each node that has a URL
+  const urlEntries = nodes
+    .filter(node => node.url && node.url.trim())
+    .map(node => {
+      const url = escapeXML(node.url.trim());
+      // Set priority based on depth (root pages get 1.0, deeper pages get lower priority)
+      const priority = Math.max(0.1, Math.min(1.0, 1.0 - (node.depth * 0.2)));
+      
+      return `  <url>
+    <loc>${url}</loc>
+    <lastmod>${now}</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>${priority.toFixed(1)}</priority>
+  </url>`;
+    });
+
+  // Construct the XML sitemap
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+${urlEntries.join('\n')}
+</urlset>`;
+
+  const blob = new Blob([xml], { type: 'application/xml' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.download = `sitemap-${Date.now()}.xml`;
+  link.href = url;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 export function exportToHTML(nodes: PageNode[]): void {
   // Calculate bounds to include all nodes with proper padding
   const bounds = calculateNodeBounds(nodes);
