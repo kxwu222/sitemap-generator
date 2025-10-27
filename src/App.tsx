@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { flushSync } from 'react-dom';
-import { FileText, Download, Trash2, ChevronDown, ChevronUp, Menu, X, Search, HelpCircle, Edit2 } from 'lucide-react';
+import { Download, Trash2, ChevronDown, ChevronUp, Menu, X, Search, HelpCircle, Edit2, FileText } from 'lucide-react';
 import { SitemapCanvas } from './components/SitemapCanvas';
 import { SearchOverlay } from './components/SearchOverlay';
 import { analyzeURLStructure, PageNode, groupByCategory, createNodesFromCsvData } from './utils/urlAnalyzer';
@@ -109,9 +109,21 @@ function App() {
   }, [activeSitemapId, nodes, extraLinks, linkStyles, colorOverrides, urls]);
 
   const createNewSitemap = useCallback(() => {
+    // Find the highest number used in "Untitled Sitemap" names
+    const untitledPattern = /^Untitled Sitemap (\d+)$/;
+    let maxNumber = 0;
+    
+    sitemaps.forEach(sitemap => {
+      const match = sitemap.name.match(untitledPattern);
+      if (match) {
+        const num = parseInt(match[1], 10);
+        if (num > maxNumber) maxNumber = num;
+      }
+    });
+
     const newSitemap: SitemapData = {
       id: `sitemap-${Date.now()}`,
-      name: `Untitled Sitemap ${sitemaps.length + 1}`,
+      name: `Untitled Sitemap ${maxNumber + 1}`,
       nodes: [],
       extraLinks: [],
       linkStyles: {},
@@ -131,7 +143,7 @@ function App() {
     setUndoStack([]);
     setRedoStack([]);
     setSelectedNode(null);
-  }, [sitemaps.length]);
+  }, [sitemaps]);
 
   const switchToSitemap = useCallback((sitemapId: string) => {
     // Save current state before switching
@@ -192,7 +204,7 @@ function App() {
       // Initialize with one empty sitemap
       const initialSitemap: SitemapData = {
         id: `sitemap-${Date.now()}`,
-        name: 'Untitled Sitemap',
+        name: 'Untitled Sitemap 1',  // Changed from 'Untitled Sitemap'
         nodes: [],
         extraLinks: [],
         linkStyles: {},
@@ -736,7 +748,7 @@ function App() {
         <div className="max-w-screen-5xl mx-auto px-6 py-5">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3 relative">
-              <FileText className="w-7 h-7" strokeWidth={1.5} />
+              <img width="28" height="28" src="https://img.icons8.com/?size=100&id=1rQZ4drGQD6F&format=png&color=000000" alt="Sitemap Generator"/>
               <h1 className="text-2xl font-semibold tracking-tight">Sitemap Generator</h1>
             </div>
             <div className="flex items-center gap-3">
@@ -821,8 +833,8 @@ function App() {
               </h2>
               {/* CSV Upload Button - Primary CTA */}
               <div className="mb-2">
-                <label className="flex-1 px-4 py-3 bg-[#CB6015] hover:bg-[#CC5500] text-white text-sm font-medium rounded-lg cursor-pointer flex items-center justify-center gap-2 transition-colors">
-                  <img width="18" height="18" src="https://img.icons8.com/fluency-systems-regular/50/upload--v1.png" alt="upload--v1" style={{filter: 'brightness(0) invert(1)'}}/>
+                <label className="flex-1 px-4 py-3 bg-[#CB6015] border border-[#B54407] shadow-sm hover:shadow-md hover:bg-[#CC5500] text-white text-sm font-medium rounded-lg cursor-pointer flex items-center justify-center gap-2 transition-colors">
+                  <img width="18" height="18" src="https://img.icons8.com/fluency-systems-regular/50/upload--v1.png" alt="upload csv file" style={{filter: 'brightness(0) invert(1)'}}/>
                   Upload CSV File
                   <input
                     type="file"
@@ -868,7 +880,7 @@ function App() {
               {/* Create New Sitemap Button */}
               <button
                 onClick={createNewSitemap}
-                className="w-full mb-3 px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-medium rounded transition-colors flex items-center justify-center gap-2"
+                className="w-full mb-3 px-3 py-2 bg-gray-100 shadow-sm border border-gray-200 hover:shadow-md hover:bg-gray-150 text-gray-700 text-sm font-medium rounded transition-colors flex items-center justify-center gap-2"
               >
                 <img width="16" height="16" src="https://img.icons8.com/puffy/32/add.png" alt="add"/>
                 Create New Sitemap
@@ -1063,8 +1075,8 @@ function App() {
         <main className="flex-1 bg-gray-50 flex flex-col h-full overflow-hidden">
           {nodes.length === 0 ? (
             <div className="flex-1 flex items-center justify-center">
-              <div className="text-center max-w-md">
-                <FileText className="w-16 h-16 mx-auto mb-4 text-gray-300" strokeWidth={1} />
+              <div className="text-center max-w-lg">
+                <img className="w-16 h-16 mx-auto mb-4 opacity-30" src="https://img.icons8.com/?size=100&id=82795&format=png&color=000000" alt="No sitemap yet"/>
                 <h2 className="text-xl font-semibold mb-2">No Sitemap Yet</h2>
                 <p className="text-gray-500 mb-6">
                   Upload a CSV file to generate an intelligent, auto-layout sitemap with hierarchy detection
@@ -1204,7 +1216,7 @@ function App() {
             <div className="px-6 py-3 border-t border-gray-200 flex justify-end">
               <button 
                 onClick={() => setShowHelp(false)} 
-                className="px-4 py-2 bg-black text-white text-sm font-medium hover:bg-gray-800 transition-colors rounded"
+                className="px-4 py-2 bg-black text-white text-sm font-medium rounded-md hover:bg-gray-800 transition-colors"
               >
                 Close
               </button>
@@ -1233,7 +1245,7 @@ function App() {
                   <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-900 mb-1">
                     Groups
                   </h3>
-                  <p className="text-xs text-gray-500 mb-3">Source: CSV “Group” column (if present). Otherwise inferred from URL path.</p>
+                  <p className="text-xs text-gray-500 mb-3">Source: CSV “Group/Category” column. Otherwise inferred from URL path.</p>
                   <div className="space-y-2">
                     {Array.from(categoryGroups.entries()).map(([category, categoryNodes]) => (
                       <div key={category} className="flex items-center justify-between text-sm">
@@ -1271,7 +1283,7 @@ function App() {
             <div className="p-6 border-t border-gray-200 flex justify-end">
               <button
                 onClick={() => setShowSettings(false)}
-                className="px-6 py-2 bg-black text-white text-sm font-medium hover:bg-gray-800 transition-colors"
+                className="px-6 py-2 bg-black text-white text-sm font-medium rounded-md hover:bg-gray-800 transition-colors"
               >
                 Close
               </button>
