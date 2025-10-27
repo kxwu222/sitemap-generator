@@ -292,8 +292,15 @@ export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNod
         setShowColorPicker(false);
         setShowTitleEditor(false);
       }
-      // Space key for panning
-      if (e.code === 'Space' && !isSpacePressed) {
+      // Space key for panning (but not when typing in input fields)
+      const activeElement = document.activeElement;
+      const isTyping = activeElement && (
+        activeElement.tagName === 'INPUT' ||
+        activeElement.tagName === 'TEXTAREA' ||
+        activeElement.hasAttribute('contenteditable')
+      );
+      
+      if (e.code === 'Space' && !isSpacePressed && !isTyping) {
         e.preventDefault();
         setIsSpacePressed(true);
       }
@@ -342,7 +349,14 @@ export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNod
     };
 
     const onKeyUp = (e: KeyboardEvent) => {
-      if (e.code === 'Space') {
+      const activeElement = document.activeElement;
+      const isTyping = activeElement && (
+        activeElement.tagName === 'INPUT' ||
+        activeElement.tagName === 'TEXTAREA' ||
+        activeElement.hasAttribute('contenteditable')
+      );
+      
+      if (e.code === 'Space' && !isTyping) {
         e.preventDefault();
         setIsSpacePressed(false);
       }
