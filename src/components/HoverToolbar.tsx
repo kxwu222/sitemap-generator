@@ -18,6 +18,7 @@ export function HoverToolbar({ node, position, onAddChild, onColorClick, onLinkC
         left: `${position.x}px`,
         top: `${position.y}px`,
         transform: 'translate(-50%, calc(-100% - 10px))',
+        pointerEvents: 'none',
       }}
       onMouseEnter={(e) => {
         e.stopPropagation();
@@ -41,6 +42,7 @@ export function HoverToolbar({ node, position, onAddChild, onColorClick, onLinkC
           onAddChild(node.id);
         }}
         className="w-8 h-8 flex items-center justify-center rounded hover:bg-gray-100 transition-colors group relative"
+        style={{ pointerEvents: 'auto' }}
         title="Add new node"
       >
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-gray-700">
@@ -58,6 +60,7 @@ export function HoverToolbar({ node, position, onAddChild, onColorClick, onLinkC
           onColorClick(node.id, e);
         }}
         className="w-8 h-8 flex items-center justify-center rounded hover:bg-gray-100 transition-colors group relative"
+        style={{ pointerEvents: 'auto' }}
         title="Change color"
       >
         <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" className="text-gray-700" viewBox="0 0 16 16">
@@ -75,6 +78,7 @@ export function HoverToolbar({ node, position, onAddChild, onColorClick, onLinkC
           onLinkClick(node.id, e);
         }}
         className="w-8 h-8 flex items-center justify-center rounded hover:bg-gray-100 transition-colors group relative"
+        style={{ pointerEvents: 'auto' }}
         title="Edit link"
       >
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-gray-700">
