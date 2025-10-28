@@ -5,10 +5,11 @@ import { SitemapCanvas } from './components/SitemapCanvas';
 import { SearchOverlay } from './components/SearchOverlay';
 import { analyzeURLStructure, PageNode, groupByCategory, createNodesFromCsvData } from './utils/urlAnalyzer';
 import { applyGroupedFlowLayout } from './utils/forceLayout';
-import { exportToPNG, exportToCSV, exportToHTML, exportToXMLSitemap } from './utils/exportUtils';
+import { exportToPNG, exportToCSV, exportToXMLSitemap } from './utils/exportUtils';
 import { parseCsvFile } from './utils/csvParser';
 import { SitemapData } from './types/sitemap';
 import { LinkStyle } from './types/linkStyle';
+import { Figure, FreeLine } from './types/drawables';
 
 type LayoutType = 'grouped';
 
@@ -18,6 +19,8 @@ type HistorySnapshot = {
   extraLinks: Array<{ sourceId: string; targetId: string }>;
   linkStyles: Record<string, LinkStyle>;
   colorOverrides: Record<string, { customColor?: string; textColor?: string }>;
+  figures: Figure[];
+  freeLines: FreeLine[];
 };
 
 // Shortcut display component
@@ -78,6 +81,8 @@ function App() {
   const [focusedNode, setFocusedNode] = useState<PageNode | null>(null);
   const [colorOverrides, setColorOverrides] = useState<Record<string, { customColor?: string; textColor?: string }>>({});
   const [linkStyles, setLinkStyles] = useState<Record<string, LinkStyle>>({});
+  const [figures, setFigures] = useState<Figure[]>([]);
+  const [freeLines, setFreeLines] = useState<FreeLine[]>([]);
   const sitemapCanvasRef = useRef<any>(null);
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
@@ -88,7 +93,9 @@ function App() {
     extraLinks: JSON.parse(JSON.stringify(extraLinks)),
     linkStyles: JSON.parse(JSON.stringify(linkStyles)),
     colorOverrides: JSON.parse(JSON.stringify(colorOverrides)),
-  }), [nodes, extraLinks, linkStyles, colorOverrides]);
+    figures: JSON.parse(JSON.stringify(figures)),
+    freeLines: JSON.parse(JSON.stringify(freeLines)),
+  }), [nodes, extraLinks, linkStyles, colorOverrides, figures, freeLines]);
 
   // Sitemap management functions
   const saveCurrentStateToActiveSitemap = useCallback(() => {
@@ -778,6 +785,44 @@ function App() {
     }));
   }, []);
 
+  // Figure handlers
+  const handleCreateFigure = useCallback((figure: Figure) => {
+    setUndoStack(stack => [...stack, makeSnapshot()]);
+    setRedoStack([]);
+    setFigures(prev => [...prev, figure]);
+  }, [makeSnapshot]);
+
+  const handleUpdateFigure = useCallback((id: string, updates: Partial<Figure>) => {
+    setUndoStack(stack => [...stack, makeSnapshot()]);
+    setRedoStack([]);
+    setFigures(prev => prev.map(f => f.id === id ? { ...f, ...updates } : f));
+  }, [makeSnapshot]);
+
+  const handleDeleteFigure = useCallback((id: string) => {
+    setUndoStack(stack => [...stack, makeSnapshot()]);
+    setRedoStack([]);
+    setFigures(prev => prev.filter(f => f.id !== id));
+  }, [makeSnapshot]);
+
+  // FreeLine handlers
+  const handleCreateFreeLine = useCallback((line: FreeLine) => {
+    setUndoStack(stack => [...stack, makeSnapshot()]);
+    setRedoStack([]);
+    setFreeLines(prev => [...prev, line]);
+  }, [makeSnapshot]);
+
+  const handleUpdateFreeLine = useCallback((id: string, updates: Partial<FreeLine>) => {
+    setUndoStack(stack => [...stack, makeSnapshot()]);
+    setRedoStack([]);
+    setFreeLines(prev => prev.map(l => l.id === id ? { ...l, ...updates } : l));
+  }, [makeSnapshot]);
+
+  const handleDeleteFreeLine = useCallback((id: string) => {
+    setUndoStack(stack => [...stack, makeSnapshot()]);
+    setRedoStack([]);
+    setFreeLines(prev => prev.filter(l => l.id !== id));
+  }, [makeSnapshot]);
+
   const handleFocusNode = useCallback((node: PageNode) => {
     console.log('App: handleFocusNode called with:', node.title, node.id);
     
@@ -798,16 +843,13 @@ function App() {
     }
   }, []);
 
-  const handleExport = async (format: 'png' | 'csv' | 'html' | 'xml') => {
+  const handleExport = async (format: 'png' | 'csv' | 'xml') => {
     switch (format) {
       case 'png':
         await exportToPNG(nodes, extraLinks, linkStyles);
         break;
       case 'csv':
         exportToCSV(nodes);
-        break;
-      case 'html':
-        exportToHTML(nodes);
         break;
       case 'xml':
         exportToXMLSitemap(nodes);
@@ -856,8 +898,7 @@ function App() {
                     <div className="absolute right-0 mt-2 w-44 bg-white border border-gray-200 shadow-lg z-50" onClick={(e) => e.stopPropagation()}>
                       <button onClick={() => { setShowExportMenu(false); handleExport('png'); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm">PNG</button>
                       {/* <button onClick={() => { setShowExportMenu(false); handleExport('xml'); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm">XML (Sitemap)</button> */}
-                      <button onClick={() => { setShowExportMenu(false); handleExport('csv'); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm">CSV (Data)</button>
-                      <button onClick={() => { setShowExportMenu(false); handleExport('html'); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm">HTML (Interactive)</button>
+                      <button onClick={() => { setShowExportMenu(false); handleExport('csv'); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm">CSV</button>
                     </div>
                   )}
                 </div>
@@ -924,9 +965,10 @@ function App() {
                   />
                 </label>
               </div>
-              <p className="text-xs text-gray-500 mb-3">
-                CSV should have columns: Page Title, Page URL, Group/Category
+              <p className="text-xs text-gray-500 mb-2">
+                CSV should have columns: Page Title, Page URL, Group/Category. 
               </p>
+              <p className="text-xs text-gray-500 mb-2">Optional: Content Type, Last Updated (DD-MM-YYYY).</p>
 
               {/* CSV Error Display */}
               {showCsvErrors && csvErrors.length > 0 && (
@@ -1220,6 +1262,14 @@ function App() {
                 colorOverrides={colorOverrides}
                 linkStyles={linkStyles}
                 onLinkStyleChange={handleLinkStyleChange}
+                figures={figures}
+                freeLines={freeLines}
+                onCreateFigure={handleCreateFigure}
+                onUpdateFigure={handleUpdateFigure}
+                onDeleteFigure={handleDeleteFigure}
+                onCreateFreeLine={handleCreateFreeLine}
+                onUpdateFreeLine={handleUpdateFreeLine}
+                onDeleteFreeLine={handleDeleteFreeLine}
               />
             </div>
           )}
@@ -1261,21 +1311,20 @@ function App() {
                 <div>
                   <h3 className="text-sm font-medium text-gray-900 mb-3 uppercase tracking-wide">Essential</h3>
                   <div className="space-y-2">
-                    <ShortcutItem keys="V / M" label="Select / Multi-select mode" />
+                    <ShortcutItem keys="V" label="Select mode" />
                     <ShortcutItem keys="A" label="Add child node" info="Requires a node to be selected first" />
                     <ShortcutItem keys="C" label="Change color" info="Requires a node to be selected first" />
-                    {/* <ShortcutItem keys="Ctrl/Cmd + Z" label="Undo" />
-                    <ShortcutItem keys="Ctrl/Cmd + Y" label="Redo" /> */}
-                    {/* <ShortcutItem keys="Delete / Backspace" label="Delete" /> */}
                   </div>
                 </div>
 
-                {/* Links */}
+                {/* Selection */}
                 <div>
-                  <h3 className="text-sm font-medium text-gray-900 mb-3 uppercase tracking-wide">Links</h3>
+                  <h3 className="text-sm font-medium text-gray-900 mb-3 uppercase tracking-wide">Selection</h3>
                   <div className="space-y-2">
-                    <ShortcutItem keys="Ctrl/Cmd + Drag" label="Create link" />
-                    <ShortcutItem keys="Right-click link" label="Style link" />
+                    <ShortcutItem
+                      keys="Shift + Drag (background)"
+                      label="Multi-select"
+                    />
                   </div>
                 </div>
 
@@ -1283,9 +1332,17 @@ function App() {
                 <div>
                   <h3 className="text-sm font-medium text-gray-900 mb-3 uppercase tracking-wide">Navigation</h3>
                   <div className="space-y-2">
-                    <ShortcutItem keys="Option/Alt + Drag" label="Drag parent nodes" info="Drag all connected parent and child nodes" />
+                    <ShortcutItem keys="Ctrl/Cmd + Drag" label="Move connected nodes" info="Drag selected node with its parent and children" />
                     <ShortcutItem keys="Ctrl/Cmd + Wheel" label="Zoom" />
                     <ShortcutItem keys="Ctrl/Cmd + F" label="Search" />
+                  </div>
+                </div>
+
+                {/* Links */}
+                <div>
+                  <h3 className="text-sm font-medium text-gray-900 mb-3 uppercase tracking-wide">Links</h3>
+                  <div className="space-y-2">
+                    <ShortcutItem keys="Right-click link" label="Style link" />
                   </div>
                 </div>
               </div>

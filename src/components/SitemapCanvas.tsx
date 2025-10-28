@@ -1,6 +1,7 @@
 import { useRef, useEffect, useState, forwardRef, useImperativeHandle } from 'react';
 import { PageNode } from '../utils/urlAnalyzer';
 import { LinkStyle, LineDash, LinkPath, ArrowType } from '../types/linkStyle';
+import { Figure, FreeLine, LinePath, LineDash as FLDash } from '../types/drawables';
 import { HoverToolbar } from './HoverToolbar';
 import { SelectionToolbar } from './SelectionToolbar';
 import { LinkEditorPopover } from './LinkEditorPopover';
@@ -32,6 +33,14 @@ interface SitemapCanvasProps {
   linkStyles?: Record<string, LinkStyle>;
   onLinkStyleChange?: (linkKey: string, style: LinkStyle) => void;
   onAddNode?: () => void;
+  figures?: Figure[];
+  freeLines?: FreeLine[];
+  onCreateFigure?: (figure: Figure) => void;
+  onUpdateFigure?: (id: string, updates: Partial<Figure>) => void;
+  onDeleteFigure?: (id: string) => void;
+  onCreateFreeLine?: (line: FreeLine) => void;
+  onUpdateFreeLine?: (id: string, updates: Partial<FreeLine>) => void;
+  onDeleteFreeLine?: (id: string) => void;
 }
 
 
@@ -46,7 +55,7 @@ const CATEGORY_COLORS: Record<string, string> = {
   general: '#ffffff',
 };
 
-export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNodeClick, onNodesUpdate, onNodesPreview, onMoveNodesToGroup, onCreateGroupFromSelection, onDeleteGroup, onConnectionCreate, extraLinks = [], onExtraLinkCreate, onExtraLinkDelete, onUndo, onRedo, searchResults = [], focusedNode, onClearFocus, colorOverrides = {}, onAddChild, linkStyles = {}, onLinkStyleChange, onAddNode }, ref) => {
+export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNodeClick, onNodesUpdate, onNodesPreview, onMoveNodesToGroup, onCreateGroupFromSelection, onDeleteGroup, onConnectionCreate, extraLinks = [], onExtraLinkCreate, onExtraLinkDelete, onUndo, onRedo, searchResults = [], focusedNode, onClearFocus, colorOverrides = {}, onAddChild, linkStyles = {}, onLinkStyleChange, onAddNode, figures = [], freeLines = [], onCreateFigure, onUpdateFigure, onDeleteFigure, onCreateFreeLine, onUpdateFreeLine, onDeleteFreeLine }, ref) => {
   
   // Helper function to create link key
   const linkKey = (sourceId: string, targetId: string) => `${sourceId}-${targetId}`;
@@ -159,7 +168,7 @@ export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNod
   const [dragStartPositions, setDragStartPositions] = useState<Record<string, { x: number; y: number }>>({});
   const [dragDelta, setDragDelta] = useState<{ dx: number; dy: number } | null>(null);
   const [highlightedLink, setHighlightedLink] = useState<{ sourceId: string; targetId: string } | null>(null);
-  const [cursorMode, setCursorMode] = useState<'select' | 'marquee'>('select');
+  const [cursorMode, setCursorMode] = useState<'select' | 'draw-text' | 'draw-rect' | 'draw-ellipse' | 'draw-line'>('select');
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
@@ -183,11 +192,6 @@ export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNod
   useImperativeHandle(ref, () => ({
     getSelectedNodeIds: () => Array.from(selectedIds),
   }), [selectedIds]);
-  const [connectionDraft, setConnectionDraft] = useState<{
-    sourceId: string;
-    mouseX: number;
-    mouseY: number;
-  } | null>(null);
   
   // New toolbar states
   const [hoverToolbarNode, setHoverToolbarNode] = useState<PageNode | null>(null);
@@ -206,6 +210,26 @@ export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNod
   const [titleEditorNode, setTitleEditorNode] = useState<string | null>(null);
   const [titleEditorPosition, setTitleEditorPosition] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [animationTime, setAnimationTime] = useState(0);
+  const [pendingLineStart, setPendingLineStart] = useState<{ x: number; y: number } | null>(null);
+  const [pendingLineStyle, setPendingLineStyle] = useState<{ path: LinePath; dash: FLDash; width: number; color: string; arrowStart?: boolean; arrowEnd?: boolean }>({
+    path: 'straight',
+    dash: 'solid',
+    width: 2,
+    color: '#333333',
+  });
+  const [hoveredFreeLineId, setHoveredFreeLineId] = useState<string | null>(null);
+  const [draggingLineEnd, setDraggingLineEnd] = useState<{ id: string; end: 'start' | 'end' } | null>(null);
+  const [lineEndpointDragMoved, setLineEndpointDragMoved] = useState(false);
+  const [selectedFigureId, setSelectedFigureId] = useState<string | null>(null);
+  const [draggingFigureId, setDraggingFigureId] = useState<string | null>(null);
+  const [figureDragStart, setFigureDragStart] = useState<{ sx: number; sy: number; fx: number; fy: number } | null>(null);
+  const [hoveredFigureId, setHoveredFigureId] = useState<string | null>(null);
+  const [figureToolbar, setFigureToolbar] = useState<{ id: string; x: number; y: number } | null>(null);
+  const [showShapesPopover, setShowShapesPopover] = useState(false);
+  const [showLinePopover, setShowLinePopover] = useState(false);
+  const [editingTextFigureId, setEditingTextFigureId] = useState<string | null>(null);
+  const [textEditorPosition, setTextEditorPosition] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [textEditorText, setTextEditorText] = useState('');
 
   // Close hover toolbar when any editor opens
   useEffect(() => {
@@ -213,6 +237,18 @@ export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNod
       setHoverToolbarNode(null);
     }
   }, [showLinkEditor, showColorPicker, showTitleEditor]);
+
+  // Close popovers when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (showShapesPopover || showLinePopover) {
+        setShowShapesPopover(false);
+        setShowLinePopover(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showShapesPopover, showLinePopover]);
 
   // Close hover toolbar when nodes are selected
   useEffect(() => {
@@ -308,9 +344,17 @@ export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNod
       if ((e.key === 'v' || e.key === 'V') && !isTyping) {
         setCursorMode('select');
       }
-      // M key for marquee mode (but not when typing in input fields)
-      if ((e.key === 'm' || e.key === 'M') && !isTyping) {
-        setCursorMode('marquee');
+      // T key for text mode
+      if ((e.key === 't' || e.key === 'T') && !isTyping) {
+        setCursorMode('draw-text');
+      }
+      // S key for shapes mode
+      if ((e.key === 's' || e.key === 'S') && !isTyping) {
+        setCursorMode('draw-rect');
+      }
+      // L key for line mode
+      if ((e.key === 'l' || e.key === 'L') && !isTyping) {
+        setCursorMode('draw-line');
       }
       // Delete key for selected nodes (but not when typing in input fields)
       if ((e.key === 'Delete' || e.key === 'Backspace') && selectedIds.size > 0 && !isTyping) {
@@ -399,12 +443,13 @@ export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNod
       : nodes;
 
     drawLinks(ctx, effectiveNodes);
+    drawFreeLines(ctx, freeLines || []);
+    drawFigures(ctx, figures || []);
     drawNodes(ctx, effectiveNodes, hoveredNode);
-    drawConnectionDraft(ctx, connectionDraft);
     drawMarqueeSelection(ctx, marqueeSelection);
 
     ctx.restore();
-  }, [nodes, transform, hoveredNode, connectionDraft, searchResults, focusedNode, colorOverrides, selectedIds, marqueeSelection, highlightedLink, draggedNode, dragDelta, dragSelectionIds, dragStartPositions, animationTime]);
+  }, [nodes, transform, hoveredNode, searchResults, focusedNode, colorOverrides, selectedIds, marqueeSelection, highlightedLink, draggedNode, dragDelta, dragSelectionIds, dragStartPositions, animationTime, figures, freeLines]);
 
   // Handle window resize
   useEffect(() => {
@@ -692,34 +737,52 @@ export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNod
 
       // Do not outline endpoints when a link is highlighted
 
-      // Draw title text with improved typography - centered in node
-      const titleColor = override.textColor || node.textColor || '#000000'; // Default to black text
+      // Draw title text
+      const titleColor = override.textColor || node.textColor || '#000000';
       ctx.fillStyle = titleColor;
       ctx.font = 'bold 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
 
-      const titleY = node.y; // Center vertically in node
-      const maxTitleWidth = dimensions.width - 32; // More padding
+      const titleY = node.y - 10;
+      const maxTitleWidth = dimensions.width - 32;
       const titleText = truncateText(ctx, node.title, maxTitleWidth);
       ctx.fillText(titleText, node.x, titleY);
 
-      // Removed hover tooltip to avoid overlay with HoverToolbar
-      // URL editing now handled by HoverToolbar -> Link button
+      // Draw subtitle: URL + subtle content type
+      const subtitleColor = (override.textColor || node.textColor)
+        ? `${(override.textColor || node.textColor)}CC`
+        : 'rgba(0, 0, 0, 0.8)';
+      ctx.fillStyle = subtitleColor;
+      ctx.font = '12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+
+      const subtitleY = node.y + 10;
+      const maxSubtitleWidth = dimensions.width - 32;
+      // draw subtitle
+      const subtitleRaw = node.contentType ? `(${node.contentType}) ${node.url}` : node.url;
+      const subtitleText = truncateText(ctx, subtitleRaw, maxSubtitleWidth);
+      ctx.fillText(subtitleText, node.x, subtitleY);
     });
   };
 
 
   const calculateNodeDimensions = (node: PageNode, ctx: CanvasRenderingContext2D): { width: number; height: number } => {
-    const padding = 32; // Increased padding to match reference image
-    const minWidth = 160; // Larger minimum width for better readability
-    const minHeight = 50; // Reduced height since we only show title
+    const padding = 32;
+    const minWidth = 160;
+    const minHeight = 68; // allow two lines
 
-    // Measure title text only
+    // Measure title
     ctx.font = 'bold 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
     const titleWidth = ctx.measureText(node.title).width;
 
-    const width = Math.max(minWidth, titleWidth + padding);
+    // Measure subtitle
+    ctx.font = '12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+    // sizing (keep in sync)
+    const subtitleRaw = node.contentType ? `(${node.contentType}) ${node.url}` : node.url;
+    const subtitleWidth = ctx.measureText(subtitleRaw).width;
+
+    const contentWidth = Math.max(titleWidth, subtitleWidth);
+    const width = Math.max(minWidth, contentWidth + padding);
     const height = minHeight;
 
     return { width, height };
@@ -796,6 +859,132 @@ export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNod
     ctx.fillText(urlText, node.x, tooltipY + tooltipHeight / 2);
   };
 
+  const drawFigures = (ctx: CanvasRenderingContext2D, figs: Figure[]) => {
+    figs.forEach(fig => {
+      // Do not draw the figure while it's being edited (prevent double render)
+      if (editingTextFigureId === fig.id) {
+        return;
+      }
+
+      // Draw text
+      if (fig.type === 'text') {
+        ctx.fillStyle = fig.textColor || '#000000';
+        const fontSize = (fig as any).fontSize ?? 18;
+        const fontWeight = (fig as any).fontWeight === 'bold' ? 'bold' : '600';
+        ctx.font = `${fontWeight} ${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        const text = fig.text || 'Text';
+        const metrics = ctx.measureText(text);
+        const ascent = (metrics as any).actualBoundingBoxAscent ?? fontSize * 0.85;
+        const descent = (metrics as any).actualBoundingBoxDescent ?? fontSize * 0.25;
+        const textWidth = metrics.width;
+        const padX = 14;
+        const padY = 8;
+        const boxW = textWidth + padX * 2;
+        const boxH = ascent + descent + padY * 2;
+
+        // No selection-only box; editing overlay handles the box
+
+        ctx.fillText(text, fig.x, fig.y);
+
+        if ((fig as any).underline) {
+          const underlineY = fig.y + (ascent - (ascent + descent) / 2) + 10; // slightly lower underline
+          const startX = fig.x - textWidth / 2;
+          const endX = fig.x + textWidth / 2;
+          ctx.save();
+          ctx.lineWidth = Math.max(1, Math.round(fontSize / 12));
+          ctx.strokeStyle = fig.textColor || '#000000';
+          ctx.beginPath();
+          ctx.moveTo(startX, underlineY);
+          ctx.lineTo(endX, underlineY);
+          ctx.stroke();
+          ctx.restore();
+        }
+        return;
+      }
+      
+      // For shapes, draw background
+      ctx.fillStyle = fig.fill || '#ffffff';
+      
+      if (fig.type === 'rect') {
+        ctx.fillRect(fig.x - (fig.width || 160) / 2, fig.y - (fig.height || 80) / 2, fig.width || 160, fig.height || 80);
+      } else if (fig.type === 'ellipse') {
+        ctx.beginPath();
+        ctx.ellipse(fig.x, fig.y, (fig.width || 160) / 2, (fig.height || 80) / 2, 0, 0, 2 * Math.PI);
+        ctx.fill();
+      }
+      
+      // Draw border
+      if (fig.stroke) {
+        ctx.strokeStyle = fig.stroke;
+        ctx.lineWidth = 2;
+        if (fig.type === 'rect') {
+          ctx.strokeRect(fig.x - (fig.width || 160) / 2, fig.y - (fig.height || 80) / 2, fig.width || 160, fig.height || 80);
+        } else if (fig.type === 'ellipse') {
+          ctx.beginPath();
+          ctx.ellipse(fig.x, fig.y, (fig.width || 160) / 2, (fig.height || 80) / 2, 0, 0, 2 * Math.PI);
+          ctx.stroke();
+        }
+      }
+      
+      // Draw text inside shape if present
+      if (fig.text && fig.text.trim()) {
+        ctx.fillStyle = fig.textColor || '#000000';
+        ctx.font = 'bold 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(fig.text, fig.x, fig.y);
+      }
+    });
+  };
+
+  const drawFreeLines = (ctx: CanvasRenderingContext2D, lines: FreeLine[]) => {
+    lines.forEach(line => {
+      ctx.strokeStyle = line.style.color;
+      ctx.lineWidth = line.style.width;
+      ctx.setLineDash(line.style.dash === 'dashed' ? [6, 4] : []);
+      
+      ctx.beginPath();
+      if (line.style.path === 'straight') {
+        ctx.moveTo(line.x1, line.y1);
+        ctx.lineTo(line.x2, line.y2);
+      } else if (line.style.path === 'elbow') {
+        ctx.moveTo(line.x1, line.y1);
+        ctx.lineTo(line.x2, line.y1);
+        ctx.lineTo(line.x2, line.y2);
+      }
+      ctx.stroke();
+      
+      ctx.setLineDash([]);
+      
+      // Draw arrows if needed (simplified - reuse similar logic to link arrows)
+      if (line.style.arrowStart) {
+        const angle = Math.atan2(line.y2 - line.y1, line.x2 - line.x1) + Math.PI;
+        const style: LinkStyle = { arrowSize: 8, color: line.style.color, arrowType: 'triangle' };
+        drawArrowhead(ctx, line.x1, line.y1, angle, style);
+      }
+      if (line.style.arrowEnd) {
+        const angle = Math.atan2(line.y2 - line.y1, line.x2 - line.x1);
+        const style: LinkStyle = { arrowSize: 8, color: line.style.color, arrowType: 'triangle' };
+        drawArrowhead(ctx, line.x2, line.y2, angle, style);
+      }
+
+      // Endpoint handles (visible on hover/drag)
+      const showHandles = hoveredFreeLineId === line.id || (draggingLineEnd && draggingLineEnd.id === line.id);
+      if (showHandles) {
+        const handleRadius = 5;
+        ctx.fillStyle = '#666666';
+        ctx.beginPath();
+        ctx.arc(line.x1, line.y1, handleRadius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(line.x2, line.y2, handleRadius, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    });
+  };
+
   const drawMarqueeSelection = (ctx: CanvasRenderingContext2D, marquee: typeof marqueeSelection) => {
     if (!marquee?.isActive) return;
 
@@ -817,23 +1006,6 @@ export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNod
     ctx.setLineDash([]);
   };
 
-  const drawConnectionDraft = (ctx: CanvasRenderingContext2D, draft: { sourceId: string; mouseX: number; mouseY: number } | null) => {
-    if (!draft) return;
-
-    const sourceNode = nodes.find(n => n.id === draft.sourceId);
-    if (!sourceNode || sourceNode.x === undefined || sourceNode.y === undefined) return;
-
-    ctx.strokeStyle = '#8BD3E6';
-    ctx.lineWidth = 3;
-    ctx.setLineDash([5, 5]);
-    
-    ctx.beginPath();
-    ctx.moveTo(sourceNode.x, sourceNode.y);
-    ctx.lineTo(draft.mouseX, draft.mouseY);
-    ctx.stroke();
-    
-    ctx.setLineDash([]);
-  };
 
   const getLinks = () => {
     const treeLinks = nodes.filter(n => n.parent).map(n => ({ sourceId: n.parent!, targetId: n.id }));
@@ -1207,6 +1379,15 @@ export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNod
   }, [isContextMenuDragging, contextMenuDragOffset]);
 
   const handleMouseDown = (e: React.MouseEvent) => {
+    // Figure select/drag
+    const f = getFigureAtPosition(e.clientX, e.clientY);
+    if (f && !editingTextFigureId) {
+      setSelectedFigureId(f.id);
+      setFigureToolbar(null);
+      setDraggingFigureId(f.id);
+      setFigureDragStart({ sx: e.clientX, sy: e.clientY, fx: f.x, fy: f.y });
+      return;
+    }
     console.log('SitemapCanvas: handleMouseDown called');
     
     // Only handle left mouse button for drag/select
@@ -1223,6 +1404,33 @@ export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNod
 
     // Detect node first and prefer node interactions over links
     const node = getNodeAtPosition(e.clientX, e.clientY);
+
+    // Check free line endpoint hover for inline editing
+    // Only when not in draw modes
+    if (cursorMode === 'select' && freeLines && freeLines.length > 0) {
+      const canvas = canvasRef.current;
+      if (canvas) {
+        const rect = canvas.getBoundingClientRect();
+        const cx = (e.clientX - rect.left - transform.x) / transform.scale;
+        const cy = (e.clientY - rect.top - transform.y) / transform.scale;
+        const hitRadius = 7;
+        // Find nearest endpoint
+        for (const fl of freeLines) {
+          const d1 = Math.hypot(cx - fl.x1, cy - fl.y1);
+          const d2 = Math.hypot(cx - fl.x2, cy - fl.y2);
+          if (d1 <= hitRadius) {
+            setDraggingLineEnd({ id: fl.id, end: 'start' });
+            setLineEndpointDragMoved(false);
+            return; // engage endpoint drag
+          }
+          if (d2 <= hitRadius) {
+            setDraggingLineEnd({ id: fl.id, end: 'end' });
+            setLineEndpointDragMoved(false);
+            return; // engage endpoint drag
+          }
+        }
+      }
+    }
     
     if (onClearFocus) {
       console.log('SitemapCanvas: handleMouseDown calling onClearFocus');
@@ -1230,17 +1438,6 @@ export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNod
     }
     
     if (node) {
-      if (e.ctrlKey || e.metaKey) {
-        const canvas = canvasRef.current;
-        if (canvas) {
-          const rect = canvas.getBoundingClientRect();
-          const canvasX = (e.clientX - rect.left - transform.x) / transform.scale;
-          const canvasY = (e.clientY - rect.top - transform.y) / transform.scale;
-          setConnectionDraft({ sourceId: node.id, mouseX: canvasX, mouseY: canvasY });
-        }
-        return;
-      }
-
       // Check if we have a selection from marquee mode - if so, enable dragging
       if (selectedIds.size > 0 && selectedIds.has(node.id)) {
         // We have selected nodes and clicked on one of them - enable dragging all selected nodes
@@ -1276,9 +1473,11 @@ export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNod
           selectionIds = Array.from(selectedIds);
         } else {
           // If clicking on unselected node, select and drag based on modifier keys
+          // Ctrl/Cmd/Alt now expands to connected graph
+          const connectedDrag = e.altKey || e.ctrlKey || e.metaKey;
           selectionIds = e.shiftKey
           ? nodes.filter(n => n.category === node.category).map(n => n.id)
-          : (e.altKey ? (() => {
+          : (connectedDrag ? (() => {
               const visited = new Set<string>();
               const queue: string[] = [node.id];
               visited.add(node.id);
@@ -1325,21 +1524,21 @@ export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNod
       backgroundDownRef.current = { x: e.clientX, y: e.clientY };
       setHighlightedLink(null);
       if (onClearFocus) { onClearFocus(); }
-    } else if (cursorMode === 'marquee') {
-        // Start marquee selection
-        const canvas = canvasRef.current;
-        if (canvas) {
-          const rect = canvas.getBoundingClientRect();
-          const canvasX = (e.clientX - rect.left - transform.x) / transform.scale;
-          const canvasY = (e.clientY - rect.top - transform.y) / transform.scale;
-          setMarqueeSelection({
-            startX: canvasX,
-            startY: canvasY,
-            endX: canvasX,
-            endY: canvasY,
-            isActive: true
-          });
-        }
+    } else if (e.shiftKey && !node && !link) {
+      // Start marquee selection when holding Shift on empty background
+      const canvas = canvasRef.current;
+      if (canvas) {
+        const rect = canvas.getBoundingClientRect();
+        const canvasX = (e.clientX - rect.left - transform.x) / transform.scale;
+        const canvasY = (e.clientY - rect.top - transform.y) / transform.scale;
+        setMarqueeSelection({
+          startX: canvasX,
+          startY: canvasY,
+          endX: canvasX,
+          endY: canvasY,
+          isActive: true
+        });
+      }
       setHighlightedLink(null);
       if (onClearFocus) { onClearFocus(); }
     } else if (!node && !link) {
@@ -1358,6 +1557,19 @@ export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNod
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
+    // Hover figure
+    const figUnderMouse = getFigureAtPosition(e.clientX, e.clientY);
+    setHoveredFigureId(figUnderMouse?.id || null);
+
+    // Drag figure
+    if (draggingFigureId && figureDragStart && onUpdateFigure) {
+      const dxScreen = e.clientX - figureDragStart.sx;
+      const dyScreen = e.clientY - figureDragStart.sy;
+      const dx = dxScreen / transform.scale;
+      const dy = dyScreen / transform.scale;
+      onUpdateFigure(draggingFigureId, { x: figureDragStart.fx + dx, y: figureDragStart.fy + dy });
+      return;
+    }
     const node = getNodeAtPosition(e.clientX, e.clientY);
     setHoveredNode(node ? node.id : null);
 
@@ -1374,7 +1586,7 @@ export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNod
     }
 
     if (node && selectedIds.size === 0 && !draggedNode && !isDragging && !marqueeSelection?.isActive && 
-        !connectionDraft && !showLinkEditor && !showColorPicker && !showTitleEditor) {
+        !showLinkEditor && !showColorPicker && !showTitleEditor) {
       // Clear any pending grace timeout
       if (hoverGraceTimeoutRef.current) {
         clearTimeout(hoverGraceTimeoutRef.current);
@@ -1391,18 +1603,20 @@ export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNod
       clearHoverToolbarWithGrace();
     }
 
-    if (connectionDraft) {
-      // Update connection draft line
+    if (draggingLineEnd && onUpdateFreeLine) {
+      // Dragging a free line endpoint inline
       const canvas = canvasRef.current;
       if (canvas) {
         const rect = canvas.getBoundingClientRect();
         const canvasX = (e.clientX - rect.left - transform.x) / transform.scale;
         const canvasY = (e.clientY - rect.top - transform.y) / transform.scale;
-        setConnectionDraft(prev => prev ? {
-          ...prev,
-          mouseX: canvasX,
-          mouseY: canvasY
-        } : null);
+        const { id, end } = draggingLineEnd;
+        setLineEndpointDragMoved(true);
+        if (end === 'start') {
+          onUpdateFreeLine(id, { x1: canvasX, y1: canvasY });
+        } else {
+          onUpdateFreeLine(id, { x2: canvasX, y2: canvasY });
+        }
       }
     } else if (marqueeSelection?.isActive) {
       // Update marquee selection
@@ -1447,20 +1661,160 @@ export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNod
   };
 
   const handleMouseUp = (e: React.MouseEvent) => {
-    if (connectionDraft) {
-      // Check if we're dropping on a target node
-      const targetNode = getNodeAtPosition(e.clientX, e.clientY);
-      if (targetNode && targetNode.id !== connectionDraft.sourceId) {
-        // Prefer creating extra (non-hierarchical) link if supported
-        if (onExtraLinkCreate) {
-          onExtraLinkCreate(connectionDraft.sourceId, targetNode.id);
-        } else if (onConnectionCreate) {
-          // Fallback to hierarchical parent assignment
-          onConnectionCreate(connectionDraft.sourceId, targetNode.id);
+    // End figure drag and open toolbar
+    if (draggingFigureId) {
+      const id = draggingFigureId;
+      setDraggingFigureId(null);
+      setFigureDragStart(null);
+      const f = figures?.find(ff => ff.id === id);
+      const canvas = canvasRef.current;
+      if (f && canvas) {
+        const rect = canvas.getBoundingClientRect();
+        const sx = rect.left + (f.x * transform.scale) + transform.x;
+        const sy = rect.top + (f.y * transform.scale) + transform.y - 40;
+        setFigureToolbar({ id: f.id, x: sx, y: sy });
+        setSelectedFigureId(f.id);
+        
+        // ADD THIS: also open the editor immediately on click
+        openFigureTextEditor(f);
+      }
+      return;
+    }
+    // Re-edit text if clicking a figure without dragging
+    if (!isDragging && !draggedNode && !marqueeSelection?.isActive) {
+      const fig = getFigureAtPosition(e.clientX, e.clientY);
+      if (fig) {
+        openFigureTextEditor(fig);
+        return;
+      }
+    }
+    // End endpoint drag: toggle arrow on click (no move)
+    if (draggingLineEnd) {
+      const wasMoved = lineEndpointDragMoved;
+      const { id, end } = draggingLineEnd;
+      setDraggingLineEnd(null);
+      setLineEndpointDragMoved(false);
+      if (!wasMoved && onUpdateFreeLine && freeLines) {
+        const fl = freeLines.find(l => l.id === id);
+        if (fl) {
+          const style = { ...fl.style };
+          if (end === 'start') {
+            style.arrowStart = !style.arrowStart;
+          } else {
+            style.arrowEnd = !style.arrowEnd;
+          }
+          onUpdateFreeLine(id, { style });
         }
       }
-      setConnectionDraft(null);
-    } else if (marqueeSelection?.isActive) {
+      return;
+    }
+    // Handle draw mode creation first (before other interactions)
+    if (cursorMode === 'draw-text' && !draggedNode && !isDragging && !marqueeSelection?.isActive && onCreateFigure) {
+      const canvas = canvasRef.current;
+      if (!canvas) {
+        setCursorMode('select');
+        return;
+      }
+      const rect = canvas.getBoundingClientRect();
+      const cx = (e.clientX - rect.left - transform.x) / transform.scale;
+      const cy = (e.clientY - rect.top - transform.y) / transform.scale;
+      const figure: Figure = {
+        id: `fig-${Date.now()}`,
+        type: 'text',
+        x: cx,
+        y: cy,
+        text: 'Text',
+        textColor: '#000000',
+      };
+      onCreateFigure(figure);
+      setCursorMode('select');
+      return;
+    }
+
+    if (cursorMode === 'draw-rect' && !draggedNode && !isDragging && !marqueeSelection?.isActive && onCreateFigure) {
+      const canvas = canvasRef.current;
+      if (!canvas) {
+        setCursorMode('select');
+        return;
+      }
+      const rect = canvas.getBoundingClientRect();
+      const cx = (e.clientX - rect.left - transform.x) / transform.scale;
+      const cy = (e.clientY - rect.top - transform.y) / transform.scale;
+      const figure: Figure = {
+        id: `fig-${Date.now()}`,
+        type: 'rect',
+        x: cx - 80, // center width
+        y: cy - 40, // center height
+        width: 160,
+        height: 80,
+        text: '',
+        fill: '#ffffff',
+        stroke: '#000000',
+        textColor: '#000000',
+      };
+      onCreateFigure(figure);
+      setCursorMode('select');
+      return;
+    }
+
+    if (cursorMode === 'draw-ellipse' && !draggedNode && !isDragging && !marqueeSelection?.isActive && onCreateFigure) {
+      const canvas = canvasRef.current;
+      if (!canvas) {
+        setCursorMode('select');
+        return;
+      }
+      const rect = canvas.getBoundingClientRect();
+      const cx = (e.clientX - rect.left - transform.x) / transform.scale;
+      const cy = (e.clientY - rect.top - transform.y) / transform.scale;
+      const figure: Figure = {
+        id: `fig-${Date.now()}`,
+        type: 'ellipse',
+        x: cx - 80,
+        y: cy - 40,
+        width: 160,
+        height: 80,
+        text: '',
+        fill: '#ffffff',
+        stroke: '#000000',
+        textColor: '#000000',
+      };
+      onCreateFigure(figure);
+      setCursorMode('select');
+      return;
+    }
+
+    if (cursorMode === 'draw-line') {
+      const canvas = canvasRef.current;
+      if (!canvas) {
+        setCursorMode('select');
+        return;
+      }
+      const rect = canvas.getBoundingClientRect();
+      const cx = (e.clientX - rect.left - transform.x) / transform.scale;
+      const cy = (e.clientY - rect.top - transform.y) / transform.scale;
+      
+      if (!pendingLineStart) {
+        setPendingLineStart({ x: cx, y: cy });
+        return;
+      }
+      
+      if (onCreateFreeLine) {
+        const line: FreeLine = {
+          id: `line-${Date.now()}`,
+          x1: pendingLineStart.x,
+          y1: pendingLineStart.y,
+          x2: cx,
+          y2: cy,
+          style: { ...pendingLineStyle },
+        };
+        onCreateFreeLine(line);
+      }
+      setPendingLineStart(null);
+      setCursorMode('select');
+      return;
+    }
+
+    if (marqueeSelection?.isActive) {
       // Complete marquee selection
       const canvas = canvasRef.current;
       if (canvas) {
@@ -1561,7 +1915,6 @@ export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNod
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Escape') {
-      setConnectionDraft(null);
       setHighlightedLink(null);
       if (onClearFocus) onClearFocus();
     }
@@ -1581,9 +1934,6 @@ export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNod
       case 'v':
         setCursorMode('select');
         break;
-      case 'm':
-        setCursorMode('marquee');
-        break;
       case 'Delete':
       case 'Backspace':
         if (highlightedLink && onNodesUpdate) {
@@ -1599,7 +1949,6 @@ export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNod
     // Reset all mouse states when leaving the canvas
     setIsDragging(false);
     setDraggedNode(null);
-    setConnectionDraft(null);
     setDragSelectionIds(null);
     setDragStartPositions({});
     setMarqueeSelection(null);
@@ -1607,6 +1956,8 @@ export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNod
     setDragStart({ x: 0, y: 0 });
     setInitialTransform({ x: 0, y: 0, scale: 1 });
     backgroundDownRef.current = null;
+    setDraggingLineEnd(null);
+    setLineEndpointDragMoved(false);
   };
 
   const handleWheel = (e: WheelEvent) => {
@@ -1687,10 +2038,50 @@ export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNod
     if (isSpacePressed) return "cursor-grab"; // Space key panning
     if (draggedNode) return "cursor-grabbing";
     if (isDragging) return "cursor-grabbing";
-    if (connectionDraft) return "cursor-crosshair";
     if (marqueeSelection?.isActive) return "cursor-crosshair";
-    if (cursorMode === 'marquee') return "cursor-crosshair";
     return "cursor-default";
+  };
+
+  // Figure hit testing for text re-editing
+  const getFigureAtPosition = (clientX: number, clientY: number): Figure | null => {
+    if (!figures || !canvasRef.current) return null;
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const cx = (clientX - rect.left - transform.x) / transform.scale;
+    const cy = (clientY - rect.top - transform.y) / transform.scale;
+
+    for (let i = figures.length - 1; i >= 0; i--) {
+      const fig = figures[i];
+      const w = fig.width ?? 160;
+      const h = fig.height ?? 80;
+
+      if (fig.type === 'text') {
+        const tw = 160, th = 40;
+        if (cx >= fig.x - tw / 2 && cx <= fig.x + tw / 2 && cy >= fig.y - th / 2 && cy <= fig.y + th / 2) {
+          return fig;
+        }
+      } else if (fig.type === 'rect') {
+        if (cx >= fig.x - w / 2 && cx <= fig.x + w / 2 && cy >= fig.y - h / 2 && cy <= fig.y + h / 2) {
+          return fig;
+        }
+      } else if (fig.type === 'ellipse') {
+        const rx = (w / 2), ry = (h / 2);
+        const norm = Math.pow((cx - fig.x) / rx, 2) + Math.pow((cy - fig.y) / ry, 2);
+        if (norm <= 1) return fig;
+      }
+    }
+    return null;
+  };
+
+  const openFigureTextEditor = (fig: Figure) => {
+    if (!canvasRef.current) return;
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const screenX = rect.left + (fig.x * transform.scale) + transform.x;
+    const screenY = rect.top + (fig.y * transform.scale) + transform.y;
+    setEditingTextFigureId(fig.id);
+    setTextEditorPosition({ x: screenX, y: screenY });
+    setTextEditorText(fig.text ?? '');
   };
 
   // Remove the old window-based approach
@@ -1705,11 +2096,24 @@ export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNod
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
+        onDoubleClick={(e) => {
+          // Only open editor when double-clicking existing figures; do not create new ones
+          const fig = getFigureAtPosition(e.clientX, e.clientY);
+          if (fig) {
+            openFigureTextEditor(fig);
+          }
+        }}
         onMouseLeave={handleMouseLeave}
         onKeyDown={handleKeyDown}
         onContextMenu={handleContextMenu}
         tabIndex={-1}
         className={getCursorClass()}
+        onClick={(e) => {
+          // Clicking background only closes formatting toolbar, not text editor
+          if (!e.currentTarget.querySelector(':hover')) {
+            setFigureToolbar(null);
+          }
+        }}
       />
       
       {/* Context Menu */}
@@ -1744,7 +2148,7 @@ export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNod
             
             return (
               <>
-                {/* Draggable Header */}
+                Draggable Header
                 <div
                   className="px-3 py-2 border-b bg-gray-50 cursor-move select-none flex items-center justify-between"
                   onMouseDown={handleContextMenuMouseDown}
@@ -1854,22 +2258,6 @@ export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNod
         </button>
         
         <button
-          onClick={() => setCursorMode('marquee')}
-          className={`w-8 h-8 flex items-center justify-center rounded transition-colors group relative ${
-            cursorMode === 'marquee' 
-              ? 'bg-orange-100 text-orange-600 border border-orange-200'
-              : 'bg-gray-100 hover:bg-gray-200 text-gray-600'
-          }`}
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeDasharray="4 2">
-            <rect x="3" y="3" width="18" height="18" rx="2"/>
-          </svg>
-          <span className="absolute -top-10 left-1/2 -translate-x-1/2 px-2 py-1 bg-gray-900 text-white text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
-            Multi select (M)
-          </span>
-        </button>
-        
-        <button
           onClick={() => {
             if (selectedIds.size === 1 && onAddChild) {
               const id = Array.from(selectedIds)[0];
@@ -1887,6 +2275,123 @@ export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNod
             Add Node (A)
           </span>
         </button>
+        
+        {/* Text (T) */}
+        <button
+          onClick={() => {
+            if (!onCreateFigure || !canvasRef.current) return;
+            const canvas = canvasRef.current;
+            const rect = canvas.getBoundingClientRect();
+            const centerX = rect.width / 2;
+            const centerY = rect.height / 2;
+
+            // Screen center to canvas coords
+            const cx = (centerX - transform.x) / transform.scale;
+            const cy = (centerY - transform.y) / transform.scale;
+
+            const figure: Figure = {
+              id: `fig-${Date.now()}`,
+              type: 'text',
+              x: cx,
+              y: cy,
+              text: 'Text',
+              textColor: '#000000',
+            };
+            onCreateFigure(figure);
+
+            // Open editor at screen center
+            setEditingTextFigureId(figure.id);
+            setTextEditorPosition({ x: centerX, y: centerY });
+            setTextEditorText('Text');
+          }}
+          className={"w-8 h-8 flex items-center justify-center rounded transition-colors group relative bg-gray-100 hover:bg-gray-200 text-gray-600"}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M4 7h16M12 7v10"/>
+          </svg>
+          <span className="absolute -top-10 left-1/2 -translate-x-1/2 px-2 py-1 bg-gray-900 text-white text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+            Text
+          </span>
+        </button>
+
+        {/* Shapes (S) */}
+        <div className="relative">
+          <button
+            onClick={() => setShowShapesPopover(!showShapesPopover)}
+            className={`w-8 h-8 flex items-center justify-center rounded transition-colors group relative ${
+              cursorMode === 'draw-rect' || cursorMode === 'draw-ellipse'
+                ? 'bg-orange-100 text-orange-600 border border-orange-200'
+                : 'bg-gray-100 hover:bg-gray-200 text-gray-600'
+            }`}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="4" y="4" width="8" height="8" rx="2"/>
+              <circle cx="17" cy="17" r="4"/>
+            </svg>
+            <span className="absolute -top-10 left-1/2 -translate-x-1/2 px-2 py-1 bg-gray-900 text-white text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+              Shapes (S)
+            </span>
+          </button>
+          {showShapesPopover && (
+            <div className="absolute bottom-full left-0 mb-2 bg-white border border-gray-300 rounded-lg shadow-lg z-50 w-48"
+                 onClick={(e) => e.stopPropagation()}>
+              <button onClick={() => { setCursorMode('draw-rect'); setShowShapesPopover(false); }}
+                      className="w-full text-left px-3 py-2 hover:bg-gray-100 text-sm">Rectangle</button>
+              <button onClick={() => { setCursorMode('draw-ellipse'); setShowShapesPopover(false); }}
+                      className="w-full text-left px-3 py-2 hover:bg-gray-100 text-sm">Ellipse</button>
+            </div>
+          )}
+        </div>
+
+        {/* Line (L) */}
+        <div className="relative">
+          <button
+            onClick={() => setShowLinePopover(!showLinePopover)}
+            className={`w-8 h-8 flex items-center justify-center rounded transition-colors group relative ${
+              cursorMode === 'draw-line'
+                ? 'bg-orange-100 text-orange-600 border border-orange-200'
+                : 'bg-gray-100 hover:bg-gray-200 text-gray-600'
+            }`}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M4 18L18 4"/>
+            </svg>
+            <span className="absolute -top-10 left-1/2 -translate-x-1/2 px-2 py-1 bg-gray-900 text-white text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+              Line (L)
+            </span>
+          </button>
+          {showLinePopover && (
+            <div className="absolute bottom-full left-0 mb-2 bg-white border border-gray-300 rounded-lg shadow-lg z-50 w-56 p-3"
+                 onClick={(e) => e.stopPropagation()}>
+              <div className="text-xs text-gray-600 mb-2 font-medium">Path Style</div>
+              <div className="flex gap-1 mb-3">
+                <button onClick={() => setPendingLineStyle(s => ({...s, path: 'straight'}))}
+                        className={`px-2 py-1 text-xs rounded ${pendingLineStyle.path === 'straight' ? 'bg-blue-100 border-2 border-blue-500' : 'border border-gray-300 hover:bg-gray-50'}`}>
+                  Straight
+                </button>
+                <button onClick={() => setPendingLineStyle(s => ({...s, path: 'elbow'}))}
+                        className={`px-2 py-1 text-xs rounded ${pendingLineStyle.path === 'elbow' ? 'bg-blue-100 border-2 border-blue-500' : 'border border-gray-300 hover:bg-gray-50'}`}>
+                  Elbow
+                </button>
+              </div>
+              <div className="text-xs text-gray-600 mb-2 font-medium">Line Style</div>
+              <div className="flex gap-1 mb-3">
+                <button onClick={() => setPendingLineStyle(s => ({...s, dash: 'solid'}))}
+                        className={`px-2 py-1 text-xs rounded ${pendingLineStyle.dash === 'solid' ? 'bg-blue-100 border-2 border-blue-500' : 'border border-gray-300 hover:bg-gray-50'}`}>
+                  Solid
+                </button>
+                <button onClick={() => setPendingLineStyle(s => ({...s, dash: 'dashed'}))}
+                        className={`px-2 py-1 text-xs rounded ${pendingLineStyle.dash === 'dashed' ? 'bg-blue-100 border-2 border-blue-500' : 'border border-gray-300 hover:bg-gray-50'}`}>
+                  Dashed
+                </button>
+              </div>
+              <button onClick={() => { setCursorMode('draw-line'); setShowLinePopover(false); }}
+                      className="w-full px-3 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700">
+                Start Drawing
+              </button>
+            </div>
+          )}
+        </div>
         
         <div className="w-px h-6 bg-gray-300 mx-1"></div>
         
@@ -2138,6 +2643,95 @@ export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNod
             onSave={handleTitleSave}
             onClose={() => setShowTitleEditor(false)}
           />
+        );
+      })()}
+
+      {/* Text Figure Editor - modern inline contenteditable with dynamic box */}
+      {editingTextFigureId && (
+        <div
+          className="fixed z-50"
+          style={{
+            left: `${textEditorPosition.x}px`,
+            top: `${textEditorPosition.y}px`,
+            transform: 'translate(-50%, -50%)',
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div
+            ref={(el) => {
+              if (el) {
+                const range = document.createRange();
+                const sel = window.getSelection();
+                range.selectNodeContents(el);
+                range.collapse(false);
+                sel?.removeAllRanges();
+                sel?.addRange(range);
+              }
+            }}
+            contentEditable
+            suppressContentEditableWarning
+            role="textbox"
+            aria-label="Edit text"
+            className="min-w-[120px] max-w-[480px] outline-none text-gray-900 relative inline-block"
+            style={{
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+              textDecoration: (figures.find(f => f.id === editingTextFigureId)?.underline ? 'underline' : 'none'),
+              textAlign: 'center' as any,
+              fontWeight: (figures.find(f => f.id === editingTextFigureId)?.fontWeight === 'bold' ? 700 : 600) as any,
+              fontSize: (figures.find(f => f.id === editingTextFigureId)?.fontSize ?? 18) as any,
+              lineHeight: '1.2',
+              padding: '8px 14px',
+              background: '#ffffff',
+              border: '1.5px solid #3B82F6',
+              borderRadius: '8px',
+            }}
+            dangerouslySetInnerHTML={{ __html: (textEditorText || '').replace(/\n/g, '<br/>') }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                const text = (e.currentTarget.textContent || '').trim();
+                if (onUpdateFigure && editingTextFigureId) {
+                  onUpdateFigure(editingTextFigureId, { text });
+                }
+                setEditingTextFigureId(null);
+              } else if (e.key === 'Escape') {
+                e.preventDefault();
+                setEditingTextFigureId(null);
+              }
+            }}
+            onBlur={(e) => {
+              const text = (e.currentTarget.textContent || '').trim();
+              if (onUpdateFigure && editingTextFigureId) {
+                onUpdateFigure(editingTextFigureId, { text });
+              }
+              setEditingTextFigureId(null);
+            }}
+            onPaste={(e) => {
+              e.preventDefault();
+              const text = (e.clipboardData || (window as any).clipboardData).getData('text/plain');
+              document.execCommand('insertText', false, text);
+            }}
+          />
+        </div>
+      )}
+
+      {/* Figure Formatting Toolbar */}
+      {figureToolbar && (() => {
+        const f = figures.find(ff => ff.id === figureToolbar.id);
+        if (!f) return null;
+        return (
+          <div
+            className="fixed z-50 bg-white border border-gray-200 rounded-lg shadow-md px-2 py-1 flex items-center gap-1"
+            style={{ left: figureToolbar.x, top: figureToolbar.y, transform: 'translate(-50%, -100%)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button className="px-2 py-1 text-xs rounded hover:bg-gray-100" onClick={() => onUpdateFigure?.(f.id, { fontSize: Math.max(10, (f.fontSize ?? 18) - 2) })}>–</button>
+            <button className="px-2 py-1 text-xs rounded hover:bg-gray-100" onClick={() => onUpdateFigure?.(f.id, { fontSize: Math.min(64, (f.fontSize ?? 18) + 2) })}>+</button>
+            <button className={`px-2 py-1 text-xs rounded hover:bg-gray-100 ${f.fontWeight === 'bold' ? 'bg-gray-100' : ''}`} onClick={() => onUpdateFigure?.(f.id, { fontWeight: f.fontWeight === 'bold' ? 'normal' : 'bold' })}>B</button>
+            <button className={`px-2 py-1 text-xs rounded hover:bg-gray-100 ${f.underline ? 'bg-gray-100' : ''}`} onClick={() => onUpdateFigure?.(f.id, { underline: !f.underline })}><span style={{ textDecoration: 'underline' }}>U</span></button>
+            <button className="ml-1 px-2 py-1 text-xs rounded hover:bg-red-50 text-red-600" onClick={() => { onDeleteFigure?.(f.id); setFigureToolbar(null); setEditingTextFigureId(null); }}>Delete</button>
+          </div>
         );
       })()}
     </div>

@@ -52,29 +52,7 @@ export async function exportToPNG(
   });
 }
 
-export function exportToSVG(nodes: PageNode[]): void {
-  // Calculate bounds to include all nodes with proper padding
-  const bounds = calculateNodeBounds(nodes);
-  const padding = 300; // Extra padding around the content for safety
-  const width = bounds.width + (padding * 2);
-  const height = bounds.height + (padding * 2);
-  
-  // Offset all nodes by padding to center them
-  const offsetNodes = nodes.map(node => ({
-    ...node,
-    x: node.x !== undefined ? node.x - bounds.minX + padding : undefined,
-    y: node.y !== undefined ? node.y - bounds.minY + padding : undefined,
-  }));
-  
-  const svg = generateSVG(offsetNodes, width, height);
-  const blob = new Blob([svg], { type: 'image/svg+xml' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.download = `sitemap-${Date.now()}.svg`;
-  link.href = url;
-  link.click();
-  URL.revokeObjectURL(url);
-}
+// SVG export removed per request
 
 export function exportToCSV(nodes: PageNode[]): void {
   // Helper function to properly escape CSV fields
@@ -100,7 +78,11 @@ export function exportToCSV(nodes: PageNode[]): void {
 
   // Create node map for efficient lookups
   const nodeMap = new Map(nodes.map(n => [n.id, n]));
-  const now = new Date().toISOString().split('T')[0];
+  const nowDate = new Date();
+  const dd = String(nowDate.getDate()).padStart(2, '0');
+  const mm = String(nowDate.getMonth() + 1).padStart(2, '0');
+  const yyyy = nowDate.getFullYear();
+  const now = `${dd}-${mm}-${yyyy}`;
 
   // Professional headers for business use
   const headers = [
@@ -108,8 +90,9 @@ export function exportToCSV(nodes: PageNode[]): void {
     'Title',
     'Parent URL',
     'Category',
-    'Depth Level',
-    'Export Date'
+    'Content Type',
+    'Last Updated',
+    'Depth Level'
   ];
 
   const rows = nodes.map(node => [
@@ -117,8 +100,9 @@ export function exportToCSV(nodes: PageNode[]): void {
     node.title || '',
     getParentURL(node, nodeMap),
     node.category || '',
-    node.depth.toString(),
-    now
+    node.contentType || '',
+    node.lastUpdated || '',
+    node.depth.toString()
   ]);
 
   // Add BOM for Excel UTF-8 compatibility
@@ -197,13 +181,14 @@ export function exportToHTML(nodes: PageNode[]): void {
   const height = bounds.height + (padding * 2);
   
   // Offset all nodes by padding to center them
-  const offsetNodes = nodes.map(node => ({
-    ...node,
-    x: node.x !== undefined ? node.x - bounds.minX + padding : undefined,
-    y: node.y !== undefined ? node.y - bounds.minY + padding : undefined,
-  }));
+  // const offsetNodes = nodes.map(node => ({
+  //   ...node,
+  //   x: node.x !== undefined ? node.x - bounds.minX + padding : undefined,
+  //   y: node.y !== undefined ? node.y - bounds.minY + padding : undefined,
+  // }));
   
-  const svg = generateSVG(offsetNodes, width, height);
+  // Note: SVG generation removed; exporting a static HTML with no embedded SVG
+  const svg = '';
 
   const html = `<!DOCTYPE html>
 <html lang="en">
@@ -362,11 +347,12 @@ function calculateNodeBounds(nodes: PageNode[]): { minX: number; minY: number; m
       // Account for node dimensions - use generous estimate to avoid clipping
       // Calculate based on actual content
       const titleLength = node.title.length;
-      const urlLength = node.url.length;
-      const maxTextLength = Math.max(titleLength, urlLength);
+      const subtitle = node.contentType ? `(${node.contentType}) ${node.url}` : node.url;
+      const subtitleLength = subtitle.length;
+      const maxTextLength = Math.max(titleLength, subtitleLength);
       // Be more generous with width calculation to account for longer URLs and titles
       const nodeWidth = Math.max(180, maxTextLength * 8 + 60); // Increased margin
-      const nodeHeight = 60; // Increased to account for both title and URL lines
+      const nodeHeight = 60; // Enough for title + subtitle
       
       minX = Math.min(minX, node.x - nodeWidth / 2);
       minY = Math.min(minY, node.y - nodeHeight / 2);
@@ -516,14 +502,15 @@ function drawSitemapToContext(
     const titleText = truncateText(ctx, node.title, maxTitleWidth);
     ctx.fillText(titleText, node.x, titleY);
 
-    // Draw URL subtitle
+    // Draw subtitle: URL + optional content type
     const urlColor = node.textColor ? `${node.textColor}CC` : 'rgba(0, 0, 0, 0.8)'; // Default to black with transparency
     ctx.fillStyle = urlColor;
     ctx.font = '10px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
     
     const urlY = node.y + 8;
     const maxUrlWidth = dimensions.width - 20;
-    const urlText = truncateText(ctx, node.url, maxUrlWidth);
+    const subtitleRaw = node.contentType ? `(${node.contentType}) ${node.url}` : node.url;
+    const urlText = truncateText(ctx, subtitleRaw, maxUrlWidth);
     ctx.fillText(urlText, node.x, urlY);
   });
 }
@@ -537,9 +524,10 @@ function calculateNodeDimensions(node: PageNode, ctx: CanvasRenderingContext2D):
   ctx.font = 'bold 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
   const titleWidth = ctx.measureText(node.title).width;
 
-  // Measure URL text
+  // Measure subtitle text (URL + optional content type)
   ctx.font = '10px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
-  const urlWidth = ctx.measureText(node.url).width;
+  const subtitleRaw = node.contentType ? `(${node.contentType}) ${node.url}` : node.url;
+  const urlWidth = ctx.measureText(subtitleRaw).width;
 
   const contentWidth = Math.max(titleWidth, urlWidth);
   const width = Math.max(minWidth, contentWidth + padding);
@@ -581,71 +569,4 @@ function truncateText(ctx: CanvasRenderingContext2D, text: string, maxWidth: num
   return truncated + '...';
 }
 
-function generateSVG(nodes: PageNode[], width = 1200, height = 800): string {
-  const CATEGORY_COLORS: Record<string, string> = {
-    root: '#ffffff',
-    content: '#ffffff',
-    products: '#ffffff',
-    company: '#ffffff',
-    support: '#ffffff',
-    technical: '#ffffff',
-    users: '#ffffff',
-    general: '#ffffff',
-  };
-
-  const nodeMap = new Map(nodes.map(n => [n.id, n]));
-
-  let svgContent = '';
-
-  // Draw links first
-  nodes.forEach(node => {
-    if (node.parent) {
-      const parent = nodeMap.get(node.parent);
-      if (parent && node.x !== undefined && node.y !== undefined && parent.x !== undefined && parent.y !== undefined) {
-        svgContent += `<line x1="${parent.x}" y1="${parent.y}" x2="${node.x}" y2="${node.y}" stroke="#e0e0e0" stroke-width="2" />`;
-      }
-    }
-  });
-
-  // Draw nodes
-  nodes.forEach(node => {
-    if (node.x === undefined || node.y === undefined) return;
-
-    const color = node.customColor || CATEGORY_COLORS[node.category] || CATEGORY_COLORS.general;
-    const textColor = node.textColor || '#000000'; // Default to black text
-    
-    // Calculate dimensions (simplified for SVG)
-    const titleLength = node.title.length;
-    const urlLength = node.url.length;
-    const maxTextLength = Math.max(titleLength, urlLength);
-    const nodeWidth = Math.max(180, maxTextLength * 8 + 60); // Match bounds calculation
-    const nodeHeight = 60; // Match bounds calculation
-
-    const x = node.x - nodeWidth / 2;
-    const y = node.y - nodeHeight / 2;
-
-    svgContent += `
-      <rect x="${x}" y="${y}" width="${nodeWidth}" height="${nodeHeight}" rx="8" ry="8" fill="${color}" stroke="#000000" stroke-width="2" />
-      <text x="${node.x}" y="${node.y - 8}" text-anchor="middle" dominant-baseline="middle" fill="${textColor}" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="13" font-weight="bold">
-        ${escapeXml(node.title)}
-      </text>
-      <text x="${node.x}" y="${node.y + 8}" text-anchor="middle" dominant-baseline="middle" fill="${textColor}CC" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="10">
-        ${escapeXml(node.url)}
-      </text>
-    `;
-  });
-
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
-    <rect width="${width}" height="${height}" fill="#ffffff" />
-    ${svgContent}
-  </svg>`;
-}
-
-function escapeXml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;');
-}
+// SVG generation helpers removed per request

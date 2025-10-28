@@ -4,6 +4,8 @@ export interface CsvRow {
   title: string;
   url: string;
   group?: string;
+  contentType?: string;
+  lastUpdated?: string; // normalized DD-MM-YYYY when possible
 }
 
 export interface CsvParseResult {
@@ -51,11 +53,29 @@ export async function parseCsvFile(file: File): Promise<CsvParseResult> {
           h.toLowerCase().includes('section')
         );
 
+        // Find content type column (optional)
+        const contentTypeColumn = headers.find(h => 
+          h.toLowerCase().includes('content type') ||
+          (h.toLowerCase().includes('type') && !h.toLowerCase().includes('mime')) ||
+          h.toLowerCase().includes('format')
+        );
+
+        // Find last updated column (optional)
+        const lastUpdatedColumn = headers.find(h => 
+          h.toLowerCase().includes('last updated') ||
+          h.toLowerCase().includes('updated') ||
+          h.toLowerCase().includes('modified') ||
+          h.toLowerCase().includes('last modified') ||
+          h.toLowerCase().includes('date')
+        );
+
         results.data.forEach((row: any, index: number) => {
           try {
             const title = String(row[titleColumn!] || '').trim();
             const url = String(row[urlColumn!] || '').trim();
             const group = groupColumn ? String(row[groupColumn] || '').trim() : undefined;
+            const contentType = contentTypeColumn ? String(row[contentTypeColumn] || '').trim() : undefined;
+            const lastUpdatedRaw = lastUpdatedColumn ? String(row[lastUpdatedColumn] || '').trim() : undefined;
 
             if (!title) {
               errors.push(`Row ${index + 1}: Missing title`);
@@ -75,7 +95,43 @@ export async function parseCsvFile(file: File): Promise<CsvParseResult> {
               return;
             }
 
-            data.push({ title, url, group });
+            // Normalize date to DD-MM-YYYY if present and valid
+            let lastUpdated: string | undefined = undefined;
+            if (lastUpdatedRaw) {
+              try {
+                // Try to parse DD/MM/YYYY or DD-MM-YYYY format
+                const parsed = lastUpdatedRaw.replace(/\//g, '-');
+                const parts = parsed.split('-');
+                
+                if (parts.length === 3) {
+                  const dd = parts[0].padStart(2, '0');
+                  const mm = parts[1].padStart(2, '0');
+                  const yyyy = parts[2];
+                  
+                  // Validate numeric parts
+                  if (/^\d+$/.test(dd) && /^\d+$/.test(mm) && /^\d{4}$/.test(yyyy)) {
+                    lastUpdated = `${dd}-${mm}-${yyyy}`;
+                  } else {
+                    errors.push(`Row ${index + 1}: Invalid Last Updated date format`);
+                  }
+                } else {
+                  // Fallback to native Date parsing for other formats
+                  const d = new Date(lastUpdatedRaw);
+                  if (!isNaN(d.getTime())) {
+                    const dd = String(d.getDate()).padStart(2, '0');
+                    const m = String(d.getMonth() + 1).padStart(2, '0');
+                    const y = d.getFullYear();
+                    lastUpdated = `${dd}-${m}-${y}`;
+                  } else {
+                    errors.push(`Row ${index + 1}: Invalid Last Updated date`);
+                  }
+                }
+              } catch (error) {
+                errors.push(`Row ${index + 1}: Error parsing Last Updated date`);
+              }
+            }
+
+            data.push({ title, url, group, contentType, lastUpdated });
           } catch (error) {
             errors.push(`Row ${index + 1}: Error parsing data`);
           }
@@ -91,21 +147,21 @@ export async function parseCsvFile(file: File): Promise<CsvParseResult> {
 }
 
 export function generateSampleCsv(): string {
-  return `Page Title,Page URL,Group
-Home,https://example.com,root
-About Us,https://example.com/about,company
-Our Team,https://example.com/about/team,company
-Careers,https://example.com/about/careers,company
-Products,https://example.com/products,products
-Product A,https://example.com/products/product-a,products
-Product B,https://example.com/products/product-b,products
-Blog,https://example.com/blog,content
-Blog Post 1,https://example.com/blog/post-1,content
-Blog Post 2,https://example.com/blog/post-2,content
-Support,https://example.com/support,support
-FAQ,https://example.com/support/faq,support
-Contact,https://example.com/support/contact,support
-Documentation,https://example.com/docs,technical
-Getting Started,https://example.com/docs/getting-started,technical
-API Reference,https://example.com/docs/api,technical`;
+  return `Page Title,Page URL,Group,Content Type,Last Updated
+Home,https://example.com,root,Landing,05-01-2025
+About Us,https://example.com/about,company,Page,12-02-2025
+Our Team,https://example.com/about/team,company,Page,13-02-2025
+Careers,https://example.com/about/careers,company,Page,18-02-2025
+Products,https://example.com/products,products,Listing,01-03-2025
+Product A,https://example.com/products/product-a,products,Product,03-03-2025
+Product B,https://example.com/products/product-b,products,Product,04-03-2025
+Blog,https://example.com/blog,content,Index,10-03-2025
+Blog Post 1,https://example.com/blog/post-1,content,Article,11-03-2025
+Blog Post 2,https://example.com/blog/post-2,content,Article,12-03-2025
+Support,https://example.com/support,support,Hub,15-03-2025
+FAQ,https://example.com/support/faq,support,FAQ,16-03-2025
+Contact,https://example.com/support/contact,support,Page,16-03-2025
+Documentation,https://example.com/docs,technical,Docs,17-03-2025
+Getting Started,https://example.com/docs/getting-started,technical,Guide,17-03-2025
+API Reference,https://example.com/docs/api,technical,Reference,18-03-2025`;
 }

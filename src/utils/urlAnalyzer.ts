@@ -9,6 +9,8 @@ export interface PageNode {
   customTitle?: boolean; // Flag to indicate if title is user-provided
   customColor?: string; // Custom color for the node
   textColor?: string; // Custom text color for the node
+  contentType?: string; // From CSV (optional)
+  lastUpdated?: string; // YYYY-MM-DD (optional)
   x?: number;
   y?: number;
   vx?: number;
@@ -22,7 +24,7 @@ export interface URLHierarchy {
   categories: string[];
 }
 
-export function createNodesFromCsvData(csvData: Array<{title: string, url: string, group?: string}>): URLHierarchy {
+export function createNodesFromCsvData(csvData: Array<{title: string, url: string, group?: string, contentType?: string, lastUpdated?: string}>): URLHierarchy {
   const nodeMap = new Map<string, PageNode>();
   const categories = new Set<string>();
 
@@ -46,6 +48,8 @@ export function createNodesFromCsvData(csvData: Array<{title: string, url: strin
       children: [],
       category,
       customTitle: true, // Mark as custom title from CSV
+      contentType: row.contentType?.trim() || undefined,
+      lastUpdated: row.lastUpdated || undefined,
     };
 
     nodeMap.set(cleanUrl, node);
