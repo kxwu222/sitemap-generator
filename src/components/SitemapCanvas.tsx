@@ -55,10 +55,43 @@ const CATEGORY_COLORS: Record<string, string> = {
   general: '#ffffff',
 };
 
-export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNodeClick, onNodesUpdate, onNodesPreview, onMoveNodesToGroup, onCreateGroupFromSelection, onDeleteGroup, onConnectionCreate, extraLinks = [], onExtraLinkCreate, onExtraLinkDelete, onUndo, onRedo, searchResults = [], focusedNode, onClearFocus, colorOverrides = {}, onAddChild, linkStyles = {}, onLinkStyleChange, onAddNode, figures = [], freeLines = [], onCreateFigure, onUpdateFigure, onDeleteFigure, onCreateFreeLine, onUpdateFreeLine, onDeleteFreeLine }, ref) => {
+export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
   
   // Helper function to create link key
   const linkKey = (sourceId: string, targetId: string) => `${sourceId}-${targetId}`;
+
+  // Destructure props inside body to avoid Babel initializer issue
+  const {
+    nodes,
+    onNodeClick,
+    onNodesUpdate,
+    onNodesPreview,
+    onMoveNodesToGroup,
+    onCreateGroupFromSelection,
+    onDeleteGroup,
+    onConnectionCreate,
+    extraLinks = [],
+    onExtraLinkCreate,
+    onExtraLinkDelete,
+    onUndo,
+    onRedo,
+    searchResults = [],
+    focusedNode,
+    onClearFocus,
+    colorOverrides = {},
+    onAddChild,
+    linkStyles = {},
+    onLinkStyleChange,
+    onAddNode,
+    figures = [],
+    freeLines = [],
+    onCreateFigure,
+    onUpdateFigure,
+    onDeleteFigure,
+    onCreateFreeLine,
+    onUpdateFreeLine,
+    onDeleteFreeLine,
+  } = props;
   
   // Small SVG preview for a link style option
   const MiniLinkIcon = ({
@@ -230,6 +263,7 @@ export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNod
   const [editingTextFigureId, setEditingTextFigureId] = useState<string | null>(null);
   const [textEditorPosition, setTextEditorPosition] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [textEditorText, setTextEditorText] = useState('');
+  const isEditingTextRef = useRef(false);
 
   // Close hover toolbar when any editor opens
   useEffect(() => {
@@ -1379,14 +1413,22 @@ export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNod
   }, [isContextMenuDragging, contextMenuDragOffset]);
 
   const handleMouseDown = (e: React.MouseEvent) => {
+    // If editing text, finish edit via blur and consume click to avoid panning
+    if (isEditingTextRef.current) {
+      const active = document.activeElement as HTMLElement | null;
+      active?.blur();
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     // Figure select/drag
     const f = getFigureAtPosition(e.clientX, e.clientY);
     if (f && !editingTextFigureId) {
       setSelectedFigureId(f.id);
-      setFigureToolbar(null);
+      setFigureToolbar(null); // Close toolbar on new click
       setDraggingFigureId(f.id);
       setFigureDragStart({ sx: e.clientX, sy: e.clientY, fx: f.x, fy: f.y });
-      return;
+      // Don't return - allow normal drag flow
     }
     console.log('SitemapCanvas: handleMouseDown called');
     
@@ -1542,11 +1584,17 @@ export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNod
       setHighlightedLink(null);
       if (onClearFocus) { onClearFocus(); }
     } else if (!node && !link) {
+      // If editing text, do not pan; allow blur/save without moving canvas
+      if (isEditingTextRef.current) {
+        setHighlightedLink(null);
+        if (onClearFocus) { onClearFocus(); }
+        return;
+      }
       // Start canvas panning (only when not over nodes or links)
-        setIsDragging(true);
-        setDragStart({ x: e.clientX, y: e.clientY });
-        setInitialTransform(transform);
-        backgroundDownRef.current = { x: e.clientX, y: e.clientY };
+      setIsDragging(true);
+      setDragStart({ x: e.clientX, y: e.clientY });
+      setInitialTransform(transform);
+      backgroundDownRef.current = { x: e.clientX, y: e.clientY };
       setHighlightedLink(null);
       if (onClearFocus) { onClearFocus(); }
     } else {
@@ -1560,6 +1608,8 @@ export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNod
     // Hover figure
     const figUnderMouse = getFigureAtPosition(e.clientX, e.clientY);
     setHoveredFigureId(figUnderMouse?.id || null);
+
+    // No threshold panning per request
 
     // Drag figure
     if (draggingFigureId && figureDragStart && onUpdateFigure) {
@@ -1661,6 +1711,11 @@ export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNod
   };
 
   const handleMouseUp = (e: React.MouseEvent) => {
+    // Ignore right-click - only left-click should trigger text editing
+    if (e.button === 2) return;
+    
+    // No threshold/stop override; allow normal flow
+    
     // End figure drag and open toolbar
     if (draggingFigureId) {
       const id = draggingFigureId;
@@ -1680,12 +1735,25 @@ export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNod
       }
       return;
     }
-    // Re-edit text if clicking a figure without dragging
+    // Single click on figure => open editor and toolbar
     if (!isDragging && !draggedNode && !marqueeSelection?.isActive) {
       const fig = getFigureAtPosition(e.clientX, e.clientY);
       if (fig) {
+        const canvas = canvasRef.current;
+        if (canvas) {
+        const rect = canvas.getBoundingClientRect();
+        const sx = rect.left + (fig.x * transform.scale) + transform.x;
+        const sy = rect.top + (fig.y * transform.scale) + transform.y - 60;
+        // open editor overlay (blue box with white bg)
         openFigureTextEditor(fig);
+        // show formatting toolbar above it
+        setFigureToolbar({ id: fig.id, x: sx, y: sy });
+        setSelectedFigureId(fig.id);
+        }
         return;
+      } else {
+        setFigureToolbar(null);
+        setSelectedFigureId(null);
       }
     }
     // End endpoint drag: toggle arrow on click (no move)
@@ -1726,8 +1794,24 @@ export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNod
         text: 'Text',
         textColor: '#000000',
       };
+      // Open editor and toolbar BEFORE creating (instant, no delay)
+      const screenX = rect.left + (cx * transform.scale) + transform.x;
+      const screenY = rect.top + (cy * transform.scale) + transform.y;
+
+      // Set editor immediately and mark editing active
+      setEditingTextFigureId(figure.id);
+      setTextEditorPosition({ x: screenX, y: screenY });
+      setTextEditorText('Text');
+      isEditingTextRef.current = true;
+
+      // Set toolbar immediately (positioned above the editor)
+      setFigureToolbar({ id: figure.id, x: screenX, y: screenY - 60 });
+      setSelectedFigureId(figure.id);
+      
+      // Create the figure (editor already showing)
       onCreateFigure(figure);
       setCursorMode('select');
+      
       return;
     }
 
@@ -2077,11 +2161,13 @@ export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNod
     if (!canvasRef.current) return;
     const canvas = canvasRef.current;
     const rect = canvas.getBoundingClientRect();
+    // Use exact figure position without applying any offset
     const screenX = rect.left + (fig.x * transform.scale) + transform.x;
     const screenY = rect.top + (fig.y * transform.scale) + transform.y;
     setEditingTextFigureId(fig.id);
     setTextEditorPosition({ x: screenX, y: screenY });
     setTextEditorText(fig.text ?? '');
+    isEditingTextRef.current = true;
   };
 
   // Remove the old window-based approach
@@ -2097,11 +2183,9 @@ export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNod
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onDoubleClick={(e) => {
-          // Only open editor when double-clicking existing figures; do not create new ones
-          const fig = getFigureAtPosition(e.clientX, e.clientY);
-          if (fig) {
-            openFigureTextEditor(fig);
-          }
+          // Double-click disabled - single click already handles text editing
+          // Prevent accidental re-trigger of editor
+          e.preventDefault();
         }}
         onMouseLeave={handleMouseLeave}
         onKeyDown={handleKeyDown}
@@ -2109,8 +2193,10 @@ export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNod
         tabIndex={-1}
         className={getCursorClass()}
         onClick={(e) => {
-          // Clicking background only closes formatting toolbar, not text editor
-          if (!e.currentTarget.querySelector(':hover')) {
+          // Only close when clicking empty background and not editing
+          if (editingTextFigureId) return;
+          const fig = getFigureAtPosition(e.clientX, e.clientY);
+          if (!fig) {
             setFigureToolbar(null);
           }
         }}
@@ -2148,7 +2234,6 @@ export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNod
             
             return (
               <>
-                Draggable Header
                 <div
                   className="px-3 py-2 border-b bg-gray-50 cursor-move select-none flex items-center justify-between"
                   onMouseDown={handleContextMenuMouseDown}
@@ -2660,6 +2745,7 @@ export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNod
           <div
             ref={(el) => {
               if (el) {
+                el.focus(); // ensure the editor is focused so blur will fire
                 const range = document.createRange();
                 const sel = window.getSelection();
                 range.selectNodeContents(el);
@@ -2695,9 +2781,13 @@ export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNod
                   onUpdateFigure(editingTextFigureId, { text });
                 }
                 setEditingTextFigureId(null);
+                setFigureToolbar(null);
+                isEditingTextRef.current = false;
               } else if (e.key === 'Escape') {
                 e.preventDefault();
                 setEditingTextFigureId(null);
+                setFigureToolbar(null);
+                isEditingTextRef.current = false;
               }
             }}
             onBlur={(e) => {
@@ -2706,6 +2796,8 @@ export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNod
                 onUpdateFigure(editingTextFigureId, { text });
               }
               setEditingTextFigureId(null);
+              setFigureToolbar(null); // also close toolbar on background click
+              isEditingTextRef.current = false;
             }}
             onPaste={(e) => {
               e.preventDefault();
@@ -2716,10 +2808,38 @@ export const SitemapCanvas = forwardRef<any, SitemapCanvasProps>(({ nodes, onNod
         </div>
       )}
 
-      {/* Figure Formatting Toolbar */}
-      {figureToolbar && (() => {
-        const f = figures.find(ff => ff.id === figureToolbar.id);
-        if (!f) return null;
+      {/* Inline Formatting Toolbar while editing */}
+      {editingTextFigureId && (() => {
+        const f = figures.find(ff => ff.id === editingTextFigureId) || ({ id: editingTextFigureId } as any);
+        return (
+          <div
+            className="fixed z-50 bg-white border border-gray-200 rounded-lg shadow-md px-2 py-1 flex items-center gap-1"
+            style={{ left: textEditorPosition.x, top: textEditorPosition.y - 30, transform: 'translate(-50%, -100%)' }}
+            onClick={(e) => e.stopPropagation()}
+            >
+              <button className="px-2 py-1 text-xs rounded hover:bg-gray-100" onClick={() => onUpdateFigure?.(f.id, { fontSize: Math.max(10, (f.fontSize ?? 18) - 2) })}>–</button>
+              <button className="px-2 py-1 text-xs rounded hover:bg-gray-100" onClick={() => onUpdateFigure?.(f.id, { fontSize: Math.min(64, (f.fontSize ?? 18) + 2) })}>+</button>
+              <button className={`px-2 py-1 text-xs rounded hover:bg-gray-100 ${f.fontWeight === 'bold' ? 'bg-gray-100' : ''}`} onClick={() => onUpdateFigure?.(f.id, { fontWeight: f.fontWeight === 'bold' ? 'normal' : 'bold' })}>B</button>
+              <button className={`px-2 py-1 text-xs rounded hover:bg-gray-100 ${f.underline ? 'bg-gray-100' : ''}`} onClick={() => onUpdateFigure?.(f.id, { underline: !f.underline })}><span style={{ textDecoration: 'underline' }}>U</span></button>
+             <button
+               className="ml-1 px-2 py-1 text-xs rounded hover:bg-red-50 text-red-600"
+               onMouseDown={(e) => {
+                 e.preventDefault();
+                 e.stopPropagation();
+                 const id = editingTextFigureId || f.id;
+                 onDeleteFigure?.(id);
+                 setEditingTextFigureId(null);
+                 setFigureToolbar(null);
+                 isEditingTextRef.current = false;
+               }}
+          >Delete</button>
+          </div>
+        );
+      })()}
+
+      {/* Figure Formatting Toolbar (only when not editing to avoid duplicates) */}
+      {figureToolbar && !editingTextFigureId && (() => {
+        const f = figures.find(ff => ff.id === figureToolbar.id) || ({ id: figureToolbar.id } as any);
         return (
           <div
             className="fixed z-50 bg-white border border-gray-200 rounded-lg shadow-md px-2 py-1 flex items-center gap-1"
