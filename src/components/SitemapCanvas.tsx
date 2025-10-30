@@ -108,10 +108,11 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
     onCreateFigure,
     onUpdateFigure,
     onDeleteFigure,
-    onCreateFreeLine,
+    
     onUpdateFreeLine,
     onDeleteFreeLine,
   } = props;
+
   
   // Small SVG preview for a link style option
   const MiniLinkIcon = ({
@@ -209,9 +210,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   // Compact presets for line styling in hover toolbar
-  const LINE_STROKE_COLORS = ['#111827', '#6b7280', '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#a855f7'];
   const containerRef = useRef<HTMLDivElement>(null);
-  const toolbarColorRef = useRef<string | null>(null);
   const backgroundDownRef = useRef<{ x: number; y: number } | null>(null);
   const [transform, setTransform] = useState({ x: 0, y: 0, scale: 1 });
   const [isDragging, setIsDragging] = useState(false); // background panning (kept for compatibility)
@@ -268,10 +267,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
   const [animationTime, setAnimationTime] = useState(0);
   // legacy removed: pendingLineStart/pendingLineStyle
   const [hoveredFreeLineId, setHoveredFreeLineId] = useState<string | null>(null);
-  const [freeLineToolbar, setFreeLineToolbar] = useState<{ id: string; x: number; y: number } | null>(null);
-  const freeLineToolbarRef = useRef<HTMLDivElement>(null);
-  const freeLineHoverGraceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const [connectionPopover, setConnectionPopover] = useState<null | { linkKey: string; x: number; y: number }>(null);
+  const [connectionPopover, setConnectionPopover] = useState<null | { linkKey: string; sourceId: string; targetId: string; x: number; y: number }>(null);
   const [draggingLineEnd, setDraggingLineEnd] = useState<{ id: string; end: 'start' | 'end' } | null>(null);
   const [lineEndpointDragMoved, setLineEndpointDragMoved] = useState(false);
   const [selectedFigureId, setSelectedFigureId] = useState<string | null>(null);
@@ -284,6 +280,8 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
   const [textEditorPosition, setTextEditorPosition] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [textEditorText, setTextEditorText] = useState('');
   const isEditingTextRef = useRef(false);
+  const isDraggingTextEditorRef = useRef(false);
+  const textEditorDragOffsetRef = useRef<{ dx: number; dy: number }>({ dx: 0, dy: 0 });
   // Unified draw tool state
   const [activeTool, setActiveTool] = useState<'select' | 'text' | 'draw'>('select');
   const [drawKind, setDrawKind] = useState<'rect' | 'square' | 'ellipse' | 'circle' | 'line' | null>(null);
@@ -604,7 +602,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
     drawMarqueeSelection(ctx, marqueeSelection);
 
     ctx.restore();
-  }, [nodes, transform, hoveredNode, searchResults, focusedNode, colorOverrides, selectedIds, marqueeSelection, highlightedLink, draggedNode, dragDelta, dragSelectionIds, dragStartPositions, animationTime, figures, freeLines, isDrafting, draftStart, draftCurrent, activeTool, drawKind, newLinePath]);
+  }, [nodes, transform, hoveredNode, searchResults, focusedNode, colorOverrides, selectedIds, marqueeSelection, highlightedLink, draggedNode, dragDelta, dragSelectionIds, dragStartPositions, animationTime, figures, freeLines, isDrafting, draftStart, draftCurrent, activeTool, drawKind, newLinePath, linkStyles, extraLinks]);
 
   // Handle window resize
   useEffect(() => {
@@ -684,14 +682,13 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
       const key = linkKey(parent.id, node.id);
       const style = linkStyles[key] || {};
 
-      // Apply styling (for single node click highlighted color)
-      ctx.strokeStyle = isHighlighted ? '#172038' : (style.color || '#333333');
-      ctx.lineWidth = isHighlighted ? 3 : (style.width || 2);
+      // Apply styling (consistent defaults with new connections)
+      ctx.strokeStyle = isHighlighted ? '#172038' : (style.color ?? '#111827');
+      ctx.lineWidth = isHighlighted ? 3 : (style.width ?? 2);
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
-
-      // Apply dash pattern
-      const dash = style.dash || 'solid';
+      // Default to solid when not specified
+      const dash = style.dash ?? 'solid';
       if (dash === 'dashed') {
         ctx.setLineDash([6, 4]);
       } else if (dash === 'dotted') {
@@ -743,12 +740,12 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
       const key = linkKey(link.sourceId, link.targetId);
       const style = linkStyles[key] || {};
       
-      // Apply styling
-      ctx.strokeStyle = isHighlighted ? '#172038' : (style.color || '#999999');
-      ctx.lineWidth = isHighlighted ? 3 : (style.width || 1.5);
+      // Apply styling (consistent defaults with new connections)
+      ctx.strokeStyle = isHighlighted ? '#172038' : (style.color ?? '#111827');
+      ctx.lineWidth = isHighlighted ? 3 : (style.width ?? 2);
       
-      // Apply dash pattern
-      const dash = style.dash || 'dashed'; // Extra links default to dashed
+      // Apply dash pattern (default solid)
+      const dash = style.dash ?? 'solid';
       if (dash === 'dashed') {
       ctx.setLineDash(isHighlighted ? [] : [6, 4]);
       } else if (dash === 'dotted') {
@@ -1193,6 +1190,24 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
     return { cx, cy };
   };
 
+  // Guard: detect if a client click is inside any node's bounding box (with small padding)
+  const isInsideNodeBox = (clientX: number, clientY: number, padPx = 6) => {
+    const canvas = canvasRef.current; if (!canvas) return false;
+    const ctx = canvas.getContext('2d'); if (!ctx) return false;
+    const { cx, cy } = pointToCanvas(clientX, clientY);
+    const pad = padPx / transform.scale;
+    for (const n of nodes) {
+      if (n.x == null || n.y == null) continue;
+      const { width, height } = calculateNodeDimensions(n, ctx);
+      const left = n.x - width / 2 - pad;
+      const right = n.x + width / 2 + pad;
+      const top = n.y - height / 2 - pad;
+      const bottom = n.y + height / 2 + pad;
+      if (cx >= left && cx <= right && cy >= top && cy <= bottom) return true;
+    }
+    return false;
+  };
+
   // Convert canvas coordinates back to client (screen) coordinates
   const canvasToClient = (cx: number, cy: number) => {
     const canvas = canvasRef.current!;
@@ -1200,6 +1215,38 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
     const x = rect.left + transform.x + cx * transform.scale;
     const y = rect.top + transform.y + cy * transform.scale;
     return { x, y };
+  };
+
+  // Drag handlers for inline Text editor overlay
+  const beginTextEditorDrag = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    isDraggingTextEditorRef.current = true;
+    textEditorDragOffsetRef.current = {
+      dx: e.clientX - textEditorPosition.x,
+      dy: e.clientY - textEditorPosition.y,
+    };
+    window.addEventListener('mousemove', onTextEditorDrag as any);
+    window.addEventListener('mouseup', endTextEditorDrag as any);
+  };
+
+  const onTextEditorDrag = (e: MouseEvent) => {
+    if (!isDraggingTextEditorRef.current || !editingTextFigureId) return;
+
+    const nx = e.clientX - textEditorDragOffsetRef.current.dx;
+    const ny = e.clientY - textEditorDragOffsetRef.current.dy;
+    setTextEditorPosition({ x: nx, y: ny });
+
+    const { cx, cy } = pointToCanvas(e.clientX, e.clientY);
+    onUpdateFigure?.(editingTextFigureId, { x: cx, y: cy });
+
+    setFigureToolbar({ id: editingTextFigureId, x: nx, y: ny - 30 });
+  };
+
+  const endTextEditorDrag = () => {
+    isDraggingTextEditorRef.current = false;
+    window.removeEventListener('mousemove', onTextEditorDrag as any);
+    window.removeEventListener('mouseup', endTextEditorDrag as any);
   };
 
   const distPointToSegment = (px:number, py:number, x1:number, y1:number, x2:number, y2:number) => {
@@ -1274,15 +1321,17 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
       const path = style.path || (link.sourceId === t.parent ? 'elbow' : 'straight'); // Default to elbow for hierarchical links
       
       let d = Infinity;
-      
       if (path === 'straight') {
-        d = distPointToSegment(cx, cy, s.x, s.y, t.x, t.y);
+        const cp = closestPointOnSegment(cx, cy, s.x, s.y, t.x, t.y);
+        const mid = cp.t > 0.15 && cp.t < 0.85; // ignore near endpoints
+        d = mid ? distPointToSegment(cx, cy, s.x, s.y, t.x, t.y) : Infinity;
       } else if (path === 'elbow') {
-        // For elbow paths, check distance to both segments
         const elbowX = s.x;
         const elbowY = t.y;
-        const d1 = distPointToSegment(cx, cy, s.x, s.y, elbowX, elbowY);
-        const d2 = distPointToSegment(cx, cy, elbowX, elbowY, t.x, t.y);
+        const cp1 = closestPointOnSegment(cx, cy, s.x, s.y, elbowX, elbowY);
+        const cp2 = closestPointOnSegment(cx, cy, elbowX, elbowY, t.x, t.y);
+        const d1 = (cp1.t > 0.15 && cp1.t < 0.85) ? distPointToSegment(cx, cy, s.x, s.y, elbowX, elbowY) : Infinity;
+        const d2 = (cp2.t > 0.15 && cp2.t < 0.85) ? distPointToSegment(cx, cy, elbowX, elbowY, t.x, t.y) : Infinity;
         d = Math.min(d1, d2);
       } else if (path === 'curved') {
         // For curved paths, approximate with multiple line segments
@@ -1552,11 +1601,13 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
 
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
-    const link = getLinkAtPosition(e.clientX, e.clientY, 12);
+    const tolPx = 14;
+    const tolCanvas = tolPx / transform.scale;
+    const link = getLinkAtPosition(e.clientX, e.clientY, tolCanvas);
     if (link) {
       const k = linkKey(link.sourceId, link.targetId);
       const anchor = getConnectionAnchor(link.sourceId, link.targetId);
-      if (anchor) setConnectionPopover({ linkKey: k, x: anchor.x, y: anchor.y });
+      if (anchor) setConnectionPopover({ linkKey: k, sourceId: link.sourceId, targetId: link.targetId, x: anchor.x, y: anchor.y });
       setContextMenu(null);
       setHighlightedLink(null);
     } else {
@@ -1655,12 +1706,15 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
     }
     
     // Detect link first; clicking a connection opens the connection style popover and stops further handling
-    const link = getLinkAtPosition(e.clientX, e.clientY);
-    if (link) {
-      const k = linkKey(link.sourceId, link.targetId);
-      const anchor = getConnectionAnchor(link.sourceId, link.targetId);
-      if (anchor) setConnectionPopover({ linkKey: k, x: anchor.x, y: anchor.y });
-      return;
+    const tolPxMd = 14; const tolCanvasMd = tolPxMd / transform.scale;
+    if (!isInsideNodeBox(e.clientX, e.clientY)) {
+      const link = getLinkAtPosition(e.clientX, e.clientY, tolCanvasMd);
+      if (link) {
+        const k = linkKey(link.sourceId, link.targetId);
+        const anchor = getConnectionAnchor(link.sourceId, link.targetId);
+        if (anchor) setConnectionPopover({ linkKey: k, sourceId: link.sourceId, targetId: link.targetId, x: anchor.x, y: anchor.y });
+        return;
+      }
     }
 
     // Detect node first and prefer node interactions over links
@@ -1676,10 +1730,14 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
         const cy = (e.clientY - rect.top - transform.y) / transform.scale;
         // For line connections: allow starting on nodes and figures; only block if clicking an existing link (handled above)
         if (drawKind === 'line' || (!figUnderMouse && !node)) {
+          // Begin at node center if mouse down on a node for a crisp drag-out
+          const hit = getNodeAtPosition(e.clientX, e.clientY);
+          const sx = hit && hit.x != null ? hit.x : cx;
+          const sy = hit && hit.y != null ? hit.y : cy;
           setIsDragging(false);
           setDraggedNode(null);
-          setDraftStart({ x: cx, y: cy });
-          setDraftCurrent({ x: cx, y: cy });
+          setDraftStart({ x: sx, y: sy });
+          setDraftCurrent({ x: sx, y: sy });
           setIsDrafting(true);
           backgroundDownRef.current = null;
           return;
@@ -1801,7 +1859,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
       backgroundDownRef.current = { x: e.clientX, y: e.clientY };
       setHighlightedLink(null);
       if (onClearFocus) { onClearFocus(); }
-    } else if (e.shiftKey && !node && !link) {
+    } else if (e.shiftKey && !node) {
       // Start marquee selection when holding Shift on empty background
       const canvas = canvasRef.current;
       if (canvas) {
@@ -1818,7 +1876,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
       }
       setHighlightedLink(null);
       if (onClearFocus) { onClearFocus(); }
-    } else if (!node && !link) {
+    } else if (!node) {
       // If editing text, do not pan; allow blur/save without moving canvas
       if (isEditingTextRef.current) {
         setHighlightedLink(null);
@@ -1848,86 +1906,8 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
-    // Hover free line for toolbar
-    const hitFreeLineId = (() => {
-      const { cx, cy } = pointToCanvas(e.clientX, e.clientY);
-      let bestId: string | null = null; let bestDist = Infinity;
-      const nodeMap = new Map(nodes.map(n => [n.id, n]));
-      for (const line of (freeLines || [])) {
-        const sNode = line.startNodeId ? nodeMap.get(line.startNodeId) : undefined;
-        const tNode = line.endNodeId ? nodeMap.get(line.endNodeId) : undefined;
-        const x1 = (sNode && sNode.x !== undefined) ? sNode.x : line.x1;
-        const y1 = (sNode && sNode.y !== undefined) ? sNode.y : line.y1;
-        const x2 = (tNode && tNode.x !== undefined) ? tNode.x : line.x2;
-        const y2 = (tNode && tNode.y !== undefined) ? tNode.y : line.y2;
-        let d = Infinity;
-        if (line.style.path === 'straight') {
-          d = distPointToSegment(cx, cy, x1, y1, x2, y2);
-        } else {
-          const d1 = distPointToSegment(cx, cy, x1, y1, x2, y1);
-          const d2 = distPointToSegment(cx, cy, x2, y1, x2, y2);
-          d = Math.min(d1, d2);
-        }
-        if (d < 7 && d < bestDist) { bestDist = d; bestId = line.id; }
-      }
-      return bestId;
-    })();
-
-    if (hitFreeLineId) {
-      if (freeLineHoverGraceTimeoutRef.current) {
-        clearTimeout(freeLineHoverGraceTimeoutRef.current);
-        freeLineHoverGraceTimeoutRef.current = null;
-      }
-      setHoveredFreeLineId(hitFreeLineId);
-      // Anchor toolbar to the closest point on the hovered line segment (midpoint-ish), not the cursor
-      const line = (freeLines || []).find(l => l.id === hitFreeLineId);
-      if (line) {
-        // Remember the color once when opening the toolbar, so pills remain stable across non-color changes
-        toolbarColorRef.current = line.style.color ?? toolbarColorRef.current ?? '#111827';
-        const { cx, cy } = pointToCanvas(e.clientX, e.clientY);
-        const nodeMap = new Map(nodes.map(n => [n.id, n]));
-        const sNode = line.startNodeId ? nodeMap.get(line.startNodeId) : undefined;
-        const tNode = line.endNodeId ? nodeMap.get(line.endNodeId) : undefined;
-        const x1 = (sNode && sNode.x !== undefined) ? sNode.x : line.x1;
-        const y1 = (sNode && sNode.y !== undefined) ? sNode.y : line.y1;
-        const x2 = (tNode && tNode.x !== undefined) ? tNode.x : line.x2;
-        const y2 = (tNode && tNode.y !== undefined) ? tNode.y : line.y2;
-        let anchorCanvasX = (x1 + x2) / 2;
-        let anchorCanvasY = (y1 + y2) / 2;
-        if (line.style.path === 'straight') {
-          const { x, y } = closestPointOnSegment(cx, cy, x1, y1, x2, y2);
-          anchorCanvasX = x; anchorCanvasY = y;
-        } else {
-          // Elbow: pick nearest among the two segments
-          const cp1 = closestPointOnSegment(cx, cy, x1, y1, x2, y1);
-          const cp2 = closestPointOnSegment(cx, cy, x2, y1, x2, y2);
-          const d1 = Math.hypot(cx - cp1.x, cy - cp1.y);
-          const d2 = Math.hypot(cx - cp2.x, cy - cp2.y);
-          const best = d1 <= d2 ? cp1 : cp2;
-          anchorCanvasX = best.x; anchorCanvasY = best.y;
-        }
-        const { x, y } = canvasToClient(anchorCanvasX, anchorCanvasY);
-        setFreeLineToolbar({ id: hitFreeLineId, x, y: y - 16 });
-      } else {
-        setFreeLineToolbar({ id: hitFreeLineId, x: e.clientX, y: e.clientY - 16 });
-      }
-    } else {
-      // If pointer is near or over the toolbar, keep it briefly so it can be reached
-      const insideToolbar = (() => {
-        const el = freeLineToolbarRef.current;
-        if (!el) return false;
-        const r = el.getBoundingClientRect();
-        return e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
-      })();
-
-      if (!insideToolbar) {
-        if (freeLineHoverGraceTimeoutRef.current) clearTimeout(freeLineHoverGraceTimeoutRef.current);
-        freeLineHoverGraceTimeoutRef.current = setTimeout(() => {
-          setHoveredFreeLineId(null);
-          setFreeLineToolbar(null);
-        }, 250);
-      }
-    }
+    // Suppress hover-driven line toolbar; it will open on click instead
+    // Keep existing marquee, dragging, drafting logic below
     // Unified Draw Tool drafting move
     if (isDrafting && activeTool === 'draw' && drawKind) {
       const canvas = canvasRef.current;
@@ -2105,34 +2085,50 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
           setActiveTool('select'); setDrawKind(null);
           return;
         }
-        // snap to nodes if near
-        const findNodeNear = (x:number,y:number, r=20) => {
-          let best: PageNode | null = null; let bestD = Infinity;
+        // Zoom‑aware, box‑aware snapping to nodes
+        const findNodeNear = (x: number, y: number) => {
+          const canvas = canvasRef.current; if (!canvas) return null;
+          const ctx = canvas.getContext('2d'); if (!ctx) return null;
+          const paddingPx = 16; const pad = paddingPx / transform.scale;
+          let best: PageNode | null = null; let bestDist = Infinity;
           for (const n of nodes) {
-            if (n.x === undefined || n.y === undefined) continue;
-            const d = Math.hypot(x - n.x, y - n.y);
-            if (d < r && d < bestD) { best = n; bestD = d; }
+            if (n.x == null || n.y == null) continue;
+            const { width, height } = calculateNodeDimensions(n, ctx);
+            const left = n.x - width / 2 - pad;
+            const right = n.x + width / 2 + pad;
+            const top = n.y - height / 2 - pad;
+            const bottom = n.y + height / 2 + pad;
+            if (x >= left && x <= right && y >= top && y <= bottom) {
+              const d = Math.hypot(x - n.x, y - n.y);
+              if (d < bestDist) { best = n; bestDist = d; }
+            }
+          }
+          if (!best) {
+            const tolPx = 18, tol = tolPx / transform.scale;
+            for (const n of nodes) {
+              if (n.x == null || n.y == null) continue;
+              const d = Math.hypot(x - n.x, y - n.y);
+              if (d <= tol && d < bestDist) { best = n; bestDist = d; }
+            }
           }
           return best;
         };
-        const startNode = findNodeNear(x1,y1);
-        const endNode = findNodeNear(x2,y2);
+        const startNode = findNodeNear(x1, y1);
+        const endNode = findNodeNear(x2, y2);
         // Only create a connection if both endpoints are on nodes; otherwise save a FreeLine
         if (startNode && endNode && onExtraLinkCreate) {
           onExtraLinkCreate(startNode.id, endNode.id);
           const k = linkKey(startNode.id, endNode.id);
-          onLinkStyleChange?.(k, { path: newLinePath, dash: 'solid' });
-        } else if (onCreateFreeLine) {
-          onCreateFreeLine({
-            id: `line-${Date.now()}`,
-            x1, y1, x2, y2,
-            startNodeId: startNode?.id,
-            endNodeId: endNode?.id,
-            style: { path: newLinePath, dash: 'solid', width: 2, color: '#333' }
-          });
+          onLinkStyleChange?.(k, { path: newLinePath, dash: 'solid', color: '#111827', width: 2 });
         }
         // After creation, switch to Select to allow endpoint editing without starting a new line
         setActiveTool('select'); setDrawKind(null);
+        // Auto-open connection popover for the new link
+        if (startNode && endNode) {
+          const k = linkKey(startNode.id, endNode.id);
+          const anchor = getConnectionAnchor(startNode.id, endNode.id);
+          if (anchor) setConnectionPopover({ linkKey: k, sourceId: startNode.id, targetId: endNode.id, x: anchor.x, y: anchor.y });
+        }
       } else {
         // Shapes
         let w = small ? 160 : absDx;
@@ -2393,14 +2389,78 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
       // Handle click when no node was being dragged and no canvas panning
     const dragDistance = Math.hypot(e.clientX - dragStart.x, e.clientY - dragStart.y);
     if (dragDistance < dragThreshold) {
-      // 1) Try link first: open connection style popover
-      const link = getLinkAtPosition(e.clientX, e.clientY, 7);
-      if (link) {
-        const k = linkKey(link.sourceId, link.targetId);
-        const anchor = getConnectionAnchor(link.sourceId, link.targetId);
-        if (anchor) setConnectionPopover({ linkKey: k, x: anchor.x, y: anchor.y });
-        setHighlightedLink(null);
-        return;
+      // 1) Try link first, but ignore clicks inside node boxes to avoid edge misclicks
+      const tolPxUp = 14; const tolCanvasUp = tolPxUp / transform.scale;
+      if (!isInsideNodeBox(e.clientX, e.clientY)) {
+        const link = getLinkAtPosition(e.clientX, e.clientY, tolCanvasUp);
+        if (link) {
+          const k = linkKey(link.sourceId, link.targetId);
+          const anchor = getConnectionAnchor(link.sourceId, link.targetId);
+          if (anchor) setConnectionPopover({ linkKey: k, sourceId: link.sourceId, targetId: link.targetId, x: anchor.x, y: anchor.y });
+          setHighlightedLink(null);
+          return;
+        }
+      }
+
+      // 2) Otherwise try free line: open the inline pill toolbar at closest point (zoom-aware)
+      if (freeLines && freeLines.length > 0) {
+        const { cx, cy } = pointToCanvas(e.clientX, e.clientY);
+        const tolPx = 14; // screen px tolerance
+        const tolCanvas = tolPx / transform.scale; // convert to canvas distance
+
+        const nodeMap = new Map(nodes.map(n => [n.id, n]));
+        let best: { id: string; d: number; anchorX: number; anchorY: number } | null = null;
+
+        for (const line of freeLines) {
+          const sNode = line.startNodeId ? nodeMap.get(line.startNodeId) : undefined;
+          const tNode = line.endNodeId ? nodeMap.get(line.endNodeId) : undefined;
+          const x1 = (sNode && sNode.x !== undefined) ? sNode.x : line.x1;
+          const y1 = (sNode && sNode.y !== undefined) ? sNode.y : line.y1;
+          const x2 = (tNode && tNode.x !== undefined) ? tNode.x : line.x2;
+          const y2 = (tNode && tNode.y !== undefined) ? tNode.y : line.y2;
+
+          if (line.style.path === 'straight') {
+            const cp = closestPointOnSegment(cx, cy, x1, y1, x2, y2);
+            const d = Math.hypot(cx - cp.x, cy - cp.y);
+            if (d <= tolCanvas && (!best || d < best.d)) best = { id: line.id, d, anchorX: cp.x, anchorY: cp.y };
+          } else {
+            const cp1 = closestPointOnSegment(cx, cy, x1, y1, x2, y1);
+            const cp2 = closestPointOnSegment(cx, cy, x2, y1, x2, y2);
+            const d1 = Math.hypot(cx - cp1.x, cy - cp1.y);
+            const d2 = Math.hypot(cx - cp2.x, cy - cp2.y);
+            if (d1 <= tolCanvas && (!best || d1 < best.d)) best = { id: line.id, d: d1, anchorX: cp1.x, anchorY: cp1.y };
+            if (d2 <= tolCanvas && (!best || d2 < best.d)) best = { id: line.id, d: d2, anchorX: cp2.x, anchorY: cp2.y };
+          }
+        }
+
+        // Fallback: still anchor to the nearest segment midpoint if click is near a line but outside tolerance
+        if (!best) {
+          let nearest: { id: string; d: number; anchorX: number; anchorY: number } | null = null;
+          for (const line of freeLines) {
+            const sNode = line.startNodeId ? nodeMap.get(line.startNodeId) : undefined;
+            const tNode = line.endNodeId ? nodeMap.get(line.endNodeId) : undefined;
+            const x1 = (sNode && sNode.x !== undefined) ? sNode.x : line.x1;
+            const y1 = (sNode && sNode.y !== undefined) ? sNode.y : line.y1;
+            const x2 = (tNode && tNode.x !== undefined) ? tNode.x : line.x2;
+            const y2 = (tNode && tNode.y !== undefined) ? tNode.y : line.y2;
+
+            if (line.style.path === 'straight') {
+              const cp = closestPointOnSegment(cx, cy, x1, y1, x2, y2);
+              const d = Math.hypot(cx - cp.x, cy - cp.y);
+              if (!nearest || d < nearest.d) nearest = { id: line.id, d, anchorX: cp.x, anchorY: cp.y };
+            } else {
+              const mx = x2, my = y1; // elbow corner midpoint
+              const d = Math.hypot(cx - mx, cy - my);
+              if (!nearest || d < nearest.d) nearest = { id: line.id, d, anchorX: mx, anchorY: my };
+            }
+          }
+          best = nearest || null;
+        }
+
+        if (best) {
+          // Free line inline editing removed; no UI on click for free lines
+          return;
+        }
       }
 
       // 2) Fallback to node click
@@ -2452,7 +2512,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
           e.preventDefault();
           onDeleteFreeLine(hoveredFreeLineId);
           setHoveredFreeLineId(null);
-          setFreeLineToolbar(null);
+          setConnectionPopover(null);
         } else if (highlightedLink && onNodesUpdate) {
           const updatedNodes = nodes.map(node => node.id === highlightedLink.targetId ? { ...node, parent: null } : node);
           onNodesUpdate(updatedNodes);
@@ -2655,6 +2715,11 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
           (isSpacePressed ? 'grab' : ((draggedNode || isDragging) ? 'grabbing' : (marqueeSelection?.isActive ? 'crosshair' : 'default'))))
       }}
     >
+      {/* {showLineHint && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[260] px-3 py-1.5 rounded bg-gray-900 text-white text-xs shadow-lg">
+          Drag from one node to another. Lines aren’t saved unless both ends snap to nodes.
+        </div>
+      )} */}
       <canvas
         ref={canvasRef}
         style={{
@@ -2915,7 +2980,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
               <path d="M4 18L18 4"/>
             </svg>
             <span className="absolute -top-10 left-1/2 -translate-x-1/2 px-2 py-1 bg-gray-900 text-white text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
-              Line (L)
+              Connection line (L) - drag from node to node
             </span>
           </button>
           {/* Line popover removed - clicking Line switches to draw immediately */}
@@ -3185,6 +3250,11 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
           }}
           onClick={(e) => e.stopPropagation()}
         >
+          {/* Drag handles (top and bottom) for easier grabbing */}
+          <div
+            className="w-full h-8 cursor-move"
+            onMouseDown={beginTextEditorDrag}
+          />
           <div
             ref={(el) => {
               if (el) {
@@ -3207,8 +3277,9 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
               wordBreak: 'break-word',
               textDecoration: (figures.find(f => f.id === editingTextFigureId)?.underline ? 'underline' : 'none'),
               textAlign: 'center' as any,
-              fontWeight: (figures.find(f => f.id === editingTextFigureId)?.fontWeight === 'bold' ? 700 : 600) as any,
+              fontWeight: (figures.find(f => f.id === editingTextFigureId)?.fontWeight === 'bold' ? 'bold' : '600') as any,
               fontSize: (figures.find(f => f.id === editingTextFigureId)?.fontSize ?? 18) as any,
+              fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
               lineHeight: '1.2',
               padding: '8px 14px',
               background: '#ffffff',
@@ -3223,11 +3294,13 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
                 if (onUpdateFigure && editingTextFigureId) {
                   onUpdateFigure(editingTextFigureId, { text });
                 }
+                endTextEditorDrag();
                 setEditingTextFigureId(null);
                 setFigureToolbar(null);
                 isEditingTextRef.current = false;
               } else if (e.key === 'Escape') {
                 e.preventDefault();
+                endTextEditorDrag();
                 setEditingTextFigureId(null);
                 setFigureToolbar(null);
                 isEditingTextRef.current = false;
@@ -3238,6 +3311,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
               if (onUpdateFigure && editingTextFigureId) {
                 onUpdateFigure(editingTextFigureId, { text });
               }
+              endTextEditorDrag();
               setEditingTextFigureId(null);
               setFigureToolbar(null); // also close toolbar on background click
               isEditingTextRef.current = false;
@@ -3248,203 +3322,37 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
               document.execCommand('insertText', false, text);
             }}
           />
+          <div
+            className="w-full h-6 cursor-move"
+            onMouseDown={beginTextEditorDrag}
+          />
         </div>
       )}
 
-      {/* Free Line Hover Toolbar */}
-      {freeLineToolbar && (() => {
-        // Clamp to viewport and flip below if not enough space on top
-        const viewportW = window.innerWidth;
-        const approxW = 360; // approximate pill width
-        const approxH = 44;  // approximate pill height
-        let fx = freeLineToolbar.x, fy = freeLineToolbar.y;
-        let transform = 'translate(-50%, -100%)';
-        if (fx - approxW / 2 < 8) fx = 8 + approxW / 2;
-        if (fx + approxW / 2 > viewportW - 8) fx = viewportW - 8 - approxW / 2;
-        if (fy - approxH - 8 < 8) transform = 'translate(-50%, 8px)';
-
-        return (
-        <div
-          ref={freeLineToolbarRef}
-          role="toolbar"
-          aria-label="Line formatting"
-          tabIndex={0}
-          className="fixed z-[300] backdrop-blur-sm bg-white/90 border border-gray-200 rounded-full shadow-xl px-2.5 py-1.5 flex items-center gap-2.5 transition-all duration-150"
-          style={{ left: fx, top: fy, transform, pointerEvents: (isDrafting || !!draggingLineEnd) ? 'none' : 'auto' }}
-          onClick={(e) => e.stopPropagation()}
-          onKeyDown={(e) => {
-            if (e.key === 'Escape') {
-              setHoveredFreeLineId(null);
-              setFreeLineToolbar(null);
-            }
-          }}
-          onMouseEnter={() => {
-            if (freeLineHoverGraceTimeoutRef.current) {
-              clearTimeout(freeLineHoverGraceTimeoutRef.current);
-              freeLineHoverGraceTimeoutRef.current = null;
-            }
-          }}
-          onMouseLeave={() => {
-            if (freeLineHoverGraceTimeoutRef.current) clearTimeout(freeLineHoverGraceTimeoutRef.current);
-            freeLineHoverGraceTimeoutRef.current = setTimeout(() => {
-              setHoveredFreeLineId(null);
-              setFreeLineToolbar(null);
-            }, 300);
-          }}
-        >
-          {(() => {
-            const line = (freeLines || []).find(l => l.id === freeLineToolbar.id);
-            if (!line) return null;
-            const w = line.style.width ?? 2;
-            const rawC = line.style.color ?? null;
-            const c = rawC ?? toolbarColorRef.current ?? '#111827';
-            const dash = line.style.dash ?? 'solid';
-            const path = line.style.path ?? 'straight';
-            const arrowStart = !!line.style.arrowStart;
-            const arrowEnd = !!line.style.arrowEnd;
-
-            const btn = (active: boolean) => `w-8 h-8 rounded-full border flex items-center justify-center ${active ? 'border-blue-500 ring-2 ring-blue-200' : 'border-gray-300 hover:border-gray-400'}`;
-
-            return (
-              <>
-                {/* Arrows */}
-                <div className="flex items-center gap-1.5" aria-label="Arrows">
-                  <button
-                    className={btn(arrowStart)}
-                    aria-pressed={arrowStart}
-                    title="Arrow at start"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      const next = !arrowStart;
-                      const patch: any = next ? { arrowStart: true, arrowEnd: false } : { arrowStart: false };
-                      onUpdateFreeLine?.(line.id, { style: { ...line.style, ...patch } });
-                    }}
-                  >
-                    <MiniLinkIcon dash={dash} path={path} width={w} color={c} arrowStart={!arrowStart} />
-                  </button>
-                  <button
-                    className={btn(arrowEnd)}
-                    aria-pressed={arrowEnd}
-                    title="Arrow at end"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      const next = !arrowEnd;
-                      const patch: any = next ? { arrowEnd: true, arrowStart: false } : { arrowEnd: false };
-                      onUpdateFreeLine?.(line.id, { style: { ...line.style, ...patch } });
-                    }}
-                  >
-                    <MiniLinkIcon dash={dash} path={path} width={w} color={c} arrowEnd={!arrowEnd} />
-                  </button>
-                </div>
-
-                <div className="w-px h-6 bg-gray-200 mx-1.5" />
-
-                {/* Dash: Solid / Dashed */}
-                <div className="flex items-center gap-1.5" aria-label="Line dash">
-                  <button
-                    className={btn(dash === 'solid')}
-                    aria-pressed={dash === 'solid'}
-                    title="Solid"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      onUpdateFreeLine?.(line.id, { style: { ...line.style, dash: 'solid' } });
-                    }}
-                  >
-                    <MiniLinkIcon dash="solid" path={path} width={w} color={c} />
-                  </button>
-                  <button
-                    className={btn(dash === 'dashed')}
-                    aria-pressed={dash === 'dashed'}
-                    title="Dashed"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      onUpdateFreeLine?.(line.id, { style: { ...line.style, dash: 'dashed' } });
-                    }}
-                  >
-                    <MiniLinkIcon dash="dashed" path={path} width={w} color={c} />
-                  </button>
-                </div>
-
-                <div className="w-px h-6 bg-gray-200 mx-1.5" />
-
-                {/* Path: Straight / Elbow */}
-                <div className="flex items-center gap-1.5" aria-label="Line path">
-                  <button
-                    className={btn(path === 'straight')}
-                    aria-pressed={path === 'straight'}
-                    title="Straight"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      onUpdateFreeLine?.(line.id, { style: { ...line.style, path: 'straight' } });
-                    }}
-                  >
-                    <MiniLinkIcon dash={dash} path="straight" width={w} color={c} />
-                  </button>
-                  <button
-                    className={btn(path === 'elbow')}
-                    aria-pressed={path === 'elbow'}
-                    title="Elbow"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      onUpdateFreeLine?.(line.id, { style: { ...line.style, path: 'elbow' } });
-                    }}
-                  >
-                    <MiniLinkIcon dash={dash} path="elbow" width={w} color={c} />
-                  </button>
-                </div>
-
-                {/* removed width controls per spec */}
-
-                {/* Color swatches */}
-                <div className="flex items-center gap-1.5" aria-label="Line color">
-                  {LINE_STROKE_COLORS.map((col) => (
-                    <button
-                      key={col}
-                      className={`w-6 h-6 rounded-full border ${c === col ? 'border-blue-500 ring-2 ring-blue-200' : 'border-gray-300 hover:border-gray-400'}`}
-                      aria-pressed={c === col}
-                      title={col}
-                      style={{ backgroundColor: col }}
-                      onClick={(e) => {
-                        e.preventDefault();
-                        toolbarColorRef.current = col;
-                        onUpdateFreeLine?.(line.id, { style: { ...line.style, color: col } });
-                      }}
-                    />
-                  ))}
-                </div>
-
-                <div className="w-px h-6 bg-gray-200 mx-1.5" />
-
-                <button
-                  className="px-2.5 py-1.5 text-xs rounded-md hover:bg-red-50 text-red-600"
-                  title="Delete line"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    onDeleteFreeLine?.(freeLineToolbar.id);
-                    setFreeLineToolbar(null);
-                    setHoveredFreeLineId(null);
-                  }}
-                >
-                  Delete
-                </button>
-              </>
-            );
-          })()}
-        </div>
-        );
-      })()}
+      {/* Hover pill removed */}
 
       {/* Connection Style Popover */}
       {connectionPopover && (() => {
-        const { linkKey: lk, x, y } = connectionPopover;
+        const { linkKey: lk, sourceId, targetId, x, y } = connectionPopover;
         const style = linkStyles[lk] || {};
         const curPath: 'straight' | 'elbow' = style.path === 'elbow' ? 'elbow' : 'straight';
         const curDash: 'solid' | 'dashed' = style.dash === 'dashed' ? 'dashed' : 'solid';
         const change = (key: string, s: any) => { onLinkStyleChange?.(key, s); };
-        const del = (sid: string, tid: string) => { onExtraLinkDelete?.(sid, tid); setConnectionPopover(null); };
+        const del = (sid: string, tid: string) => {
+          const isExtra = (extraLinks || []).some(l => l.sourceId === sid && l.targetId === tid);
+          if (isExtra) {
+            onExtraLinkDelete?.(sid, tid);
+          } else if (onNodesUpdate) {
+            const updated = nodes.map(n => n.id === tid ? { ...n, parent: null } : n);
+            onNodesUpdate(updated);
+          }
+          setConnectionPopover(null);
+        };
         return (
           <ConnectionStylePopover
             linkKey={lk}
+            sourceId={sourceId}
+            targetId={targetId}
             currentStyle={{ path: curPath, dash: curDash }}
             anchorPosition={{ x, y }}
             onChange={change}
@@ -3472,6 +3380,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
                   onUpdateFigure?.(f.id, { fontSize: Math.max(10, currentFontSize - 2) });
                 }}
               >–</button>
+      <span className="px-1 tabular-nums text-[11px] text-gray-600">{currentFontSize}</span>
       <button 
         className="px-2 py-1 text-xs rounded hover:bg-gray-100" 
         onMouseDown={(e) => {
@@ -3535,6 +3444,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
                   onUpdateFigure?.(f.id, { fontSize: Math.max(10, currentFontSize - 2) });
                 }}
               >–</button>
+              <span className="px-1 tabular-nums text-[11px] text-gray-600">{currentFontSize}</span>
               <button 
                 className="px-2 py-1 text-xs rounded hover:bg-gray-100" 
                 onClick={(e) => {

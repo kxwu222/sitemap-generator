@@ -846,7 +846,13 @@ function App() {
   const handleExport = async (format: 'png' | 'csv' | 'xml') => {
     switch (format) {
       case 'png':
-        await exportToPNG(nodes, extraLinks, linkStyles);
+        await exportToPNG(
+          nodes,
+          extraLinks,
+          linkStyles,
+          2,
+          figures.filter((f): f is Figure & { type: 'text' } => f.type === 'text')
+        );
         break;
       case 'csv':
         exportToCSV(nodes);
@@ -1314,6 +1320,7 @@ function App() {
                     <ShortcutItem keys="V" label="Select mode" />
                     <ShortcutItem keys="A" label="Add child node" info="Requires a node to be selected first" />
                     <ShortcutItem keys="C" label="Change color" info="Requires a node to be selected first" />
+                    <ShortcutItem keys="L" label="Connection line" info="Drag from node to node" />
                   </div>
                 </div>
 
@@ -1335,14 +1342,6 @@ function App() {
                     <ShortcutItem keys="Ctrl/Cmd + Drag" label="Move connected nodes" info="Drag selected node with its parent and children" />
                     <ShortcutItem keys="Ctrl/Cmd + Wheel" label="Zoom" />
                     <ShortcutItem keys="Ctrl/Cmd + F" label="Search" />
-                  </div>
-                </div>
-
-                {/* Links */}
-                <div>
-                  <h3 className="text-sm font-medium text-gray-900 mb-3 uppercase tracking-wide">Links</h3>
-                  <div className="space-y-2">
-                    <ShortcutItem keys="Right-click link" label="Style link" />
                   </div>
                 </div>
               </div>

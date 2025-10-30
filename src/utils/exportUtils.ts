@@ -5,7 +5,8 @@ export async function exportToPNG(
   nodes: PageNode[],
   extraLinks?: Array<{ sourceId: string; targetId: string }>,
   linkStyles?: Record<string, LinkStyle>,
-  scale: number = 2
+  scale: number = 2,
+  figures: Array<{ id: string; type: 'text'; x: number; y: number; text?: string; textColor?: string; fontSize?: number; fontWeight?: 'normal' | 'bold' }> = []
 ): Promise<void> {
   // Calculate bounds to include all nodes with proper padding
   const bounds = calculateNodeBounds(nodes);
@@ -39,6 +40,30 @@ export async function exportToPNG(
   });
 
   drawSitemapToContext(ctx, offsetNodes, offsetExtraLinks, linkStyles);
+
+  // Draw text figures
+  const offsetText = (figures || [])
+    .filter(f => f.type === 'text')
+    .map(f => ({
+      ...f,
+      x: f.x - bounds.minX + padding,
+      y: f.y - bounds.minY + padding,
+    }));
+
+  ctx.save();
+  offsetText.forEach(f => {
+    const color = f.textColor || '#000000';
+    const fontSize = f.fontSize ?? 18;
+    const fontWeight = f.fontWeight ?? 'bold';
+    ctx.fillStyle = color;
+    ctx.font = `${fontWeight} ${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    if (f.text && f.text.trim()) {
+      ctx.fillText(f.text, f.x, f.y);
+    }
+  });
+  ctx.restore();
 
   canvas.toBlob(blob => {
     if (blob) {
@@ -401,9 +426,10 @@ function drawSitemapToContext(
   // Helper function to get link key
   const linkKey = (sourceId: string, targetId: string) => `${sourceId}-${targetId}`;
 
-  // Draw parent-child hierarchical links first
-  ctx.strokeStyle = '#e0e0e0';
+  // Draw parent-child hierarchical links first (consistent defaults)
+  ctx.strokeStyle = '#111827';
   ctx.lineWidth = 2;
+  ctx.setLineDash([]);
 
   nodes.forEach(node => {
     if (node.parent) {
@@ -430,11 +456,11 @@ function drawSitemapToContext(
       const style = linkStyles?.[key] || {};
       
       // Apply styling
-      ctx.strokeStyle = style.color || '#999999';
-      ctx.lineWidth = style.width || 1.5;
+      ctx.strokeStyle = style.color ?? '#111827';
+      ctx.lineWidth = style.width ?? 2;
       
       // Apply dash pattern
-      const dash = style.dash || 'dashed';
+      const dash = style.dash ?? 'solid';
       if (dash === 'dashed') {
         ctx.setLineDash([6, 4]);
       } else if (dash === 'dotted') {

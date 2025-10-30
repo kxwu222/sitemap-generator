@@ -3,10 +3,13 @@ import { useEffect, useRef, useState } from 'react';
 interface ConnectionStyle {
   path?: 'straight' | 'elbow';
   dash?: 'solid' | 'dashed';
+  color?: string;
 }
 
 interface ConnectionStylePopoverProps {
-  linkKey: string; // `${sourceId}-${targetId}`
+  linkKey: string;
+  sourceId: string;    // NEW
+  targetId: string;    // NEW
   currentStyle: ConnectionStyle;
   anchorPosition: { x: number; y: number };
   onChange: (linkKey: string, style: ConnectionStyle) => void;
@@ -16,6 +19,8 @@ interface ConnectionStylePopoverProps {
 
 export function ConnectionStylePopover({
   linkKey,
+  sourceId,
+  targetId,
   currentStyle,
   anchorPosition,
   onChange,
@@ -26,22 +31,61 @@ export function ConnectionStylePopover({
   const [position, setPosition] = useState({ x: anchorPosition.x, y: anchorPosition.y });
   const [isDragging, setIsDragging] = useState(false);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
-  const [path, setPath] = useState<'straight' | 'elbow'>(currentStyle.path ?? 'straight');
-  const [dash, setDash] = useState<'solid' | 'dashed'>(currentStyle.dash ?? 'solid');
+const [path, setPath] = useState<'straight' | 'elbow'>(currentStyle.path ?? 'straight');
+const [dash, setDash] = useState<'solid' | 'dashed'>(currentStyle.dash ?? 'solid');
+const userMovedRef = useRef(false);
+const [color, setColor] = useState<string>(currentStyle.color ?? '#111827');
+
+// Neutral icon button (no active state styling, no circular border)
+const iconBtnBase = 'w-9 h-9 flex items-center justify-center hover:bg-gray-50 rounded';
+
+// Mini SVG line preview
+const LineIcon = ({
+  path = 'straight' as 'straight' | 'elbow',
+  dash = 'solid' as 'solid' | 'dashed',
+  color = '#111827',
+  width = 2,
+}) => {
+  const W = 36, H = 20;
+  const x1 = 4, y1 = H - 4, x2 = W - 4, y2 = 4;
+  const dashArray = dash === 'dashed' ? '6,4' : undefined;
+
+  return (
+    <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`}>
+      {path === 'straight' ? (
+        <line x1={x1} y1={y1} x2={x2} y2={y2}
+              stroke={color} strokeWidth={width}
+              strokeDasharray={dashArray} strokeLinecap="round" />
+      ) : (
+        <>
+          <line x1={x1} y1={y1} x2={x2} y2={y1}
+                stroke={color} strokeWidth={width}
+                strokeDasharray={dashArray} strokeLinecap="round" />
+          <line x1={x2} y1={y1} x2={x2} y2={y2}
+                stroke={color} strokeWidth={width}
+                strokeDasharray={dashArray} strokeLinecap="round" />
+        </>
+      )}
+    </svg>
+  );
+};
 
   useEffect(() => {
+    if (userMovedRef.current) return; // NEW: skip recenter if user moved popover
+
     const h = popoverRef.current?.offsetHeight ?? 140;
     const viewportH = window.innerHeight;
     let finalY = anchorPosition.y;
     if (finalY - h / 2 < 10) finalY = h / 2 + 10;
     if (finalY + h / 2 > viewportH - 10) finalY = viewportH - h / 2 - 10;
     setPosition({ x: anchorPosition.x, y: finalY });
-  }, [anchorPosition]);
+  }, [anchorPosition]); // keep dep, but honor userMovedRef
 
   const onMouseDownHeader = (e: React.MouseEvent) => {
     if (e.button !== 0) return;
     setIsDragging(true);
     setDragOffset({ x: e.clientX - position.x, y: e.clientY - position.y });
+    userMovedRef.current = true; // NEW
     e.preventDefault();
   };
 
@@ -61,8 +105,7 @@ export function ConnectionStylePopover({
     }
   }, [isDragging, dragOffset]);
 
-  const apply = () => onChange(linkKey, { path, dash });
-  const [sourceId, targetId] = linkKey.split('-');
+  // No Apply button; apply happens immediately on click.
 
   return (
     <>
@@ -88,31 +131,87 @@ export function ConnectionStylePopover({
 
         {/* Content */}
         <div className="p-4 space-y-4">
+          
           <div>
-            <div className="text-xs text-gray-600 mb-2 font-medium">Path</div>
-            <div className="flex gap-2">
-              <button
-                onClick={() => setPath('straight')}
-                className={`px-2 py-1 text-xs rounded ${path === 'straight' ? 'bg-blue-100 border-2 border-blue-500' : 'border border-gray-300 hover:bg-gray-50'}`}
-              >Straight</button>
-              <button
-                onClick={() => setPath('elbow')}
-                className={`px-2 py-1 text-xs rounded ${path === 'elbow' ? 'bg-blue-100 border-2 border-blue-500' : 'border border-gray-300 hover:bg-gray-50'}`}
-              >Elbow</button>
+            <div className="flex items-start gap-4">
+              {/* Path group with title */}
+              <div className="flex flex-col gap-1" role="group" aria-label="Path">
+                <div className="text-xs text-gray-600 mb-1 font-medium">Path</div>
+                <div className="flex gap-4">
+                  <button
+                    className={iconBtnBase}
+                    aria-pressed={path === 'straight'}
+                    title="Straight"
+                    onClick={() => { setPath('straight'); onChange(linkKey, { path: 'straight', dash, color }); }}
+                  >
+                    <LineIcon path="straight" dash="solid" color={color} />
+                  </button>
+                  <button
+                    className={iconBtnBase}
+                    aria-pressed={path === 'elbow'}
+                    title="Elbow"
+                    onClick={() => { setPath('elbow'); onChange(linkKey, { path: 'elbow', dash, color }); }}
+                  >
+                    <LineIcon path="elbow" dash="solid" color={color} />
+                  </button>
+                </div>
+              </div>
+              {/* Divider */}
+              <div className="h-14 w-px bg-gray-200" />
+              {/* Line group with title */}
+              <div className="flex flex-col gap-1" role="group" aria-label="Line">
+                <div className="text-xs text-gray-600 mb-1 font-medium">Line</div>
+                <div className="flex gap-4">
+                  <button
+                    className={iconBtnBase}
+                    aria-pressed={dash === 'solid'}
+                    title="Solid"
+                    onClick={() => { setDash('solid'); onChange(linkKey, { path, dash: 'solid', color }); }}
+                  >
+                    <LineIcon path="straight" dash="solid" color={color} />
+                  </button>
+                  <button
+                    className={iconBtnBase}
+                    aria-pressed={dash === 'dashed'}
+                    title="Dashed"
+                    onClick={() => { setDash('dashed'); onChange(linkKey, { path, dash: 'dashed', color }); }}
+                  >
+                    <LineIcon path="straight" dash="dashed" color={color} />
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
 
+          {/* Color (moved after Line) */}
           <div>
-            <div className="text-xs text-gray-600 mb-2 font-medium">Line</div>
-            <div className="flex gap-2">
+            <div className="text-xs text-gray-600 mb-2 font-medium">Color</div>
+            <div className="flex items-center gap-2">
+              {['#111827','#6b7280','#3b82f6','#10b981','#f59e0b','#ef4444'].map((col) => (
+                <button
+                  key={col}
+                  className={`w-6 h-6 rounded-full border ${color === col ? 'border-blue-500 ring-2 ring-blue-200' : 'border-gray-300 hover:border-gray-400'}`}
+                  style={{ backgroundColor: col }}
+                  aria-pressed={color === col}
+                  title={col}
+                  onClick={() => { setColor(col); onChange(linkKey, { path, dash, color: col }); }}
+                />
+              ))}
+              {/* Custom color picker trigger with overlaid input (prevents popover jumping) */}
               <button
-                onClick={() => setDash('solid')}
-                className={`px-2 py-1 text-xs rounded ${dash === 'solid' ? 'bg-blue-100 border-2 border-blue-500' : 'border border-gray-300 hover:bg-gray-50'}`}
-              >Solid</button>
-              <button
-                onClick={() => setDash('dashed')}
-                className={`px-2 py-1 text-xs rounded ${dash === 'dashed' ? 'bg-blue-100 border-2 border-blue-500' : 'border border-gray-300 hover:bg-gray-50'}`}
-              >Dashed</button>
+                type="button"
+                title="Custom color"
+                className="relative w-7 h-7 flex items-center justify-center rounded hover:bg-gray-100"
+              >
+                <img width="24" height="24" src="https://img.icons8.com/ios-glyphs/30/color-dropper.png" alt="color-dropper"/>
+                <input
+                  type="color"
+                  value={color}
+                  onChange={(e) => { setColor(e.target.value); onChange(linkKey, { path, dash, color: e.target.value }); }}
+                  className="absolute inset-0 opacity-0 cursor-pointer"
+                  aria-label="Choose custom color"
+                />
+              </button>
             </div>
           </div>
         </div>
@@ -123,10 +222,7 @@ export function ConnectionStylePopover({
             Delete
           </button>
           <div className="flex gap-2">
-            <button onClick={onClose} className="px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-200 rounded">Close</button>
-            <button onClick={apply} className="px-4 py-1.5 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded">
-              Apply
-            </button>
+            <button onClick={onClose} className="px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-200 rounded">Close</button>
           </div>
         </div>
       </div>
