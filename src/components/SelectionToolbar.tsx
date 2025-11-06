@@ -16,6 +16,10 @@ interface SelectionToolbarProps {
   onMoveMultiSelectionToGroup?: (groupName: string) => void;
   onCreateGroupFromMultiSelection?: (nodeIds: string[], groupName: string) => void;
   onDeleteGroup?: (groupName: string) => void;
+  // New: free-form grouping like Figma/Miro
+  onGroupSelection?: () => void;
+  onUngroupSelection?: () => void;
+  isGrouped?: boolean;
 }
 
 export function SelectionToolbar({
@@ -33,6 +37,9 @@ export function SelectionToolbar({
   onMoveMultiSelectionToGroup,
   onCreateGroupFromMultiSelection,
   onDeleteGroup,
+  onGroupSelection,
+  onUngroupSelection,
+  isGrouped,
 }: SelectionToolbarProps) {
   const isSingleSelection = selectedNodes.length === 1;
   const isMultiSelection = selectedNodes.length > 1;
@@ -209,6 +216,29 @@ export function SelectionToolbar({
       {/* Multi Selection Tools */}
       {isMultiSelection && (
         <>
+          {/* Group / Ungroup (free-form) */}
+          <div className="flex items-center gap-1" style={{ pointerEvents: 'auto' }}>
+            {!isGrouped && onGroupSelection && (
+              <button
+                onClick={(e) => { e.stopPropagation(); onGroupSelection(); }}
+                className="px-2.5 h-8 rounded-full border border-gray-300 bg-white hover:bg-gray-50 text-xs font-medium"
+                title="Group selection (G)"
+              >
+                Group
+              </button>
+            )}
+            {isGrouped && onUngroupSelection && (
+              <button
+                onClick={(e) => { e.stopPropagation(); onUngroupSelection(); }}
+                className="px-2.5 h-8 rounded-full border border-gray-300 bg-white hover:bg-gray-50 text-xs font-medium"
+                title="Ungroup selection (U)"
+              >
+                Ungroup
+              </button>
+            )}
+          </div>
+          <div className="w-px h-6 bg-gray-300 mx-1"></div>
+
           {/* Color All */}
           {onColorClick && (
             <button

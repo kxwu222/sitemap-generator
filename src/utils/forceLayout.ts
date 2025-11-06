@@ -9,7 +9,7 @@ function estimateNodeSize(n: PageNode) {
   return { width, height };
 }
 
-export function relaxOverlaps(
+function relaxOverlaps(
   nodes: PageNode[],
   opts: { padding?: number; iterations?: number; strength?: number } = {}
 ): PageNode[] {
@@ -52,7 +52,7 @@ export function relaxOverlaps(
   return nodes;
 }
 
-export interface ForceLayoutConfig {
+interface ForceLayoutConfig {
   width: number;
   height: number;
   nodeRadius: number;
@@ -78,7 +78,7 @@ const DEFAULT_CONFIG: ForceLayoutConfig = {
   iterations: 500, // More iterations for better convergence
 };
 
-export function applyForceDirectedLayout(
+function applyForceDirectedLayout(
   nodes: PageNode[],
   config: Partial<ForceLayoutConfig> = {}
 ): PageNode[] {
@@ -249,7 +249,7 @@ function applyCollisionForce(
   }
 }
 
-export function applyHierarchicalLayout(
+function applyHierarchicalLayout(
   nodes: PageNode[],
   config: Partial<ForceLayoutConfig> = {}
 ): PageNode[] {
@@ -284,7 +284,7 @@ export function applyHierarchicalLayout(
   return Array.from(nodeMap.values());
 }
 
-export function applyFlowchartLayout(
+function applyFlowchartLayout(
   nodes: PageNode[],
   config: Partial<ForceLayoutConfig> = {}
 ): PageNode[] {
@@ -473,7 +473,7 @@ function buildLevelMap(nodes: PageNode[], nodeMap: Map<string, PageNode>): Map<n
 }
 
 // Octopus.do-inspired layout with optimal spacing and clear hierarchy
-export function applyOctopusStyleLayout(
+function applyOctopusStyleLayout(
   nodes: PageNode[],
   config: Partial<ForceLayoutConfig> = {}
 ): PageNode[] {

@@ -198,7 +198,7 @@ ${urlEntries.join('\n')}
   URL.revokeObjectURL(url);
 }
 
-export function exportToHTML(nodes: PageNode[]): void {
+/* Removed unused exportToHTML()
   // Calculate bounds to include all nodes with proper padding
   const bounds = calculateNodeBounds(nodes);
   const padding = 300; // Extra padding around the content for safety
@@ -355,7 +355,7 @@ export function exportToHTML(nodes: PageNode[]): void {
   link.href = url;
   link.click();
   URL.revokeObjectURL(url);
-}
+*/
 
 function calculateNodeBounds(nodes: PageNode[]): { minX: number; minY: number; maxX: number; maxY: number; width: number; height: number } {
   if (nodes.length === 0) {
@@ -426,21 +426,50 @@ function drawSitemapToContext(
   // Helper function to get link key
   const linkKey = (sourceId: string, targetId: string) => `${sourceId}-${targetId}`;
 
-  // Draw parent-child hierarchical links first (consistent defaults)
-  ctx.strokeStyle = '#111827';
-  ctx.lineWidth = 2;
-  ctx.setLineDash([]);
-
+  // Draw parent-child hierarchical links first (match on-canvas behavior)
   nodes.forEach(node => {
-    if (node.parent) {
-      const parent = nodeMap.get(node.parent);
-      if (parent && node.x !== undefined && node.y !== undefined && parent.x !== undefined && parent.y !== undefined) {
-        ctx.beginPath();
-        ctx.moveTo(parent.x, parent.y);
-        ctx.lineTo(node.x, node.y);
-        ctx.stroke();
-      }
+    if (!node.parent) return;
+    const parent = nodeMap.get(node.parent);
+    if (!parent || node.x === undefined || node.y === undefined || parent.x === undefined || parent.y === undefined) return;
+
+    const key = linkKey(parent.id, node.id);
+    const style = linkStyles?.[key] || {};
+
+    // Apply styling (same defaults as canvas)
+    ctx.strokeStyle = style.color ?? '#111827';
+    ctx.lineWidth = style.width ?? 2;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    const dash = style.dash ?? 'solid';
+    if (dash === 'dashed') {
+      ctx.setLineDash([6, 4]);
+    } else if (dash === 'dotted') {
+      ctx.setLineDash([2, 3]);
+    } else {
+      ctx.setLineDash([]);
     }
+
+    const path = style.path || 'elbow';
+    const elbowX = parent.x;
+    const elbowY = node.y;
+
+    ctx.beginPath();
+    if (path === 'straight') {
+      ctx.moveTo(parent.x, parent.y);
+      ctx.lineTo(node.x, node.y);
+    } else if (path === 'elbow') {
+      ctx.moveTo(parent.x, parent.y);
+      ctx.lineTo(elbowX, elbowY);
+      ctx.lineTo(node.x, node.y);
+    } else if (path === 'curved') {
+      const cx = (parent.x + node.x) / 2;
+      const cy = Math.min(parent.y, node.y) - 50;
+      ctx.moveTo(parent.x, parent.y);
+      ctx.quadraticCurveTo(cx, cy, node.x, node.y);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]); // reset
   });
 
   // Draw extra (non-hierarchical) links on top

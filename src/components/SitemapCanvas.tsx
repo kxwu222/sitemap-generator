@@ -2,6 +2,7 @@ import { useRef, useEffect, useState, forwardRef, useImperativeHandle } from 're
 import { PageNode } from '../utils/urlAnalyzer';
 import { LinkStyle, LineDash, LinkPath, ArrowType } from '../types/linkStyle';
 import { Figure, FreeLine } from '../types/drawables';
+import { SelectionGroup } from '../types/sitemap';
 import { HoverToolbar } from './HoverToolbar';
 import { SelectionToolbar } from './SelectionToolbar';
 import { LinkEditorPopover } from './LinkEditorPopover';
@@ -11,9 +12,13 @@ import { TitleEditorPopover } from './TitleEditorPopover';
 
 interface SitemapCanvasProps {
   nodes: PageNode[];
+  selectionGroups?: SelectionGroup[];
   onNodeClick?: (node: PageNode) => void;
   onNodesUpdate?: (nodes: PageNode[]) => void;
   onNodesPreview?: (nodes: PageNode[]) => void;
+  onCreateSelectionGroup?: (memberNodeIds: string[], memberFigureIds: string[], name?: string) => void;
+  onUngroupSelection?: (memberNodeIds: string[], memberFigureIds: string[]) => void;
+  snapToGuides?: boolean;
   onMoveNodesToGroup?: (nodeIds: string[], group: string, opts?: { includeSubtree?: boolean; relayout?: boolean }) => void;
   onCreateGroupFromSelection?: (nodeIds: string[], groupName: string, opts?: { relayout?: boolean }) => void;
   onDeleteGroup?: (groupName: string) => void;
@@ -83,12 +88,16 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
   // Destructure props inside body to avoid Babel initializer issue
   const {
     nodes,
+    selectionGroups = [],
     onNodeClick,
     onNodesUpdate,
     onNodesPreview,
     onMoveNodesToGroup,
     onCreateGroupFromSelection,
     onDeleteGroup,
+    onCreateSelectionGroup,
+    onUngroupSelection,
+    snapToGuides = true,
     // onConnectionCreate,
     extraLinks = [],
     onExtraLinkCreate,
@@ -271,6 +280,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
   const [draggingLineEnd, setDraggingLineEnd] = useState<{ id: string; end: 'start' | 'end' } | null>(null);
   const [lineEndpointDragMoved, setLineEndpointDragMoved] = useState(false);
   const [selectedFigureId, setSelectedFigureId] = useState<string | null>(null);
+  const [selectedFigureIds, setSelectedFigureIds] = useState<Set<string>>(new Set());
   const [draggingFigureId, setDraggingFigureId] = useState<string | null>(null);
   const [figureDragStart, setFigureDragStart] = useState<{ sx: number; sy: number; fx: number; fy: number } | null>(null);
   const [hoveredFigureId, setHoveredFigureId] = useState<string | null>(null);
@@ -282,6 +292,16 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
   const isEditingTextRef = useRef(false);
   const isDraggingTextEditorRef = useRef(false);
   const textEditorDragOffsetRef = useRef<{ dx: number; dy: number }>({ dx: 0, dy: 0 });
+  const [guideV, setGuideV] = useState<number | null>(null); // canvas X
+  const [guideH, setGuideH] = useState<number | null>(null); // canvas Y
+  const [guideVRefY, setGuideVRefY] = useState<number | null>(null); // reference node Y for vertical guide span
+  const [guideHRefX, setGuideHRefX] = useState<number | null>(null); // reference node X for horizontal guide span
+  const [dragCanvasPos, setDragCanvasPos] = useState<{ x: number; y: number } | null>(null);
+  const textClipboardRef = useRef<null | { figures: Array<{ x: number; y: number; text?: string; textColor?: string; fontSize?: number; fontWeight?: 'normal' | 'bold' }> }>(null);
+  const pasteBumpRef = useRef<number>(0);
+  // Track initial positions of selected text figures when node drag starts (for live move)
+  const [selectedFiguresStartPositions, setSelectedFiguresStartPositions] = useState<Record<string, { x: number; y: number }>>({});
+  const [didLiveFigureDrag, setDidLiveFigureDrag] = useState(false);
   // Unified draw tool state
   const [activeTool, setActiveTool] = useState<'select' | 'text' | 'draw'>('select');
   const [drawKind, setDrawKind] = useState<'rect' | 'square' | 'ellipse' | 'circle' | 'line' | null>(null);
@@ -387,8 +407,9 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
     };
   }, [focusedNode]);
 
-  // Keyboard shortcuts for canvas selections only (no undo/redo here)
+  // Keyboard shortcuts and global paste handler for canvas selections
   useEffect(() => {
+    const pasteBumpRef = { current: 0 } as { current: number };
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setSelectedIds(new Set());
@@ -421,12 +442,6 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
         setDrawKind(null);
         setIsSpacePressed(false);
       }
-      // S key for shapes mode (defaults to Rectangle)
-      if ((e.key === 's' || e.key === 'S') && !isTyping) {
-        setActiveTool('draw');
-        setDrawKind('rect');
-        setIsSpacePressed(false);
-      }
       // L key for line mode
       if ((e.key === 'l' || e.key === 'L') && !isTyping) {
         setActiveTool('draw');
@@ -445,8 +460,8 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
           onAddChild(selectedNode.id);
         }
       }
-      // C key for color picker (when nodes are selected, but not when typing)
-      if ((e.key === 'c' || e.key === 'C') && selectedIds.size > 0 && !isTyping) {
+      // C key for color picker (when nodes are selected, but not when typing) - ignore Cmd/Ctrl (copy)
+      if (!e.metaKey && !e.ctrlKey && (e.key === 'c' || e.key === 'C') && selectedIds.size > 0 && !isTyping) {
         const selectedNode = nodes.find(n => selectedIds.has(n.id));
         if (selectedNode) {
           // Use center of canvas as position
@@ -456,6 +471,276 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
             handleColorClickForKeyboard(rect.width / 2, rect.height / 2);
           }
         }
+      }
+
+      // Copy selected text figures or nodes (Cmd/Ctrl + C)
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'c' && !isTyping && !editingTextFigureId) {
+        const selectedText = (figures?.filter(f => f.type === 'text' && (selectedFigureIds.has(f.id) || selectedFigureId === f.id)) || []);
+        const hasNodes = selectedIds.size > 0;
+        if (selectedText.length > 0 && hasNodes) {
+          e.preventDefault();
+          const ids = new Set(Array.from(selectedIds));
+          const copiedNodes = nodes.filter(n => ids.has(n.id));
+          const copiedExtraLinks = (extraLinks || []).filter(l => ids.has(l.sourceId) && ids.has(l.targetId));
+          const styles: Record<string, any> = {};
+          copiedNodes.forEach(n => { if (n.parent && ids.has(n.parent)) { const key = linkKey(n.parent, n.id); if (linkStyles[key]) styles[key] = linkStyles[key]; } });
+          copiedExtraLinks.forEach(l => { const key = linkKey(l.sourceId, l.targetId); if (linkStyles[key]) styles[key] = linkStyles[key]; });
+          const payload = {
+            type: 'sitemap-mixed',
+            nodes: copiedNodes,
+            extraLinks: copiedExtraLinks,
+            linkStyles: styles,
+            figures: selectedText.map(f => ({ x: f.x, y: f.y, text: f.text, textColor: f.textColor, fontSize: f.fontSize, fontWeight: f.fontWeight }))
+          };
+          (async () => { try { await navigator.clipboard.writeText(JSON.stringify(payload)); } catch {} })();
+          pasteBumpRef.current = 0;
+          return;
+        }
+        if (selectedText && selectedText.length > 0) {
+          e.preventDefault();
+          const payload = {
+            type: 'sitemap-text-figures',
+            figures: selectedText.map(f => ({ x: f.x, y: f.y, text: f.text, textColor: f.textColor, fontSize: f.fontSize, fontWeight: f.fontWeight }))
+          };
+          const json = JSON.stringify(payload);
+          (async () => {
+            try { await navigator.clipboard.writeText(json); }
+            catch { textClipboardRef.current = { figures: payload.figures }; }
+          })();
+          pasteBumpRef.current = 0;
+          return;
+        }
+        if (selectedIds.size > 0) {
+          e.preventDefault();
+          const ids = new Set(Array.from(selectedIds));
+          const copiedNodes = nodes.filter(n => ids.has(n.id));
+          const copiedExtraLinks = (extraLinks || []).filter(l => ids.has(l.sourceId) && ids.has(l.targetId));
+          const styles: Record<string, any> = {};
+          copiedNodes.forEach(n => {
+            if (n.parent && ids.has(n.parent)) {
+              const key = linkKey(n.parent, n.id);
+              if (linkStyles[key]) styles[key] = linkStyles[key];
+            }
+          });
+          copiedExtraLinks.forEach(l => {
+            const key = linkKey(l.sourceId, l.targetId);
+            if (linkStyles[key]) styles[key] = linkStyles[key];
+          });
+          const payload = { type: 'sitemap-nodes', nodes: copiedNodes, extraLinks: copiedExtraLinks, linkStyles: styles };
+          (async () => { try { await navigator.clipboard.writeText(JSON.stringify(payload)); } catch {} })();
+          pasteBumpRef.current = 0;
+          return;
+        }
+        // Create free-form selection group with G when not using modifiers
+      } else if ((e.key === 'g' || e.key === 'G') && !isTyping && !e.metaKey && !e.ctrlKey) {
+        const nodeIds = Array.from(selectedIds);
+        const figureIds = Array.from(selectedFigureIds);
+        if ((nodeIds.length + figureIds.length) > 0 && onCreateSelectionGroup) {
+          onCreateSelectionGroup(nodeIds, figureIds);
+        }
+      } else if ((e.key === 'u' || e.key === 'U') && !isTyping && !e.metaKey && !e.ctrlKey) {
+        const nodeIds = Array.from(selectedIds);
+        const figureIds = Array.from(selectedFigureIds);
+        if ((nodeIds.length + figureIds.length) > 0 && onUngroupSelection) {
+          onUngroupSelection(nodeIds, figureIds);
+        }
+      }
+
+      // Paste copied items (Cmd/Ctrl + V)
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'v' && !isTyping) {
+        e.preventDefault();
+        (async () => {
+          let parsed: any = null;
+          try { const txt = await navigator.clipboard.readText(); parsed = JSON.parse(txt); }
+          catch { parsed = textClipboardRef.current ? { type: 'sitemap-text-figures', figures: textClipboardRef.current.figures } : null; }
+          if (parsed && parsed.type === 'sitemap-mixed' && Array.isArray(parsed.nodes) && Array.isArray(parsed.figures)) {
+            if (!onNodesUpdate || !onCreateFigure) return;
+            const bump = 160 + 32 * (pasteBumpRef.current++);
+            const idMap = new Map<string, string>();
+            const time = Date.now();
+            parsed.nodes.forEach((n: any, idx: number) => idMap.set(n.id, `node-${time}-${idx}-${Math.random().toString(36).slice(2,6)}`));
+            const newNodes = parsed.nodes.map((n: any) => {
+              const id = idMap.get(n.id)!;
+              const parent = n.parent && idMap.has(n.parent) ? idMap.get(n.parent)! : null;
+              const children = Array.isArray(n.children) ? n.children.filter((cid: string) => idMap.has(cid)).map((cid: string) => idMap.get(cid)!) : [];
+              return { ...n, id, parent, children, x: (n.x ?? 0) + bump, y: (n.y ?? 0) + bump, fx: (n.x ?? 0) + bump, fy: (n.y ?? 0) + bump };
+            });
+            onNodesUpdate([...nodes, ...newNodes]);
+            const newFigIds: string[] = [];
+            parsed.figures.forEach((f: any) => {
+              const id = `fig-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+              newFigIds.push(id);
+              onCreateFigure({ id, type: 'text', x: (f.x ?? 0) + bump, y: (f.y ?? 0) + bump, text: f.text ?? 'Text', textColor: f.textColor, fontSize: f.fontSize, fontWeight: f.fontWeight });
+            });
+            if (parsed.extraLinks && Array.isArray(parsed.extraLinks) && onExtraLinkCreate) {
+              parsed.extraLinks.forEach((l: any) => {
+                const s = idMap.get(l.sourceId); const t = idMap.get(l.targetId);
+                if (s && t) onExtraLinkCreate(s, t);
+              });
+            }
+            if (parsed.linkStyles && onLinkStyleChange) {
+              Object.entries(parsed.linkStyles as Record<string, any>).forEach(([oldKey, style]) => {
+                const [sOld, tOld] = oldKey.split('-');
+                const sNew = idMap.get(sOld || '');
+                const tNew = idMap.get(tOld || '');
+                if (sNew && tNew) onLinkStyleChange(`${sNew}-${tNew}`, style);
+              });
+            }
+            setSelectedIds(new Set(newNodes.map((n: any) => n.id)));
+            setSelectedFigureIds(new Set(newFigIds));
+            setSelectedFigureId(newFigIds[0] || null);
+            return;
+          }
+          if (parsed && parsed.type === 'sitemap-text-figures' && Array.isArray(parsed.figures)) {
+            if (!onCreateFigure) return;
+            const bump = 160 + 32 * (pasteBumpRef.current++);
+            const newIds: string[] = [];
+            parsed.figures.forEach((f: any) => {
+              const id = `fig-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+              newIds.push(id);
+              onCreateFigure({ id, type: 'text', x: (f.x ?? 0) + bump, y: (f.y ?? 0) + bump, text: f.text ?? 'Text', textColor: f.textColor, fontSize: f.fontSize, fontWeight: f.fontWeight });
+            });
+            if (newIds.length > 0) {
+              setSelectedFigureIds(new Set(newIds));
+              setSelectedFigureId(newIds[0]);
+            }
+            return;
+          }
+          if (parsed && parsed.type === 'sitemap-nodes' && Array.isArray(parsed.nodes)) {
+            if (!onNodesUpdate) return;
+            const bump = 160 + 32 * (pasteBumpRef.current++);
+            const idMap = new Map<string, string>();
+            const time = Date.now();
+            parsed.nodes.forEach((n: any, idx: number) => idMap.set(n.id, `node-${time}-${idx}-${Math.random().toString(36).slice(2,6)}`));
+            const newNodes = parsed.nodes.map((n: any) => {
+              const id = idMap.get(n.id)!;
+              const parent = n.parent && idMap.has(n.parent) ? idMap.get(n.parent)! : null;
+              const children = Array.isArray(n.children) ? n.children.filter((cid: string) => idMap.has(cid)).map((cid: string) => idMap.get(cid)!) : [];
+              return { ...n, id, parent, children, x: (n.x ?? 0) + bump, y: (n.y ?? 0) + bump, fx: (n.x ?? 0) + bump, fy: (n.y ?? 0) + bump };
+            });
+            onNodesUpdate([...nodes, ...newNodes]);
+            // Select newly pasted nodes as a group for immediate dragging
+            setSelectedIds(new Set(newNodes.map((n: any) => n.id)));
+            // Clear any text figure selection to avoid mixed selection states
+            setSelectedFigureIds(new Set());
+            if (parsed.extraLinks && Array.isArray(parsed.extraLinks) && onExtraLinkCreate) {
+              parsed.extraLinks.forEach((l: any) => {
+                const s = idMap.get(l.sourceId); const t = idMap.get(l.targetId);
+                if (s && t) onExtraLinkCreate(s, t);
+              });
+            }
+            if (parsed.linkStyles && onLinkStyleChange) {
+              Object.entries(parsed.linkStyles as Record<string, any>).forEach(([oldKey, style]) => {
+                const [sOld, tOld] = oldKey.split('-');
+                const sNew = idMap.get(sOld || '');
+                const tNew = idMap.get(tOld || '');
+                if (sNew && tNew) onLinkStyleChange(`${sNew}-${tNew}`, style);
+              });
+            }
+            return;
+          }
+        })();
+        return;
+      }
+    };
+
+    const onPasteEvent = (ev: ClipboardEvent) => {
+      const activeElement = document.activeElement as HTMLElement | null;
+      const isTyping = !!activeElement && (activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA' || activeElement.hasAttribute('contenteditable'));
+      if (isTyping && editingTextFigureId) return; // editor handles its own paste
+      const txt = ev.clipboardData?.getData('text/plain') || '';
+      if (!txt) return;
+      try {
+        const parsed = JSON.parse(txt);
+        if (parsed && parsed.type === 'sitemap-mixed' && Array.isArray(parsed.nodes) && Array.isArray(parsed.figures)) {
+          ev.preventDefault();
+          if (!onNodesUpdate || !onCreateFigure) return;
+          const bump = 160 + 32 * (pasteBumpRef.current++);
+          const idMap = new Map<string, string>();
+          const time = Date.now();
+          parsed.nodes.forEach((n: any, idx: number) => idMap.set(n.id, `node-${time}-${idx}-${Math.random().toString(36).slice(2,6)}`));
+          const newNodes = parsed.nodes.map((n: any) => {
+            const id = idMap.get(n.id)!;
+            const parent = n.parent && idMap.has(n.parent) ? idMap.get(n.parent)! : null;
+            const children = Array.isArray(n.children) ? n.children.filter((cid: string) => idMap.has(cid)).map((cid: string) => idMap.get(cid)!) : [];
+            return { ...n, id, parent, children, x: (n.x ?? 0) + bump, y: (n.y ?? 0) + bump, fx: (n.x ?? 0) + bump, fy: (n.y ?? 0) + bump };
+          });
+          onNodesUpdate([...nodes, ...newNodes]);
+          const newFigIds: string[] = [];
+          parsed.figures.forEach((f: any) => {
+            const id = `fig-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+            newFigIds.push(id);
+            onCreateFigure({ id, type: 'text', x: (f.x ?? 0) + bump, y: (f.y ?? 0) + bump, text: f.text ?? 'Text', textColor: f.textColor, fontSize: f.fontSize, fontWeight: f.fontWeight });
+          });
+          if (parsed.extraLinks && Array.isArray(parsed.extraLinks) && onExtraLinkCreate) {
+            parsed.extraLinks.forEach((l: any) => {
+              const s = idMap.get(l.sourceId); const t = idMap.get(l.targetId);
+              if (s && t) onExtraLinkCreate(s, t);
+            });
+          }
+          if (parsed.linkStyles && onLinkStyleChange) {
+            Object.entries(parsed.linkStyles as Record<string, any>).forEach(([oldKey, style]) => {
+              const [sOld, tOld] = oldKey.split('-');
+              const sNew = idMap.get(sOld || '');
+              const tNew = idMap.get(tOld || '');
+              if (sNew && tNew) onLinkStyleChange(`${sNew}-${tNew}`, style);
+            });
+          }
+          setSelectedIds(new Set(newNodes.map((n: any) => n.id)));
+          setSelectedFigureIds(new Set(newFigIds));
+          setSelectedFigureId(newFigIds[0] || null);
+          return;
+        }
+        if (parsed && parsed.type === 'sitemap-text-figures' && Array.isArray(parsed.figures)) {
+          ev.preventDefault();
+          if (!onCreateFigure) return;
+          const bump = 160 + 32 * (pasteBumpRef.current++);
+          const newIds: string[] = [];
+          parsed.figures.forEach((f: any) => {
+            const id = `fig-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+            newIds.push(id);
+            onCreateFigure({ id, type: 'text', x: (f.x ?? 0) + bump, y: (f.y ?? 0) + bump, text: f.text ?? 'Text', textColor: f.textColor, fontSize: f.fontSize, fontWeight: f.fontWeight });
+          });
+          if (newIds.length > 0) {
+            setSelectedFigureIds(new Set(newIds));
+            setSelectedFigureId(newIds[0]);
+          }
+          return;
+        }
+        if (parsed && parsed.type === 'sitemap-nodes' && Array.isArray(parsed.nodes)) {
+          ev.preventDefault();
+          if (!onNodesUpdate) return;
+          const bump = 160 + 32 * (pasteBumpRef.current++);
+          const idMap = new Map<string, string>();
+          const time = Date.now();
+          parsed.nodes.forEach((n: any, idx: number) => idMap.set(n.id, `node-${time}-${idx}-${Math.random().toString(36).slice(2,6)}`));
+          const newNodes = parsed.nodes.map((n: any) => {
+            const id = idMap.get(n.id)!;
+            const parent = n.parent && idMap.has(n.parent) ? idMap.get(n.parent)! : null;
+            const children = Array.isArray(n.children) ? n.children.filter((cid: string) => idMap.has(cid)).map((cid: string) => idMap.get(cid)!) : [];
+            return { ...n, id, parent, children, x: (n.x ?? 0) + bump, y: (n.y ?? 0) + bump, fx: (n.x ?? 0) + bump, fy: (n.y ?? 0) + bump };
+          });
+          onNodesUpdate([...nodes, ...newNodes]);
+          setSelectedIds(new Set(newNodes.map((n: any) => n.id)));
+          setSelectedFigureIds(new Set());
+          if (parsed.extraLinks && Array.isArray(parsed.extraLinks) && onExtraLinkCreate) {
+            parsed.extraLinks.forEach((l: any) => {
+              const s = idMap.get(l.sourceId); const t = idMap.get(l.targetId);
+              if (s && t) onExtraLinkCreate(s, t);
+            });
+          }
+          if (parsed.linkStyles && onLinkStyleChange) {
+            Object.entries(parsed.linkStyles as Record<string, any>).forEach(([oldKey, style]) => {
+              const [sOld, tOld] = oldKey.split('-');
+              const sNew = idMap.get(sOld || '');
+              const tNew = idMap.get(tOld || '');
+              if (sNew && tNew) onLinkStyleChange(`${sNew}-${tNew}`, style);
+            });
+          }
+          return;
+        }
+      } catch {
+        // not our payload — allow native paste
       }
     };
 
@@ -474,12 +759,14 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
     };
 
     window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('paste', onPasteEvent);
     window.addEventListener('keyup', onKeyUp);
     return () => {
       window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('paste', onPasteEvent);
       window.removeEventListener('keyup', onKeyUp);
     };
-  }, [isSpacePressed, selectedIds, nodes, onAddChild]);
+  }, [isSpacePressed, selectedIds, nodes, onAddChild, editingTextFigureId, figures, onCreateFigure, onNodesUpdate]);
 
   // Clear pan/drag state when entering draw/text tool so cursor reflects tool use
   useEffect(() => {
@@ -550,6 +837,76 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
     drawFreeLines(ctx, freeLines || []);
     drawFigures(ctx, figures || []);
     drawNodes(ctx, effectiveNodes, hoveredNode);
+    // Faint selection bounding box for mixed selections (nodes + texts)
+    // Only show when not marquee-selecting and not editing text
+    const selectionCount = selectedIds.size + selectedFigureIds.size;
+    // Only draw the union box when the selection includes at least one text figure,
+    // to avoid duplicating any nodes-only selection visuals from other paths
+    if (selectionCount >= 2 && selectedFigureIds.size > 0 && !(marqueeSelection?.isActive) && !editingTextFigureId) {
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      // Include nodes
+      effectiveNodes.forEach(n => {
+        if (!selectedIds.has(n.id) || n.x == null || n.y == null) return;
+        const dims = calculateNodeDimensions(n, ctx);
+        const left = n.x - dims.width / 2;
+        const top = n.y - dims.height / 2;
+        const right = n.x + dims.width / 2;
+        const bottom = n.y + dims.height / 2;
+        minX = Math.min(minX, left);
+        minY = Math.min(minY, top);
+        maxX = Math.max(maxX, right);
+        maxY = Math.max(maxY, bottom);
+      });
+      // Include text figures
+      if (figures) {
+        const canvas = canvasRef.current;
+        const cctx = canvas ? canvas.getContext('2d') : null;
+        figures.forEach(f => {
+          if (!selectedFigureIds.has(f.id) || f.type !== 'text') return;
+          const b = getTextFigureBounds(f as any, cctx);
+          minX = Math.min(minX, b.left);
+          minY = Math.min(minY, b.top);
+          maxX = Math.max(maxX, b.right);
+          maxY = Math.max(maxY, b.bottom);
+        });
+      }
+      if (minX !== Infinity && minY !== Infinity && maxX !== -Infinity && maxY !== -Infinity) {
+        const pad = 6;
+        ctx.save();
+        ctx.setLineDash([6, 4]);
+        ctx.strokeStyle = 'rgba(59, 130, 246, 0.35)';
+        ctx.lineWidth = 3;
+        ctx.strokeRect(minX - pad, minY - pad, (maxX - minX) + pad * 2, (maxY - minY) + pad * 2);
+        ctx.restore();
+      }
+    }
+    // Draw alignment guides (after content, inside transform)
+    if (guideV != null && dragCanvasPos) {
+      ctx.save();
+      ctx.setLineDash([4, 4]);
+      ctx.strokeStyle = '#8BD3E6';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      const y1 = Math.min(dragCanvasPos.y, guideVRefY ?? dragCanvasPos.y) - 40;
+      const y2 = Math.max(dragCanvasPos.y, guideVRefY ?? dragCanvasPos.y) + 40;
+      ctx.moveTo(guideV, y1);
+      ctx.lineTo(guideV, y2);
+      ctx.stroke();
+      ctx.restore();
+    }
+    if (guideH != null && dragCanvasPos) {
+      ctx.save();
+      ctx.setLineDash([4, 4]);
+      ctx.strokeStyle = '#8BD3E6';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      const x1 = Math.min(dragCanvasPos.x, guideHRefX ?? dragCanvasPos.x) - 40;
+      const x2 = Math.max(dragCanvasPos.x, guideHRefX ?? dragCanvasPos.x) + 40;
+      ctx.moveTo(x1, guideH);
+      ctx.lineTo(x2, guideH);
+      ctx.stroke();
+      ctx.restore();
+    }
     // Drafting preview (ghost)
     if (isDrafting && activeTool === 'draw' && drawKind && draftStart && draftCurrent) {
       ctx.save();
@@ -1226,6 +1583,37 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
       dx: e.clientX - textEditorPosition.x,
       dy: e.clientY - textEditorPosition.y,
     };
+    // Snapshot group selection (nodes + texts) so the whole group moves together
+    if (editingTextFigureId) {
+      const group = selectionGroups.find(g => g.memberFigureIds.includes(editingTextFigureId));
+      const nodeIds = group ? group.memberNodeIds : Array.from(selectedIds);
+      const figIds = group ? group.memberFigureIds : Array.from(selectedFigureIds);
+
+      if (group) {
+        setSelectedIds(new Set(group.memberNodeIds));
+        setSelectedFigureIds(new Set(group.memberFigureIds));
+      }
+
+      if (nodeIds.length > 0) {
+        const starts: Record<string, { x: number; y: number }> = {};
+        nodeIds.forEach(id => {
+          const n = nodes.find(nn => nn.id === id);
+          if (n && n.x != null && n.y != null) starts[id] = { x: n.x, y: n.y };
+        });
+        setDragSelectionIds(nodeIds);
+        setDragStartPositions(starts);
+      }
+
+      if (figIds.length > 0) {
+        const fstarts: Record<string, { x: number; y: number }> = {};
+        figIds.forEach(fid => {
+          const f = figures.find(ff => ff.id === fid);
+          if (f) fstarts[fid] = { x: f.x, y: f.y };
+        });
+        setSelectedFiguresStartPositions(fstarts);
+        setDidLiveFigureDrag(false);
+      }
+    }
     window.addEventListener('mousemove', onTextEditorDrag as any);
     window.addEventListener('mouseup', endTextEditorDrag as any);
   };
@@ -1238,7 +1626,24 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
     setTextEditorPosition({ x: nx, y: ny });
 
     const { cx, cy } = pointToCanvas(e.clientX, e.clientY);
-    onUpdateFigure?.(editingTextFigureId, { x: cx, y: cy });
+    const start = selectedFiguresStartPositions[editingTextFigureId];
+    const dx = start ? (cx - start.x) : 0;
+    const dy = start ? (cy - start.y) : 0;
+
+    // Move all selected/group figures using their snapshot
+    Object.entries(selectedFiguresStartPositions).forEach(([fid, fstart]) => {
+      onUpdateFigure?.(fid, { x: fstart.x + dx, y: fstart.y + dy });
+    });
+
+    // Move all selected/group nodes using their snapshot
+    if (onNodesUpdate && dragSelectionIds && Object.keys(dragStartPositions).length > 0) {
+      const updated = nodes.map(n => {
+        const s = dragStartPositions[n.id];
+        if (!s) return n;
+        return { ...n, x: s.x + dx, y: s.y + dy, fx: s.x + dx, fy: s.y + dy };
+      });
+      onNodesUpdate(updated);
+    }
 
     setFigureToolbar({ id: editingTextFigureId, x: nx, y: ny - 30 });
   };
@@ -1694,6 +2099,27 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
         setFigureToolbar(null); // Close toolbar on new click
         setDraggingFigureId(f.id);
         setFigureDragStart({ sx: e.clientX, sy: e.clientY, fx: f.x, fy: f.y });
+        // If grouped or multi-selected with nodes, prepare node drag context too
+        const group = selectionGroups.find(g => g.memberFigureIds.includes(f.id));
+        const nodeIdsToDrag = group ? group.memberNodeIds : Array.from(selectedIds);
+        if (nodeIdsToDrag.length > 0) {
+          setDragSelectionIds(nodeIdsToDrag);
+          const starts: Record<string, { x: number; y: number }> = {};
+          nodeIdsToDrag.forEach(id => {
+            const n = nodes.find(nn => nn.id === id);
+            if (n && n.x != null && n.y != null) starts[id] = { x: n.x, y: n.y };
+          });
+          setDragStartPositions(starts);
+        }
+        // Snapshot figure start positions for all selected figures
+        const figIds = group ? group.memberFigureIds : (selectedFigureIds.size > 0 ? Array.from(selectedFigureIds) : [f.id]);
+        const figStarts: Record<string, { x: number; y: number }> = {};
+        figIds.forEach(fid => {
+          const ff = figures.find(x => x.id === fid);
+          if (ff) figStarts[fid] = { x: ff.x, y: ff.y };
+        });
+        setSelectedFiguresStartPositions(figStarts);
+        setDidLiveFigureDrag(false);
         // Don't return - allow normal drag flow
       }
     }
@@ -1719,6 +2145,23 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
 
     // Detect node first and prefer node interactions over links
     const node = getNodeAtPosition(e.clientX, e.clientY);
+    // If clicking on a node/figure that is in a selection group, auto-select the whole group for easier dragging
+    if (node) {
+      const group = selectionGroups.find(g => g.memberNodeIds.includes(node.id));
+      if (group) {
+        setSelectedIds(new Set(group.memberNodeIds));
+        setSelectedFigureIds(new Set(group.memberFigureIds));
+      }
+    } else {
+      const fig = getFigureAtPosition(e.clientX, e.clientY);
+      if (fig) {
+        const group = selectionGroups.find(g => g.memberFigureIds.includes(fig.id));
+        if (group) {
+          setSelectedIds(new Set(group.memberNodeIds));
+          setSelectedFigureIds(new Set(group.memberFigureIds));
+        }
+      }
+    }
 
     // If draw tool is active, start drafting
     if (activeTool === 'draw' && drawKind) {
@@ -1793,6 +2236,19 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
           const canvasY = (e.clientY - rect.top - transform.y) / transform.scale;
           setDragOffset({ x: canvasX - (node.x || 0), y: canvasY - (node.y || 0) });
         }
+        // Snapshot selected text figures positions for live drag
+        if (selectedFigureIds.size > 0 && figures) {
+          const map: Record<string, { x: number; y: number }> = {};
+          Array.from(selectedFigureIds).forEach(fid => {
+            const f = figures.find(ff => ff.id === fid);
+            if (f) map[f.id] = { x: f.x, y: f.y };
+          });
+          setSelectedFiguresStartPositions(map);
+          setDidLiveFigureDrag(false);
+        } else {
+          setSelectedFiguresStartPositions({});
+          setDidLiveFigureDrag(false);
+        }
         return;
       }
 
@@ -1801,7 +2257,14 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
         // Determine which nodes to drag
         let selectionIds: string[];
         
-        if (selectedIds.has(node.id)) {
+        // If node belongs to a free-form group, prefer the group's members
+        const group = selectionGroups.find(g => g.memberNodeIds.includes(node.id));
+        if (group) {
+          // Ensure full group is selected (nodes + figures)
+          selectionIds = [...group.memberNodeIds];
+          setSelectedIds(new Set(group.memberNodeIds));
+          setSelectedFigureIds(new Set(group.memberFigureIds));
+        } else if (selectedIds.has(node.id)) {
           // If clicking on already selected node, drag all selected nodes
           selectionIds = Array.from(selectedIds);
         } else {
@@ -1844,6 +2307,17 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
           const canvasY = (e.clientY - rect.top - transform.y) / transform.scale;
           setDragOffset({ x: canvasX - (node.x || 0), y: canvasY - (node.y || 0) });
         }
+        // Snapshot selected/group figures (for grouped node + text moves)
+        const figureIdsToDrag = group ? group.memberFigureIds : Array.from(selectedFigureIds);
+        if (figureIdsToDrag.length > 0) {
+          const starts: Record<string, { x: number; y: number }> = {};
+          figureIdsToDrag.forEach(fid => {
+            const f = figures.find(ff => ff.id === fid);
+            if (f) starts[fid] = { x: f.x, y: f.y };
+          });
+          setSelectedFiguresStartPositions(starts);
+          setDidLiveFigureDrag(false);
+        }
         return;
       }
     }
@@ -1863,6 +2337,8 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
       // Start marquee selection when holding Shift on empty background
       const canvas = canvasRef.current;
       if (canvas) {
+        // Prevent native text selection while marquee-selecting
+        e.preventDefault();
         const rect = canvas.getBoundingClientRect();
         const canvasX = (e.clientX - rect.left - transform.x) / transform.scale;
         const canvasY = (e.clientY - rect.top - transform.y) / transform.scale;
@@ -1955,22 +2431,45 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
       const dyScreen = e.clientY - figureDragStart.sy;
       const dx = dxScreen / transform.scale;
       const dy = dyScreen / transform.scale;
-      onUpdateFigure(draggingFigureId, { x: figureDragStart.fx + dx, y: figureDragStart.fy + dy });
+      // Move all selected figures together based on their snapshot positions
+      const figIds = selectedFigureIds.size > 0 ? Array.from(selectedFigureIds) : [draggingFigureId];
+      figIds.forEach(fid => {
+        const start = selectedFiguresStartPositions[fid];
+        if (start) onUpdateFigure(fid, { x: start.x + dx, y: start.y + dy });
+      });
+      // If nodes are part of selection/group, move nodes as well
+      if (onNodesUpdate && dragStartPositions && Object.keys(dragStartPositions).length > 0) {
+        const updated = nodes.map(n => {
+          if (!dragStartPositions[n.id]) return n;
+          const start = dragStartPositions[n.id];
+          return { ...n, x: start.x + dx, y: start.y + dy, fx: start.x + dx, fy: start.y + dy };
+        });
+        onNodesUpdate(updated);
+      }
       return;
     }
     const node = getNodeAtPosition(e.clientX, e.clientY);
     setHoveredNode(node ? node.id : null);
 
-    // Show toolbar on hover for shapes (not text, and not during resize/drag)
+    // Show toolbar on hover for shapes or selected texts (not during resize/drag)
     if (figUnderMouse && figUnderMouse.type !== 'text' && !resizingShape && !draggingFigureId && !draggedNode && canvasRef.current) {
       const canvas = canvasRef.current;
       const rect = canvas.getBoundingClientRect();
       const sx = rect.left + (figUnderMouse.x * transform.scale) + transform.x;
       const sy = rect.top + (figUnderMouse.y * transform.scale) + transform.y - 40;
       setFigureToolbar({ id: figUnderMouse.id, x: sx, y: sy });
-    } else if (!figUnderMouse || figUnderMouse.type === 'text') {
-      // Clear toolbar when not hovering a shape (keep it if we have a selected figure)
-      if (!selectedFigureId || (figUnderMouse && figUnderMouse.id !== selectedFigureId)) {
+    } else if (figUnderMouse && figUnderMouse.type === 'text' && !resizingShape && !draggingFigureId && !draggedNode && canvasRef.current) {
+      // If hovering a text figure and we have any text selected, keep/show toolbar near the hovered text
+      if (selectedFigureIds.size > 0) {
+        const canvas = canvasRef.current;
+        const rect = canvas.getBoundingClientRect();
+        const sx = rect.left + (figUnderMouse.x * transform.scale) + transform.x;
+        const sy = rect.top + (figUnderMouse.y * transform.scale) + transform.y - 40;
+        setFigureToolbar({ id: figUnderMouse.id, x: sx, y: sy });
+      }
+    } else {
+      // Only clear when nothing is hovered and no text figures are selected
+      if (!figUnderMouse && selectedFigureIds.size === 0) {
         setFigureToolbar(null);
       }
     }
@@ -2041,8 +2540,74 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
         const rect = canvas.getBoundingClientRect();
         const canvasX = (e.clientX - rect.left - transform.x) / transform.scale;
         const canvasY = (e.clientY - rect.top - transform.y) / transform.scale;
-        const newX = canvasX - dragOffset.x;
-        const newY = canvasY - dragOffset.y;
+        let newX = canvasX - dragOffset.x;
+        let newY = canvasY - dragOffset.y;
+
+    // Alignment guides against other nodes (center and edges)
+    const threshold = 8; // px in canvas space
+    let v: number | null = null; // guide x
+    let h: number | null = null; // guide y
+    let vRefY: number | null = null; // reference node center y
+    let hRefX: number | null = null; // reference node center x
+    const others = nodes.filter(n => n.id !== draggedNode.id && n.x != null && n.y != null);
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      const dDims = calculateNodeDimensions(draggedNode, ctx);
+      const dHalfW = dDims.width / 2;
+      const dHalfH = dDims.height / 2;
+      const cx = newX; const cy = newY;
+      let bestDx = Infinity; let bestDy = Infinity;
+      for (const n of others) {
+        const oDims = calculateNodeDimensions(n, ctx);
+        const oHalfW = oDims.width / 2; const oHalfH = oDims.height / 2;
+        const ocx = n.x!; const ocy = n.y!;
+        // vertical: centers
+        const dxCenter = Math.abs(cx - ocx);
+        if (dxCenter <= threshold && dxCenter < bestDx) {
+          v = ocx; vRefY = ocy; bestDx = dxCenter;
+          if (snapToGuides) newX = ocx;
+        }
+        // vertical: left edges
+        const dLeft = cx - dHalfW; const oLeft = ocx - oHalfW;
+        const dxLeft = Math.abs(dLeft - oLeft);
+        if (dxLeft <= threshold && dxLeft < bestDx) {
+          v = oLeft; vRefY = ocy; bestDx = dxLeft;
+          if (snapToGuides) newX = oLeft + dHalfW;
+        }
+        // vertical: right edges
+        const dRight = cx + dHalfW; const oRight = ocx + oHalfW;
+        const dxRight = Math.abs(dRight - oRight);
+        if (dxRight <= threshold && dxRight < bestDx) {
+          v = oRight; vRefY = ocy; bestDx = dxRight;
+          if (snapToGuides) newX = oRight - dHalfW;
+        }
+        // horizontal: centers
+        const dyCenter = Math.abs(cy - ocy);
+        if (dyCenter <= threshold && dyCenter < bestDy) {
+          h = ocy; hRefX = ocx; bestDy = dyCenter;
+          if (snapToGuides) newY = ocy;
+        }
+        // horizontal: top edges
+        const dTop = cy - dHalfH; const oTop = ocy - oHalfH;
+        const dyTop = Math.abs(dTop - oTop);
+        if (dyTop <= threshold && dyTop < bestDy) {
+          h = oTop; hRefX = ocx; bestDy = dyTop;
+          if (snapToGuides) newY = oTop + dHalfH;
+        }
+        // horizontal: bottom edges
+        const dBottom = cy + dHalfH; const oBottom = ocy + oHalfH;
+        const dyBottom = Math.abs(dBottom - oBottom);
+        if (dyBottom <= threshold && dyBottom < bestDy) {
+          h = oBottom; hRefX = ocx; bestDy = dyBottom;
+          if (snapToGuides) newY = oBottom - dHalfH;
+        }
+      }
+    }
+        setGuideV(v);
+        setGuideH(h);
+        setGuideVRefY(vRefY);
+        setGuideHRefX(hRefX);
+        setDragCanvasPos({ x: newX, y: newY });
 
         const origin = dragStartPositions[draggedNode.id];
         const dx = origin ? newX - origin.x : 0;
@@ -2050,6 +2615,13 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
 
         // Only set a visual delta here; commit on mouse up
         setDragDelta({ dx, dy });
+        // Live move selected text figures along with nodes
+        if (onUpdateFigure && Object.keys(selectedFiguresStartPositions).length > 0) {
+          Object.entries(selectedFiguresStartPositions).forEach(([fid, start]) => {
+            onUpdateFigure(fid, { x: start.x + dx, y: start.y + dy });
+          });
+          if (!didLiveFigureDrag) setDidLiveFigureDrag(true);
+        }
       }
     } else if (isDragging) {
       // Canvas panning - use initial transform as base
@@ -2228,6 +2800,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
         const sy = rect.top + (f.y * transform.scale) + transform.y - 40;
         setFigureToolbar({ id: f.id, x: sx, y: sy });
         setSelectedFigureId(f.id);
+        setSelectedFigureIds(new Set([f.id]));
       }
       setResizingShape(null);
       return;
@@ -2246,6 +2819,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
         const sy = rect.top + (f.y * transform.scale) + transform.y - 40;
         setFigureToolbar({ id: f.id, x: sx, y: sy });
         setSelectedFigureId(f.id);
+        setSelectedFigureIds(new Set([f.id]));
         
         // Only open text editor for text figures
         if (f.type === 'text') {
@@ -2270,11 +2844,13 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
         // show formatting toolbar above it
         setFigureToolbar({ id: fig.id, x: sx, y: sy });
         setSelectedFigureId(fig.id);
+        setSelectedFigureIds(new Set([fig.id]));
         }
         return;
       } else {
         setFigureToolbar(null);
         setSelectedFigureId(null);
+        setSelectedFigureIds(new Set());
       }
     }
     // End endpoint drag: snap to nearest node if moved; if click-only, toggle arrow
@@ -2332,20 +2908,58 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
         const canvasX = (e.clientX - rect.left - transform.x) / transform.scale;
         const canvasY = (e.clientY - rect.top - transform.y) / transform.scale;
         
+        const left = Math.min(marqueeSelection.startX, canvasX);
+        const right = Math.max(marqueeSelection.startX, canvasX);
+        const top = Math.min(marqueeSelection.startY, canvasY);
+        const bottom = Math.max(marqueeSelection.startY, canvasY);
+        
         // Find nodes within marquee area
         const selectedNodes = nodes.filter(node => {
           if (node.x === undefined || node.y === undefined) return false;
-          
-          const left = Math.min(marqueeSelection.startX, canvasX);
-          const right = Math.max(marqueeSelection.startX, canvasX);
-          const top = Math.min(marqueeSelection.startY, canvasY);
-          const bottom = Math.max(marqueeSelection.startY, canvasY);
-          
           return node.x >= left && node.x <= right && node.y >= top && node.y <= bottom;
         });
         
+        // Find text figures within marquee area using dynamic bounds
+        const selectedTextFigures: string[] = [];
+        if (figures) {
+          const canvas = canvasRef.current;
+          const ctx = canvas ? canvas.getContext('2d') : null;
+          figures.forEach(fig => {
+            if (fig.type === 'text') {
+              const b = getTextFigureBounds(fig, ctx);
+              const overlaps = !(b.right < left || b.left > right || b.bottom < top || b.top > bottom);
+              if (overlaps) selectedTextFigures.push(fig.id);
+            }
+          });
+        }
+        
         // Update selection and clear any highlighted links
-        setSelectedIds(new Set(selectedNodes.map(n => n.id)));
+        const newSelectedNodeIds = selectedNodes.map(n => n.id);
+        setSelectedIds(new Set(newSelectedNodeIds));
+        
+        // Find and select text figures overlapping with selected nodes (using helper function)
+        const overlappingTextFigures = newSelectedNodeIds.length > 0 
+          ? findTextFiguresOverlappingNodes(newSelectedNodeIds)
+          : selectedTextFigures;
+        
+        // Select text figures if any were found
+        if (overlappingTextFigures.length > 0) {
+          setSelectedFigureId(overlappingTextFigures[0]); // Select first one for toolbar
+          setSelectedFigureIds(new Set(overlappingTextFigures));
+          // Show toolbar for the first selected text figure
+          const firstFig = figures?.find(f => f.id === overlappingTextFigures[0]);
+          if (firstFig && canvas) {
+            const rect = canvas.getBoundingClientRect();
+            const sx = rect.left + (firstFig.x * transform.scale) + transform.x;
+            const sy = rect.top + (firstFig.y * transform.scale) + transform.y - 60;
+            setFigureToolbar({ id: firstFig.id, x: sx, y: sy });
+          }
+        } else {
+          setSelectedFigureId(null);
+          setSelectedFigureIds(new Set());
+          setFigureToolbar(null);
+        }
+        
         setHighlightedLink(null); // Clear link highlighting when nodes are selected
       }
       setMarqueeSelection(null);
@@ -2365,10 +2979,67 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
           return { ...n, x: nx, y: ny, fx: nx, fy: ny };
         });
         onNodesUpdate(updatedNodes);
-      } else if (dragDistance < dragThreshold && onNodeClick) {
-      // Only trigger click if it wasn't a significant drag
-        onNodeClick(draggedNode);
-        setSelectedIds(new Set([draggedNode.id]));
+        // Move selected text figures by the same delta only if we didn't live move already
+        if (!didLiveFigureDrag && selectedFigureIds.size > 0 && onUpdateFigure) {
+          const dx = dragDelta.dx;
+          const dy = dragDelta.dy;
+          const ids = Array.from(selectedFigureIds);
+          ids.forEach(fid => {
+            const f = figures?.find(ff => ff.id === fid);
+            if (f) onUpdateFigure(fid, { x: f.x + dx, y: f.y + dy });
+          });
+        }
+        // After dragging, keep the selection and find overlapping text figures
+        const newSelectedIds = Array.from(dragSelectionIds);
+        setSelectedIds(new Set(newSelectedIds));
+        
+        // Find and select text figures overlapping with selected nodes
+        const overlappingTextFigures = findTextFiguresOverlappingNodes(newSelectedIds);
+        if (overlappingTextFigures.length > 0 && figures && canvasRef.current) {
+          const firstFig = figures.find(f => f.id === overlappingTextFigures[0]);
+          if (firstFig) {
+            const canvas = canvasRef.current;
+            const rect = canvas.getBoundingClientRect();
+            const sx = rect.left + (firstFig.x * transform.scale) + transform.x;
+            const sy = rect.top + (firstFig.y * transform.scale) + transform.y - 60;
+            setSelectedFigureId(overlappingTextFigures[0]);
+            setSelectedFigureIds(new Set(overlappingTextFigures));
+            setFigureToolbar({ id: firstFig.id, x: sx, y: sy });
+          }
+        }
+      } else if (dragDistance < dragThreshold) {
+        // Only trigger click if it wasn't a significant drag
+        // Use dragSelectionIds if available (for Shift/Ctrl+click), otherwise just the dragged node
+        const nodeIdsToSelect = dragSelectionIds && dragSelectionIds.length > 0 
+          ? dragSelectionIds 
+          : [draggedNode.id];
+        
+        if (onNodeClick) {
+          onNodeClick(draggedNode);
+        }
+        
+        const newSelectedIds = new Set(nodeIdsToSelect);
+        setSelectedIds(newSelectedIds);
+        
+        // Find and select text figures overlapping with selected nodes
+        const overlappingTextFigures = findTextFiguresOverlappingNodes(nodeIdsToSelect);
+        if (overlappingTextFigures.length > 0 && figures && canvasRef.current) {
+          const firstFig = figures.find(f => f.id === overlappingTextFigures[0]);
+          if (firstFig) {
+            const canvas = canvasRef.current;
+            const rect = canvas.getBoundingClientRect();
+            const sx = rect.left + (firstFig.x * transform.scale) + transform.x;
+            const sy = rect.top + (firstFig.y * transform.scale) + transform.y - 60;
+            setSelectedFigureId(overlappingTextFigures[0]);
+            setSelectedFigureIds(new Set(overlappingTextFigures));
+            setFigureToolbar({ id: firstFig.id, x: sx, y: sy });
+          }
+        } else {
+          setSelectedFigureId(null);
+          setSelectedFigureIds(new Set());
+          setFigureToolbar(null);
+        }
+        
         setHighlightedLink(null);
       }
     } else if (isDragging && !draggedNode) {
@@ -2381,6 +3052,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
         // Small movement = background click - clear selection
         console.log('SitemapCanvas: Background click detected, clearing selection');
         setSelectedIds(new Set());
+        setSelectedFigureIds(new Set());
         setHighlightedLink(null);
         if (onClearFocus) onClearFocus();
       }
@@ -2467,7 +3139,26 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
       const clickedNode = getNodeAtPosition(e.clientX, e.clientY);
       if (clickedNode && onNodeClick) {
         onNodeClick(clickedNode);
-        setSelectedIds(new Set([clickedNode.id]));
+        const newSelectedIds = new Set([clickedNode.id]);
+        setSelectedIds(newSelectedIds);
+        
+        // Find and select text figures overlapping with this node
+        const overlappingTextFigures = findTextFiguresOverlappingNodes([clickedNode.id]);
+        if (overlappingTextFigures.length > 0 && figures) {
+          const firstFig = figures.find(f => f.id === overlappingTextFigures[0]);
+          if (firstFig && canvasRef.current) {
+            const canvas = canvasRef.current;
+            const rect = canvas.getBoundingClientRect();
+            const sx = rect.left + (firstFig.x * transform.scale) + transform.x;
+            const sy = rect.top + (firstFig.y * transform.scale) + transform.y - 60;
+            setSelectedFigureId(overlappingTextFigures[0]);
+            setFigureToolbar({ id: firstFig.id, x: sx, y: sy });
+          }
+        } else {
+          setSelectedFigureId(null);
+          setFigureToolbar(null);
+        }
+        
         setHighlightedLink(null);
       }
       }
@@ -2482,6 +3173,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
     setDragStart({ x: 0, y: 0 });
     setInitialTransform({ x: 0, y: 0, scale: 1 });
     backgroundDownRef.current = null;
+    setSelectedFiguresStartPositions({});
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -2535,6 +3227,11 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
     backgroundDownRef.current = null;
     setDraggingLineEnd(null);
     setLineEndpointDragMoved(false);
+    setGuideV(null);
+    setGuideH(null);
+    setGuideVRefY(null);
+    setGuideHRefX(null);
+    setDragCanvasPos(null);
   };
 
   const handleWheel = (e: WheelEvent) => {
@@ -2548,8 +3245,8 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
     
     // Check if Ctrl/Cmd key is pressed for zoom, otherwise pan
     if (e.ctrlKey || e.metaKey) {
-      // Zoom behavior in discrete 5% steps snapping to 0.1..2.0 for finer traversal
-      const step = 0.05;
+      // Zoom behavior in discrete 1% steps snapping to 0.1..2.0 for finer traversal
+      const step = 0.01;
       const dir = e.deltaY > 0 ? -1 : 1;
 
       const canvas = canvasRef.current;
@@ -2594,6 +3291,33 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
     return 'cursor-default';
   };
 
+  // Compute bounds for text figures using font size and content; fallback to fig.width/height
+  function getTextFigureBounds(fig: Figure, ctx: CanvasRenderingContext2D | null): { left: number; right: number; top: number; bottom: number } {
+    const fontSize = fig.fontSize ?? 18;
+    if (fig.width && fig.height) {
+      const halfW = fig.width / 2;
+      const halfH = fig.height / 2;
+      return { left: fig.x - halfW, right: fig.x + halfW, top: fig.y - halfH, bottom: fig.y + halfH };
+    }
+    let textWidth = 120;
+    if (ctx) {
+      try {
+        ctx.save();
+        ctx.font = `${Math.max(10, fontSize)}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+        const metrics = ctx.measureText(fig.text ?? 'Text');
+        textWidth = Math.max(40, metrics.width);
+        ctx.restore();
+      } catch {}
+    }
+    const paddingX = 28;
+    const paddingY = 16;
+    const width = textWidth + paddingX;
+    const height = Math.max(fontSize * 1.2 + paddingY, 24);
+    const halfW = width / 2;
+    const halfH = height / 2;
+    return { left: fig.x - halfW, right: fig.x + halfW, top: fig.y - halfH, bottom: fig.y + halfH };
+  }
+
   // Figure hit testing for text re-editing
   const getFigureAtPosition = (clientX: number, clientY: number): Figure | null => {
     if (!figures || !canvasRef.current) return null;
@@ -2601,15 +3325,15 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
     const rect = canvas.getBoundingClientRect();
     const cx = (clientX - rect.left - transform.x) / transform.scale;
     const cy = (clientY - rect.top - transform.y) / transform.scale;
-
+    const ctx = canvas.getContext('2d');
     for (let i = figures.length - 1; i >= 0; i--) {
       const fig = figures[i];
       const w = fig.width ?? 160;
       const h = fig.height ?? 80;
 
       if (fig.type === 'text') {
-        const tw = 160, th = 40;
-        if (cx >= fig.x - tw / 2 && cx <= fig.x + tw / 2 && cy >= fig.y - th / 2 && cy <= fig.y + th / 2) {
+        const b = getTextFigureBounds(fig, ctx);
+        if (cx >= b.left && cx <= b.right && cy >= b.top && cy <= b.bottom) {
           return fig;
         }
       } else if (fig.type === 'rect' || fig.type === 'square') {
@@ -2624,6 +3348,8 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
     }
     return null;
   };
+
+  
 
   // Get shape resize handle at position
   const getShapeHandleAtPosition = (clientX: number, clientY: number): null | { id: string; corner: 0 | 1 | 2 | 3 } => {
@@ -2699,20 +3425,91 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
     isEditingTextRef.current = true;
   };
 
+  // Helper function to find text figures that overlap with selected nodes
+  const findTextFiguresOverlappingNodes = (nodeIds: string[]): string[] => {
+    if (!figures || nodeIds.length === 0 || !canvasRef.current) return [];
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return [];
+    // Calculate bounding box of all selected nodes using true node sizes
+    const nodesOfInterest = nodes.filter(n => nodeIds.includes(n.id) && n.x !== undefined && n.y !== undefined);
+    if (nodesOfInterest.length === 0) return [];
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    nodesOfInterest.forEach(n => {
+      const { width, height } = calculateNodeDimensions(n, ctx);
+      const left = (n.x || 0) - width / 2;
+      const right = (n.x || 0) + width / 2;
+      const top = (n.y || 0) - height / 2;
+      const bottom = (n.y || 0) + height / 2;
+      minX = Math.min(minX, left);
+      maxX = Math.max(maxX, right);
+      minY = Math.min(minY, top);
+      maxY = Math.max(maxY, bottom);
+    });
+    const overlappingTextFigures: string[] = [];
+    figures.forEach(fig => {
+      if (fig.type === 'text') {
+        const b = getTextFigureBounds(fig, ctx);
+        const overlaps = !(b.right < minX || b.left > maxX || b.bottom < minY || b.top > maxY);
+        if (overlaps) overlappingTextFigures.push(fig.id);
+      }
+    });
+    return overlappingTextFigures;
+  };
+
   // Remove the old window-based approach
   // useEffect(() => {
   //   (window as any).focusOnNode = centerOnNode;
   // }, []);
 
+  // Keep inline text editor anchored to figure during pan/zoom or figure move
+  useEffect(() => {
+    if (!editingTextFigureId || !canvasRef.current) return;
+    const fig = figures.find(f => f.id === editingTextFigureId);
+    if (!fig) return;
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const screenX = rect.left + (fig.x * transform.scale) + transform.x;
+    const screenY = rect.top + (fig.y * transform.scale) + transform.y;
+    setTextEditorPosition({ x: screenX, y: screenY });
+  }, [editingTextFigureId, figures, transform]);
+
+  // Ensure text toolbar appears for multi-selected text figures by anchoring to the top-most text
+  useEffect(() => {
+    if (!figures || !canvasRef.current) return;
+    if (editingTextFigureId) return; // editor has its own UI
+    if (selectedIds.size > 0) return; // node selection owns toolbar
+    if (selectedFigureIds.size === 0) return;
+
+    const selectedTexts = Array.from(selectedFigureIds)
+      .map(id => figures.find(f => f.id === id))
+      .filter((f): f is Figure & { type: 'text' } => !!f && f.type === 'text');
+    if (selectedTexts.length === 0) return;
+
+    // Find the top-most by y (smallest y); if tie, pick the left-most by x
+    const topMost = selectedTexts.reduce((best, f) => {
+      if (!best) return f;
+      if (f.y < best.y) return f;
+      if (f.y === best.y && f.x < best.x) return f;
+      return best;
+    }, selectedTexts[0]);
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const screenX = rect.left + (topMost.x * transform.scale) + transform.x;
+    const screenY = rect.top + (topMost.y * transform.scale) + transform.y - 60;
+    setFigureToolbar({ id: topMost.id, x: screenX, y: screenY });
+  }, [selectedFigureIds, figures, transform, editingTextFigureId, selectedIds]);
+
   return (
     <div
       ref={containerRef}
-      className="relative w-full h-full bg-white"
+      className={`relative w-full h-full bg-white select-none outline-none focus:outline-none focus-visible:outline-none focus-within:outline-none`}
       style={{
         cursor:
           activeTool === 'text' ? 'text' :
           (activeTool === 'draw' ? 'crosshair' :
-          (isSpacePressed ? 'grab' : ((draggedNode || isDragging) ? 'grabbing' : (marqueeSelection?.isActive ? 'crosshair' : 'default'))))
+          (isSpacePressed ? 'grab' : ((draggedNode || isDragging) ? 'grabbing' : (marqueeSelection?.isActive ? 'crosshair' : 'default')))),
+        WebkitTapHighlightColor: 'transparent'
       }}
     >
       {/* {showLineHint && (
@@ -2740,7 +3537,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
         onKeyDown={handleKeyDown}
         onContextMenu={handleContextMenu}
         tabIndex={-1}
-        className={getCursorClass()}
+        className={`${getCursorClass()} outline-none focus:outline-none focus-visible:outline-none ring-0 focus:ring-0 focus-visible:ring-0`}
         onClick={(e) => {
           // Only close when clicking empty background and not editing
           if (editingTextFigureId) return;
@@ -2751,6 +3548,31 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
         }}
       />
       
+      {/* Selected text figures overlay outlines (hide while editing) */}
+      {selectedFigureIds.size > 0 && !editingTextFigureId && figures && canvasRef.current && (() => {
+        const canvas = canvasRef.current!;
+        const rect = canvas.getBoundingClientRect();
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return null;
+        const boxes = Array.from(selectedFigureIds).map(fid => {
+          const f = figures.find(ff => ff.id === fid);
+          if (!f) return null;
+          const b = getTextFigureBounds(f, ctx);
+          const left = rect.left + (b.left * transform.scale) + transform.x;
+          const top = rect.top + (b.top * transform.scale) + transform.y;
+          const width = (b.right - b.left) * transform.scale;
+          const height = (b.bottom - b.top) * transform.scale;
+          return (
+            <div
+              key={`sel-box-${fid}`}
+              className="fixed pointer-events-none z-20"
+              style={{ left, top, width, height, border: '2px solid #3B82F6', borderRadius: 8, boxShadow: '0 0 0 2px rgba(59,130,246,0.25) inset' }}
+            />
+          );
+        });
+        return <>{boxes}</>;
+      })()}
+
       {/* Context Menu */}
       {contextMenu && (
         <div
@@ -3109,6 +3931,13 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
         const rect = canvas.getBoundingClientRect();
         const screenX = rect.left + (avgX * transform.scale) + transform.x;
         const screenY = rect.top + (avgY * transform.scale) + transform.y;
+        // Determine if current selection matches a free-form selection group
+        const selNodeIds = new Set(Array.from(selectedIds));
+        const selFigureIds = new Set(Array.from(selectedFigureIds));
+        const isGrouped = selectionGroups.some(g => {
+          if (g.memberNodeIds.length !== selNodeIds.size || g.memberFigureIds.length !== selFigureIds.size) return false;
+          return g.memberNodeIds.every(id => selNodeIds.has(id)) && g.memberFigureIds.every(id => selFigureIds.has(id));
+        });
         
         return (
           <SelectionToolbar
@@ -3118,6 +3947,9 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
             onAddChild={handleAddChildFromToolbar}
             onColorClick={handleColorClickFromToolbar}
             onLinkClick={handleLinkClickFromToolbar}
+            onGroupSelection={() => onCreateSelectionGroup?.(Array.from(selectedIds), Array.from(selectedFigureIds))}
+            onUngroupSelection={() => onUngroupSelection?.(Array.from(selectedIds), Array.from(selectedFigureIds))}
+            isGrouped={isGrouped}
             onDelete={(nodeIds) => {
               if (!onNodesUpdate) return;
               const idsToDelete = new Set(nodeIds);
@@ -3242,11 +4074,12 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
       {/* Text Figure Editor - modern inline contenteditable with dynamic box */}
       {editingTextFigureId && (
         <div
-          className="fixed z-50"
+          className="fixed z-20"
           style={{
             left: `${textEditorPosition.x}px`,
             top: `${textEditorPosition.y}px`,
-            transform: 'translate(-50%, -50%)',
+            transform: `translate(-50%, -50%) scale(${transform.scale})`,
+            transformOrigin: 'center',
           }}
           onClick={(e) => e.stopPropagation()}
         >
@@ -3287,6 +4120,23 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
               borderRadius: '8px',
             }}
             dangerouslySetInnerHTML={{ __html: (textEditorText || '').replace(/\n/g, '<br/>') }}
+            onCopy={(e) => {
+              // If actual text is selected, allow native copy. Otherwise, copy figure payload for duplication
+              const sel = window.getSelection();
+              const hasSelection = !!sel && (sel.toString() || '').length > 0;
+              if (hasSelection) return;
+              try {
+                const fig = figures.find(f => f.id === editingTextFigureId);
+                if (!fig) return;
+                const payload = {
+                  type: 'sitemap-text-figures',
+                  figures: [{ x: fig.x, y: fig.y, text: fig.text, textColor: fig.textColor, fontSize: fig.fontSize, fontWeight: fig.fontWeight }],
+                };
+                e.preventDefault();
+                e.clipboardData?.setData('text/plain', JSON.stringify(payload));
+                pasteBumpRef.current = 0;
+              } catch {}
+            }}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
@@ -3317,9 +4167,31 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
               isEditingTextRef.current = false;
             }}
             onPaste={(e) => {
+              const raw = (e.clipboardData || (window as any).clipboardData).getData('text/plain');
+              // If clipboard contains our figure payload, duplicate figures instead of inserting text
+              try {
+                const parsed = JSON.parse(raw);
+                if (parsed && parsed.type === 'sitemap-text-figures' && Array.isArray(parsed.figures)) {
+                  e.preventDefault();
+                  if (!onCreateFigure) return;
+                  const bump = 40 + 24 * (pasteBumpRef.current++);
+                  const newIds: string[] = [];
+                  parsed.figures.forEach((f: any) => {
+                    const id = `fig-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+                    newIds.push(id);
+                    onCreateFigure({ id, type: 'text', x: (f.x ?? 0) + bump, y: (f.y ?? 0) + bump, text: f.text ?? 'Text', textColor: f.textColor, fontSize: f.fontSize, fontWeight: f.fontWeight });
+                  });
+                  if (newIds.length > 0) {
+                    setSelectedFigureIds(new Set(newIds));
+                    setSelectedFigureId(newIds[0]);
+                    setFigureToolbar(null);
+                  }
+                  return;
+                }
+              } catch {}
+              // Default: insert plain text into editor
               e.preventDefault();
-              const text = (e.clipboardData || (window as any).clipboardData).getData('text/plain');
-              document.execCommand('insertText', false, text);
+              document.execCommand('insertText', false, raw);
             }}
           />
           <div
@@ -3367,8 +4239,8 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
         const f = figures.find(ff => ff.id === editingTextFigureId) || ({ id: editingTextFigureId } as any);
         const currentFontSize = f.fontSize ?? 18;
         return (
-          <div
-            className="fixed z-50 bg-white border border-gray-200 rounded-lg shadow-md px-2 py-1 flex items-center gap-1"
+            <div
+              className="fixed z-20 bg-white border border-gray-200 rounded-lg shadow-md px-2 py-1 flex items-center gap-1"
             style={{ left: textEditorPosition.x, top: textEditorPosition.y - 30, transform: 'translate(-50%, -100%)' }}
             onClick={(e) => e.stopPropagation()}
             >
@@ -3422,26 +4294,29 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
       })()}
 
       {/* Figure Formatting Toolbar (text or shapes) */}
-      {figureToolbar && !editingTextFigureId && (() => {
+      {figureToolbar && !editingTextFigureId && selectedFigureIds.size >= 1 && selectedIds.size === 0 && !draggedNode && (() => {
         const f = figures.find(ff => ff.id === figureToolbar.id);
         if (!f) return null;
 
         const isText = f.type === 'text';
 
         if (isText) {
+          const selectedTextIds = Array.from(selectedFigureIds).filter(id => (figures.find(ff => ff.id === id)?.type === 'text'));
+          const targetIds = selectedTextIds.length > 0 ? selectedTextIds : [f.id];
           const currentFontSize = f.fontSize ?? 18;
           return (
             <div
-              className="fixed z-50 bg-white border border-gray-200 rounded-lg shadow-md px-2 py-1 flex items-center gap-1"
+              className="fixed z-20 bg-white border border-gray-200 rounded-lg shadow-md px-2 py-1 flex items-center gap-1"
               style={{ left: figureToolbar.x, top: figureToolbar.y, transform: 'translate(-50%, -100%)' }}
               onClick={(e) => e.stopPropagation()}
             >
+              {/* Group/Ungroup removed from text toolbar to avoid confusion */}
               <button 
                 className="px-2 py-1 text-xs rounded hover:bg-gray-100" 
                 onClick={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
-                  onUpdateFigure?.(f.id, { fontSize: Math.max(10, currentFontSize - 2) });
+                  targetIds.forEach(id => onUpdateFigure?.(id, { fontSize: Math.max(10, (figures.find(ff => ff.id === id)?.fontSize ?? currentFontSize) - 2) }));
                 }}
               >–</button>
               <span className="px-1 tabular-nums text-[11px] text-gray-600">{currentFontSize}</span>
@@ -3450,7 +4325,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
                 onClick={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
-                  onUpdateFigure?.(f.id, { fontSize: Math.min(64, currentFontSize + 2) });
+                  targetIds.forEach(id => onUpdateFigure?.(id, { fontSize: Math.min(64, (figures.find(ff => ff.id === id)?.fontSize ?? currentFontSize) + 2) }));
                 }}
               >+</button>
               <button 
@@ -3458,7 +4333,10 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
                 onClick={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
-                  onUpdateFigure?.(f.id, { fontWeight: f.fontWeight === 'bold' ? 'normal' : 'bold' });
+                  targetIds.forEach(id => {
+                    const cur = figures.find(ff => ff.id === id)?.fontWeight === 'bold' ? 'bold' : 'normal';
+                    onUpdateFigure?.(id, { fontWeight: cur === 'bold' ? 'normal' : 'bold' });
+                  });
                 }}
               >B</button>
               <button 
@@ -3466,7 +4344,10 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
                 onClick={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
-                  onUpdateFigure?.(f.id, { underline: !f.underline });
+                  targetIds.forEach(id => {
+                    const cur = !!figures.find(ff => ff.id === id)?.underline;
+                    onUpdateFigure?.(id, { underline: !cur });
+                  });
                 }}
               ><span style={{ textDecoration: 'underline' }}>U</span></button>
               <button 
@@ -3474,7 +4355,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
                 onClick={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
-                  onDeleteFigure?.(f.id); 
+                  targetIds.forEach(id => onDeleteFigure?.(id)); 
                   setFigureToolbar(null); 
                   setEditingTextFigureId(null);
                 }}

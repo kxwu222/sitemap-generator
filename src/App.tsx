@@ -1,15 +1,20 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { flushSync } from 'react-dom';
-import { Download, Trash2, ChevronDown, ChevronUp, Menu, X, Search, HelpCircle, Edit2 } from 'lucide-react';
+import { Download, Trash2, ChevronDown, ChevronUp, Menu, X, Search, HelpCircle, Edit2, LogIn, LogOut, User } from 'lucide-react';
 import { SitemapCanvas } from './components/SitemapCanvas';
 import { SearchOverlay } from './components/SearchOverlay';
+import { AuthModal } from './components/AuthModal';
 import { analyzeURLStructure, PageNode, groupByCategory, createNodesFromCsvData } from './utils/urlAnalyzer';
 import { applyGroupedFlowLayout } from './utils/forceLayout';
 import { exportToPNG, exportToCSV, exportToXMLSitemap } from './utils/exportUtils';
 import { parseCsvFile } from './utils/csvParser';
-import { SitemapData } from './types/sitemap';
+import { SitemapData, SelectionGroup } from './types/sitemap';
 import { LinkStyle } from './types/linkStyle';
 import { Figure, FreeLine } from './types/drawables';
+import { saveSitemap, loadSitemaps, deleteSitemap as deleteSitemapFromSupabase, loadSitemapWithDrawables } from './services/sitemapService';
+import { getCurrentUser, signOut, getSession } from './services/authService';
+import { supabase } from './lib/supabase';
+import type { User as SupabaseUser } from '@supabase/supabase-js';
 
 type LayoutType = 'grouped';
 
@@ -83,10 +88,14 @@ function App() {
   const [linkStyles, setLinkStyles] = useState<Record<string, LinkStyle>>({});
   const [figures, setFigures] = useState<Figure[]>([]);
   const [freeLines, setFreeLines] = useState<FreeLine[]>([]);
+  const [selectionGroups, setSelectionGroups] = useState<SelectionGroup[]>([]);
   const sitemapCanvasRef = useRef<any>(null);
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [lastUsedGroup, setLastUsedGroup] = useState<string>('general');
+  const [user, setUser] = useState<SupabaseUser | null>(null);
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [authLoading, setAuthLoading] = useState(true);
 
   const makeSnapshot = useCallback((): HistorySnapshot => ({
     nodes: JSON.parse(JSON.stringify(nodes)),
@@ -97,50 +106,126 @@ function App() {
     freeLines: JSON.parse(JSON.stringify(freeLines)),
   }), [nodes, extraLinks, linkStyles, colorOverrides, figures, freeLines]);
 
-  // Sitemap management functions
-  const saveCurrentStateToActiveSitemap = useCallback(() => {
-    if (!activeSitemapId) return;
-    setSitemaps(prev => prev.map(sitemap => 
-      sitemap.id === activeSitemapId 
-        ? {
-            ...sitemap,
-            nodes: JSON.parse(JSON.stringify(nodes)),
-            extraLinks: JSON.parse(JSON.stringify(extraLinks)),
-            linkStyles: JSON.parse(JSON.stringify(linkStyles)),
-            colorOverrides: JSON.parse(JSON.stringify(colorOverrides)),
-            urls: JSON.parse(JSON.stringify(urls)),
-            lastModified: Date.now()
-          }
-        : sitemap
-    ));
-  }, [activeSitemapId, nodes, extraLinks, linkStyles, colorOverrides, urls]);
+  // Check if Supabase is configured
+  const isSupabaseConfigured = useCallback(() => {
+    return !!(import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_ANON_KEY);
+  }, []);
 
-  const createNewSitemap = useCallback(() => {
+  // Initialize auth state
+  useEffect(() => {
+    const initAuth = async () => {
+      if (!isSupabaseConfigured()) {
+        setAuthLoading(false);
+        return;
+      }
+
+      try {
+        const session = await getSession();
+        if (session?.user) {
+          setUser(session.user);
+        }
+      } catch (error) {
+        console.error('Error initializing auth:', error);
+      } finally {
+        setAuthLoading(false);
+      }
+    };
+
+    initAuth();
+
+    // Listen for auth changes
+    if (supabase) {
+      const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+        setUser(session?.user ?? null);
+        if (session?.user) {
+          // Reload sitemaps when user logs in
+          window.location.reload();
+        }
+      });
+
+      return () => {
+        subscription.unsubscribe();
+      };
+    }
+  }, [isSupabaseConfigured]);
+
+  const handleAuthSuccess = async () => {
+    const currentUser = await getCurrentUser();
+    if (currentUser) {
+      setUser(currentUser);
+      setShowAuthModal(false);
+      // Reload sitemaps after login
+      window.location.reload();
+    }
+  };
+
+  const handleSignOut = async () => {
+    await signOut();
+    setUser(null);
+    // Clear local sitemaps and reload
+    setSitemaps([]);
+    setNodes([]);
+    setUrls([]);
+    window.location.reload();
+  };
+
+  // Sitemap management functions
+  const saveCurrentStateToActiveSitemap = useCallback(async () => {
+    if (!activeSitemapId) return;
+    
+    const updatedSitemap: SitemapData = {
+      id: activeSitemapId,
+      name: sitemaps.find(s => s.id === activeSitemapId)?.name || 'Untitled Sitemap',
+      nodes: JSON.parse(JSON.stringify(nodes)),
+      extraLinks: JSON.parse(JSON.stringify(extraLinks)),
+      linkStyles: JSON.parse(JSON.stringify(linkStyles)),
+      colorOverrides: JSON.parse(JSON.stringify(colorOverrides)),
+      urls: JSON.parse(JSON.stringify(urls)),
+      selectionGroups: JSON.parse(JSON.stringify(selectionGroups)),
+      lastModified: Date.now(),
+      createdAt: sitemaps.find(s => s.id === activeSitemapId)?.createdAt || Date.now()
+    };
+
+    // Update local state
+    setSitemaps(prev => prev.map(sitemap => 
+      sitemap.id === activeSitemapId ? updatedSitemap : sitemap
+    ));
+
+    // Save to Supabase if configured
+    if (isSupabaseConfigured()) {
+      try {
+        await saveSitemap(updatedSitemap, figures, freeLines);
+      } catch (error) {
+        console.error('Failed to save to Supabase:', error);
+        // Fallback to localStorage
+        localStorage.setItem('sitemaps', JSON.stringify(sitemaps.map(s => 
+          s.id === activeSitemapId ? updatedSitemap : s
+        )));
+      }
+    } else {
+      // Fallback to localStorage
+      localStorage.setItem('sitemaps', JSON.stringify(sitemaps.map(s => 
+        s.id === activeSitemapId ? updatedSitemap : s
+      )));
+    }
+  }, [activeSitemapId, nodes, extraLinks, linkStyles, colorOverrides, urls, figures, freeLines, selectionGroups, sitemaps, isSupabaseConfigured]);
+
+  const createNewSitemap = useCallback(async () => {
     // Save current state before creating a new sitemap
     const newSitemapId = `sitemap-${Date.now()}`;
     const now = Date.now();
 
-    setSitemaps(prev => {
-      // First, save current sitemap state if it exists
-      const updated = prev.map(sitemap => 
-        sitemap.id === activeSitemapId 
-          ? {
-              ...sitemap,
-              nodes: JSON.parse(JSON.stringify(nodes)),
-              extraLinks: JSON.parse(JSON.stringify(extraLinks)),
-              linkStyles: JSON.parse(JSON.stringify(linkStyles)),
-              colorOverrides: JSON.parse(JSON.stringify(colorOverrides)),
-              urls: JSON.parse(JSON.stringify(urls)),
-              lastModified: now
-            }
-          : sitemap
-      );
+    // Save current sitemap if it exists
+    if (activeSitemapId) {
+      await saveCurrentStateToActiveSitemap();
+    }
 
+    setSitemaps(prev => {
       // Find the highest number used in "Untitled Sitemap" names
       const untitledPattern = /^Untitled Sitemap (\d+)$/;
       let maxNumber = 0;
       
-      updated.forEach(sitemap => {
+      prev.forEach(sitemap => {
         const match = sitemap.name.match(untitledPattern);
         if (match) {
           const num = parseInt(match[1], 10);
@@ -160,7 +245,14 @@ function App() {
         createdAt: now
       };
 
-      return [...updated, newSitemap];
+      // Save to Supabase if configured
+      if (isSupabaseConfigured()) {
+        saveSitemap(newSitemap, [], []).catch(error => {
+          console.error('Failed to save new sitemap to Supabase:', error);
+        });
+      }
+
+      return [...prev, newSitemap];
     });
 
     // Set the new sitemap as active
@@ -172,15 +264,17 @@ function App() {
     setLinkStyles({});
     setColorOverrides({});
     setUrls([]);
+    setFigures([]);
+    setFreeLines([]);
     setUndoStack([]);
     setRedoStack([]);
     setSelectedNode(null);
-  }, [activeSitemapId, nodes, extraLinks, linkStyles, colorOverrides, urls]);
+  }, [activeSitemapId, saveCurrentStateToActiveSitemap, isSupabaseConfigured]);
 
-  const switchToSitemap = useCallback((sitemapId: string) => {
+  const switchToSitemap = useCallback(async (sitemapId: string) => {
     // Save current state before switching
     if (activeSitemapId) {
-      saveCurrentStateToActiveSitemap();
+      await saveCurrentStateToActiveSitemap();
     }
     
     const sitemap = sitemaps.find(s => s.id === sitemapId);
@@ -191,18 +285,45 @@ function App() {
       setLinkStyles(JSON.parse(JSON.stringify(sitemap.linkStyles)));
       setColorOverrides(JSON.parse(JSON.stringify(sitemap.colorOverrides)));
       setUrls(JSON.parse(JSON.stringify(sitemap.urls)));
+      setSelectionGroups(JSON.parse(JSON.stringify(sitemap.selectionGroups || [])));
+      
+      // Load figures and freeLines from Supabase if configured
+      if (isSupabaseConfigured()) {
+        try {
+          const { figures: loadedFigures, freeLines: loadedFreeLines } = await loadSitemapWithDrawables(sitemapId);
+          setFigures(loadedFigures);
+          setFreeLines(loadedFreeLines);
+        } catch (error) {
+          console.error('Failed to load figures/freeLines from Supabase:', error);
+          setFigures([]);
+          setFreeLines([]);
+        }
+      } else {
+        setFigures([]);
+        setFreeLines([]);
+      }
+      
       // Clear history on switch
       setUndoStack([]);
       setRedoStack([]);
       setSelectedNode(null);
     }
-  }, [sitemaps, activeSitemapId, saveCurrentStateToActiveSitemap]);
+  }, [sitemaps, activeSitemapId, saveCurrentStateToActiveSitemap, isSupabaseConfigured]);
 
-  const deleteSitemap = useCallback((sitemapId: string) => {
+  const deleteSitemap = useCallback(async (sitemapId: string) => {
     if (sitemaps.length <= 1) {
       // Can't delete the last sitemap - just create a new empty one
-      createNewSitemap();
+      await createNewSitemap();
       return;
+    }
+    
+    // Delete from Supabase if configured
+    if (isSupabaseConfigured()) {
+      try {
+        await deleteSitemapFromSupabase(sitemapId);
+      } catch (error) {
+        console.error('Failed to delete sitemap from Supabase:', error);
+      }
     }
     
     const filtered = sitemaps.filter(s => s.id !== sitemapId);
@@ -210,50 +331,146 @@ function App() {
     
     // If deleting active, switch to first remaining
     if (activeSitemapId === sitemapId) {
-      switchToSitemap(filtered[0].id);
+      await switchToSitemap(filtered[0].id);
     }
-  }, [sitemaps, activeSitemapId, createNewSitemap, switchToSitemap]);
+  }, [sitemaps, activeSitemapId, createNewSitemap, switchToSitemap, isSupabaseConfigured]);
 
-  const renameSitemap = useCallback((sitemapId: string, newName: string) => {
+  const renameSitemap = useCallback(async (sitemapId: string, newName: string) => {
     if (!newName.trim()) return; // Still validate non-empty
-    setSitemaps(prev => prev.map(s => 
-      s.id === sitemapId ? { ...s, name: newName, lastModified: Date.now() } : s
-    ));
-  }, []);
-
-  // Load from localStorage on mount
-  useEffect(() => {
-    const savedSitemaps = localStorage.getItem('sitemaps');
-    const savedActiveId = localStorage.getItem('activeSitemapId');
     
-    if (savedSitemaps) {
-      const parsedSitemaps = JSON.parse(savedSitemaps) as SitemapData[];
-      setSitemaps(parsedSitemaps);
-      if (savedActiveId) {
-        setActiveSitemapId(savedActiveId);
-      }
-    } else {
-      // Initialize with one empty sitemap
-      const initialSitemap: SitemapData = {
-        id: `sitemap-${Date.now()}`,
-        name: 'Untitled Sitemap 1',  // Changed from 'Untitled Sitemap'
-        nodes: [],
-        extraLinks: [],
-        linkStyles: {},
-        colorOverrides: {},
-        urls: [],
-        lastModified: Date.now(),
-        createdAt: Date.now()
-      };
-      setSitemaps([initialSitemap]);
-      setActiveSitemapId(initialSitemap.id);
-    }
-    setInitialized(true);
-  }, []);
+    const updatedSitemap = sitemaps.find(s => s.id === sitemapId);
+    if (!updatedSitemap) return;
 
-  // Save to localStorage whenever sitemaps or activeId changes
+    const renamed: SitemapData = {
+      ...updatedSitemap,
+      name: newName,
+      lastModified: Date.now()
+    };
+
+    setSitemaps(prev => prev.map(s => 
+      s.id === sitemapId ? renamed : s
+    ));
+
+    // Save to Supabase if configured
+    if (isSupabaseConfigured()) {
+      try {
+        await saveSitemap(renamed, figures, freeLines);
+      } catch (error) {
+        console.error('Failed to save renamed sitemap to Supabase:', error);
+      }
+    }
+  }, [sitemaps, isSupabaseConfigured, figures, freeLines]);
+
+  // Load sitemaps on mount (from Supabase or localStorage)
+  useEffect(() => {
+    const loadData = async () => {
+      if (isSupabaseConfigured()) {
+        try {
+          const loadedSitemaps = await loadSitemaps();
+          const savedActiveId = localStorage.getItem('activeSitemapId');
+          
+          if (loadedSitemaps.length > 0) {
+            setSitemaps(loadedSitemaps);
+            
+            // Use saved active ID if it exists in loaded sitemaps, otherwise use first
+            const activeId = savedActiveId && loadedSitemaps.find(s => s.id === savedActiveId)
+              ? savedActiveId
+              : loadedSitemaps[0].id;
+            
+            const activeSitemap = loadedSitemaps.find(s => s.id === activeId) || loadedSitemaps[0];
+            
+            // Load the active sitemap's drawables
+            const { figures: loadedFigures, freeLines: loadedFreeLines } = await loadSitemapWithDrawables(activeId);
+            setFigures(loadedFigures);
+            setFreeLines(loadedFreeLines);
+            setActiveSitemapId(activeId);
+            setNodes(JSON.parse(JSON.stringify(activeSitemap.nodes)));
+            setExtraLinks(JSON.parse(JSON.stringify(activeSitemap.extraLinks)));
+            setLinkStyles(JSON.parse(JSON.stringify(activeSitemap.linkStyles)));
+            setColorOverrides(JSON.parse(JSON.stringify(activeSitemap.colorOverrides)));
+            setUrls(JSON.parse(JSON.stringify(activeSitemap.urls)));
+            setSelectionGroups(JSON.parse(JSON.stringify(activeSitemap.selectionGroups || [])));
+          } else {
+            // No sitemaps in Supabase, initialize with empty one
+            const initialSitemap: SitemapData = {
+              id: `sitemap-${Date.now()}`,
+              name: 'Untitled Sitemap 1',
+              nodes: [],
+              extraLinks: [],
+              linkStyles: {},
+              colorOverrides: {},
+              urls: [],
+              lastModified: Date.now(),
+              createdAt: Date.now()
+            };
+            setSitemaps([initialSitemap]);
+            setActiveSitemapId(initialSitemap.id);
+          }
+        } catch (error) {
+          console.error('Failed to load from Supabase, falling back to localStorage:', error);
+          // Fallback to localStorage
+          const savedSitemaps = localStorage.getItem('sitemaps');
+          const savedActiveId = localStorage.getItem('activeSitemapId');
+          
+          if (savedSitemaps) {
+            const parsedSitemaps = JSON.parse(savedSitemaps) as SitemapData[];
+            setSitemaps(parsedSitemaps);
+            if (savedActiveId) {
+              setActiveSitemapId(savedActiveId);
+            }
+          } else {
+            const initialSitemap: SitemapData = {
+              id: `sitemap-${Date.now()}`,
+              name: 'Untitled Sitemap 1',
+              nodes: [],
+              extraLinks: [],
+              linkStyles: {},
+              colorOverrides: {},
+              urls: [],
+              lastModified: Date.now(),
+              createdAt: Date.now()
+            };
+            setSitemaps([initialSitemap]);
+            setActiveSitemapId(initialSitemap.id);
+          }
+        }
+      } else {
+        // Use localStorage fallback
+        const savedSitemaps = localStorage.getItem('sitemaps');
+        const savedActiveId = localStorage.getItem('activeSitemapId');
+        
+        if (savedSitemaps) {
+          const parsedSitemaps = JSON.parse(savedSitemaps) as SitemapData[];
+          setSitemaps(parsedSitemaps);
+          if (savedActiveId) {
+            setActiveSitemapId(savedActiveId);
+          }
+        } else {
+          const initialSitemap: SitemapData = {
+            id: `sitemap-${Date.now()}`,
+            name: 'Untitled Sitemap 1',
+            nodes: [],
+            extraLinks: [],
+            linkStyles: {},
+            colorOverrides: {},
+            urls: [],
+            lastModified: Date.now(),
+            createdAt: Date.now()
+          };
+          setSitemaps([initialSitemap]);
+          setActiveSitemapId(initialSitemap.id);
+        }
+      }
+      setInitialized(true);
+    };
+
+    loadData();
+  }, [isSupabaseConfigured]);
+
+  // Save to localStorage as backup whenever sitemaps or activeId changes
   useEffect(() => {
     if (initialized && sitemaps.length > 0) {
+      // Always save to localStorage as backup
       localStorage.setItem('sitemaps', JSON.stringify(sitemaps));
       if (activeSitemapId) {
         localStorage.setItem('activeSitemapId', activeSitemapId);
@@ -270,7 +487,7 @@ function App() {
     }, 1000); // Debounce auto-save
 
     return () => clearTimeout(timeoutId);
-  }, [nodes, extraLinks, linkStyles, colorOverrides, urls, initialized, activeSitemapId, saveCurrentStateToActiveSitemap]);
+  }, [nodes, extraLinks, linkStyles, colorOverrides, urls, figures, freeLines, initialized, activeSitemapId, saveCurrentStateToActiveSitemap]);
 
   // Debug focusedNode changes
   useEffect(() => {
@@ -282,8 +499,8 @@ function App() {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Search
-      if (e.ctrlKey && e.key === 'f') {
+      // Search - support both Ctrl (Windows/Linux) and Cmd (Mac)
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
         e.preventDefault();
         setShowSearch(true);
         return;
@@ -415,27 +632,17 @@ function App() {
       const newSitemapId = `sitemap-${Date.now()}`;
       const now = Date.now();
 
-      setSitemaps(prev => {
-        // First, save current sitemap state if it exists
-        const updated = prev.map(sitemap => 
-          sitemap.id === activeSitemapId 
-            ? {
-                ...sitemap,
-                nodes: JSON.parse(JSON.stringify(nodes)),
-                extraLinks: JSON.parse(JSON.stringify(extraLinks)),
-                linkStyles: JSON.parse(JSON.stringify(linkStyles)),
-                colorOverrides: JSON.parse(JSON.stringify(colorOverrides)),
-                urls: JSON.parse(JSON.stringify(urls)),
-                lastModified: now
-              }
-            : sitemap
-        );
+      // Save current sitemap if it exists
+      if (activeSitemapId) {
+        await saveCurrentStateToActiveSitemap();
+      }
 
+      setSitemaps(prev => {
         // Find the highest number used in "Untitled Sitemap" names
         const untitledPattern = /^Untitled Sitemap (\d+)$/;
         let maxNumber = 0;
         
-        updated.forEach(sitemap => {
+        prev.forEach(sitemap => {
           const match = sitemap.name.match(untitledPattern);
           if (match) {
             const num = parseInt(match[1], 10);
@@ -455,7 +662,14 @@ function App() {
           createdAt: now
         };
 
-        return [...updated, newSitemap];
+        // Save to Supabase if configured
+        if (isSupabaseConfigured()) {
+          saveSitemap(newSitemap, [], []).catch(error => {
+            console.error('Failed to save new sitemap to Supabase:', error);
+          });
+        }
+
+        return [...prev, newSitemap];
       });
 
       // Set the new sitemap as active and load its data
@@ -465,6 +679,8 @@ function App() {
       setExtraLinks([]);
       setLinkStyles({});
       setColorOverrides({});
+      setFigures([]);
+      setFreeLines([]);
       setUndoStack([]);
       setRedoStack([]);
       setSelectedNode(null);
@@ -684,6 +900,27 @@ function App() {
     handleNodesUpdate(updated);
   }
 
+  // ===== Free-form selection groups (nodes + text figures) =====
+  const createSelectionGroup = useCallback((memberNodeIds: string[], memberFigureIds: string[], name?: string) => {
+    const id = `sg-${Date.now()}`;
+    const group: SelectionGroup = { id, name: name || `Group ${selectionGroups.length + 1}`, memberNodeIds, memberFigureIds };
+    setSelectionGroups(prev => [...prev, group]);
+  }, [selectionGroups.length]);
+
+  const ungroupSelection = useCallback((memberNodeIds: string[], memberFigureIds: string[]) => {
+    setSelectionGroups(prev => prev.map(g => ({
+      ...g,
+      memberNodeIds: g.memberNodeIds.filter(id => !memberNodeIds.includes(id)),
+      memberFigureIds: g.memberFigureIds.filter(id => !memberFigureIds.includes(id)),
+    })).filter(g => g.memberNodeIds.length > 0 || g.memberFigureIds.length > 0));
+  }, []);
+
+  const [snapToGuides, setSnapToGuides] = useState<boolean>(() => {
+    const v = localStorage.getItem('snapToGuides');
+    return v ? v === '1' : true;
+  });
+  useEffect(() => { localStorage.setItem('snapToGuides', snapToGuides ? '1' : '0'); }, [snapToGuides]);
+
   const handleAddNode = (parentId: string | null = null) => {
     const newNodeId = `node-${Date.now()}`;
     const parentNode = parentId ? nodes.find(n => n.id === parentId) : null;
@@ -872,7 +1109,7 @@ function App() {
 
   return (
     <div className="h-screen bg-white flex flex-col overflow-hidden">
-      <header className="border-b border-gray-200 bg-white flex-shrink-0">
+      <header className="border-b border-gray-200 bg-white flex-shrink-0 relative z-50">
         <div className="max-w-screen-5xl mx-auto px-6 py-5">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3 relative">
@@ -909,6 +1146,7 @@ function App() {
                   )}
                 </div>
               )}
+              {/* Align Guides toggle removed per request */}
               <button
                 onClick={() => setShowSettings(!showSettings)}
                 className="px-4 py-2 text-sm font-medium border rounded-lg border-gray-300 hover:border-gray-400 transition-colors flex items-center gap-2"
@@ -927,6 +1165,39 @@ function App() {
                 <HelpCircle className="w-4 h-4" strokeWidth={1.5} />
                 Help
               </button>
+              
+              {/* Auth Section */}
+              {isSupabaseConfigured() && (
+                <div className="flex items-center gap-2 ml-2 pl-2 border-l border-gray-300">
+                  {authLoading ? (
+                    <div className="px-3 py-2 text-sm text-gray-500">Loading...</div>
+                  ) : user ? (
+                    <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700">
+                        <User className="w-4 h-4" strokeWidth={1.5} />
+                        <span className="max-w-[120px] truncate">{user.email}</span>
+                      </div>
+                      <button
+                        onClick={handleSignOut}
+                        className="px-3 py-2 text-sm font-medium border rounded-lg border-gray-300 hover:border-gray-400 hover:bg-gray-50 transition-colors flex items-center gap-2"
+                        title="Sign Out"
+                      >
+                        <LogOut className="w-4 h-4" strokeWidth={1.5} />
+                        Sign Out
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => setShowAuthModal(true)}
+                      className="px-4 py-2 text-sm font-medium text-white bg-[#384E82]/90 hover:bg-[#384E82] text-white rounded-lg transition-colors flex items-center gap-2"
+                      title="Sign In / Sign Up"
+                    >
+                      <LogIn className="w-4 h-4" strokeWidth={1.5} />
+                      Sign In
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -1217,6 +1488,10 @@ function App() {
               <SitemapCanvas
                 ref={sitemapCanvasRef}
                 nodes={nodes}
+                selectionGroups={selectionGroups}
+                onCreateSelectionGroup={(nodeIds, figureIds, name) => createSelectionGroup(nodeIds, figureIds, name)}
+                onUngroupSelection={(nodeIds, figureIds) => ungroupSelection(nodeIds, figureIds)}
+                snapToGuides={snapToGuides}
                 layoutType={layoutType}
                 extraLinks={extraLinks}
                 onNodeClick={node => {
@@ -1485,6 +1760,15 @@ function App() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Auth Modal */}
+      {isSupabaseConfigured() && (
+        <AuthModal
+          isOpen={showAuthModal}
+          onClose={() => setShowAuthModal(false)}
+          onSuccess={handleAuthSuccess}
+        />
       )}
 
       {/* Delete Confirmation Modal */}

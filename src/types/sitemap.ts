@@ -9,6 +9,7 @@ export interface SitemapData {
   linkStyles: Record<string, LinkStyle>;
   colorOverrides: Record<string, { customColor?: string; textColor?: string }>;
   urls: string[];
+  selectionGroups?: SelectionGroup[];
   lastModified: number;
   createdAt: number;
 }
@@ -16,5 +17,12 @@ export interface SitemapData {
 export interface SitemapState {
   sitemaps: SitemapData[];
   activeSitemapId: string | null;
+}
+
+export interface SelectionGroup {
+  id: string;
+  name: string;
+  memberNodeIds: string[];
+  memberFigureIds: string[];
 }
 

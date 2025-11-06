@@ -146,22 +146,4 @@ export async function parseCsvFile(file: File): Promise<CsvParseResult> {
   });
 }
 
-export function generateSampleCsv(): string {
-  return `Page Title,Page URL,Group,Content Type,Last Updated
-Home,https://example.com,root,Landing,05-01-2025
-About Us,https://example.com/about,company,Page,12-02-2025
-Our Team,https://example.com/about/team,company,Page,13-02-2025
-Careers,https://example.com/about/careers,company,Page,18-02-2025
-Products,https://example.com/products,products,Listing,01-03-2025
-Product A,https://example.com/products/product-a,products,Product,03-03-2025
-Product B,https://example.com/products/product-b,products,Product,04-03-2025
-Blog,https://example.com/blog,content,Index,10-03-2025
-Blog Post 1,https://example.com/blog/post-1,content,Article,11-03-2025
-Blog Post 2,https://example.com/blog/post-2,content,Article,12-03-2025
-Support,https://example.com/support,support,Hub,15-03-2025
-FAQ,https://example.com/support/faq,support,FAQ,16-03-2025
-Contact,https://example.com/support/contact,support,Page,16-03-2025
-Documentation,https://example.com/docs,technical,Docs,17-03-2025
-Getting Started,https://example.com/docs/getting-started,technical,Guide,17-03-2025
-API Reference,https://example.com/docs/api,technical,Reference,18-03-2025`;
-}
+// Removed unused generateSampleCsv()
