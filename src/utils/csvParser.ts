@@ -77,15 +77,14 @@ export async function parseCsvFile(file: File): Promise<CsvParseResult> {
             const contentType = contentTypeColumn ? String(row[contentTypeColumn] || '').trim() : undefined;
             const lastUpdatedRaw = lastUpdatedColumn ? String(row[lastUpdatedColumn] || '').trim() : undefined;
 
-            if (!title) {
-              errors.push(`Row ${index + 1}: Missing title`);
-              return;
-            }
-
+            // Allow empty title - use URL as fallback
             if (!url) {
               errors.push(`Row ${index + 1}: Missing URL`);
               return;
             }
+            
+            // Use URL as title if title is missing
+            const safeTitle = title || url;
 
             // Basic URL validation
             try {
@@ -131,12 +130,13 @@ export async function parseCsvFile(file: File): Promise<CsvParseResult> {
               }
             }
 
-            data.push({ title, url, group, contentType, lastUpdated });
+            data.push({ title: safeTitle, url, group, contentType, lastUpdated });
           } catch (error) {
             errors.push(`Row ${index + 1}: Error parsing data`);
           }
         });
 
+        console.log(`CSV parsed: ${data.length} valid rows, ${errors.length} errors out of ${results.data.length} total rows`);
         resolve({ data, errors });
       },
       error: (error) => {
@@ -145,5 +145,3 @@ export async function parseCsvFile(file: File): Promise<CsvParseResult> {
     });
   });
 }
-
-// Removed unused generateSampleCsv()

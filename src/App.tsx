@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { flushSync } from 'react-dom';
+import { flushSync, createPortal } from 'react-dom';
 import { Download, Trash2, ChevronDown, ChevronUp, Menu, X, Search, HelpCircle, Edit2, LogIn, LogOut, User } from 'lucide-react';
 import { SitemapCanvas } from './components/SitemapCanvas';
 import { SearchOverlay } from './components/SearchOverlay';
@@ -26,37 +26,78 @@ type HistorySnapshot = {
   colorOverrides: Record<string, { customColor?: string; textColor?: string }>;
   figures: Figure[];
   freeLines: FreeLine[];
+  selectionGroups: SelectionGroup[];
+};
+
+// Tooltip rendered to body to avoid clipping by parent containers
+const PortalTooltip = ({ anchorRect, text }: { anchorRect: DOMRect; text: string }) => {
+  const style: React.CSSProperties = {
+    position: 'fixed',
+    left: anchorRect.left,
+    top: anchorRect.bottom + 6,
+    zIndex: 1000,
+    pointerEvents: 'none',
+  };
+  return createPortal(
+    <div style={style}>
+      <div className="bg-gray-900 text-white text-xs rounded py-1 px-2 whitespace-nowrap relative">
+        {text}
+        <div className="absolute -top-1 left-2 w-2 h-2 bg-gray-900 transform rotate-45"></div>
+      </div>
+    </div>,
+    document.body
+  );
 };
 
 // Shortcut display component
-const ShortcutItem = ({ keys, label, info }: { keys: string; label: string; info?: string }) => (
-  <div className="flex items-center justify-between py-2 px-3 hover:bg-gray-50 rounded-lg transition-colors group">
-    <div className="flex items-center gap-2">
-      <span className="text-sm text-gray-700">{label}</span>
-      {info && (
-        <div className="relative inline-block">
-          <HelpCircle className="w-3.5 h-3.5 text-gray-400" strokeWidth={1.5} />
-          <div className="hidden group-hover:block absolute left-0 top-6 z-10 pointer-events-none">
-            <div className="bg-gray-900 text-white text-xs rounded py-1 px-2 whitespace-nowrap relative">
-              {info}
-              <div className="absolute -top-1 left-2 w-2 h-2 bg-gray-900 transform rotate-45"></div>
-            </div>
-          </div>
-        </div>
-      )}
+const ShortcutItem = ({ keys, label, info }: { keys: string; label: string; info?: string }) => {
+  const helpRef = useRef<HTMLSpanElement | null>(null);
+  const [showTip, setShowTip] = useState(false);
+  const [rect, setRect] = useState<DOMRect | null>(null);
+
+  useEffect(() => {
+    if (!showTip || !helpRef.current) return;
+    const update = () => {
+      if (helpRef.current) setRect(helpRef.current.getBoundingClientRect());
+    };
+    update();
+    window.addEventListener('scroll', update, true);
+    window.addEventListener('resize', update);
+    return () => {
+      window.removeEventListener('scroll', update, true);
+      window.removeEventListener('resize', update);
+    };
+  }, [showTip]);
+
+  return (
+    <div className="flex items-center justify-between py-2 px-3 hover:bg-gray-50 rounded-lg transition-colors group">
+      <div className="flex items-center gap-2">
+        <span className="text-sm text-gray-700">{label}</span>
+        {info && (
+          <span
+            ref={helpRef}
+            onMouseEnter={() => setShowTip(true)}
+            onMouseLeave={() => setShowTip(false)}
+            className="inline-flex items-center"
+          >
+            <HelpCircle className="w-3.5 h-3.5 text-gray-400" strokeWidth={1.5} />
+            {showTip && rect && <PortalTooltip anchorRect={rect} text={info} />}
+          </span>
+        )}
+      </div>
+      <div className="flex items-center gap-1">
+        {keys.split(' + ').map((key, idx) => (
+          <span key={idx}>
+            {idx > 0 && <span className="text-gray-400 mx-1">+</span>}
+            <kbd className="px-2 py-1 bg-gray-100 border border-gray-300 rounded text-xs font-mono text-gray-700 group-hover:bg-gray-200 transition-colors min-w-[32px] text-center">
+              {key}
+            </kbd>
+          </span>
+        ))}
+      </div>
     </div>
-    <div className="flex items-center gap-1">
-      {keys.split(' + ').map((key, idx) => (
-        <span key={idx}>
-          {idx > 0 && <span className="text-gray-400 mx-1">+</span>}
-          <kbd className="px-2 py-1 bg-gray-100 border border-gray-300 rounded text-xs font-mono text-gray-700 group-hover:bg-gray-200 transition-colors min-w-[32px] text-center">
-            {key}
-          </kbd>
-        </span>
-      ))}
-    </div>
-  </div>
-);
+  );
+};
 
 function App() {
   // Sitemap management state
@@ -71,6 +112,7 @@ function App() {
   // Local working state (synced with active sitemap)
   const [urls, setUrls] = useState<string[]>([]);
   const [nodes, setNodes] = useState<PageNode[]>([]);
+  const isUploadingCsvRef = useRef(false);
   const [extraLinks, setExtraLinks] = useState<Array<{ sourceId: string; targetId: string }>>([]);
   const [undoStack, setUndoStack] = useState<HistorySnapshot[]>([]);
   const [redoStack, setRedoStack] = useState<HistorySnapshot[]>([]);
@@ -104,16 +146,80 @@ function App() {
     colorOverrides: JSON.parse(JSON.stringify(colorOverrides)),
     figures: JSON.parse(JSON.stringify(figures)),
     freeLines: JSON.parse(JSON.stringify(freeLines)),
-  }), [nodes, extraLinks, linkStyles, colorOverrides, figures, freeLines]);
+    selectionGroups: JSON.parse(JSON.stringify(selectionGroups)),
+  }), [nodes, extraLinks, linkStyles, colorOverrides, figures, freeLines, selectionGroups]);
+
+  // Refresh sitemaps after auth changes. Merge local sitemaps with remote so nothing disappears post-login.
+  const refreshSitemapsFromSupabase = useCallback(async () => {
+    try {
+      const remote = await loadSitemaps();
+      const savedActiveId = localStorage.getItem('activeSitemapId');
+
+      // Merge local sitemaps not present on server (e.g., created pre-login)
+      let merged = remote;
+      try {
+        const localStr = localStorage.getItem('sitemaps');
+        if (localStr) {
+          const localList = JSON.parse(localStr) as SitemapData[];
+          const remoteIds = new Set(remote.map(s => s.id));
+          const toMerge = localList.filter(s => !remoteIds.has(s.id));
+          if (toMerge.length) merged = [...toMerge, ...remote];
+        }
+      } catch (err) {
+        console.warn('Failed to read local sitemaps for merge:', err);
+      }
+
+      if (merged.length === 0) return; // keep current state
+
+      setSitemaps(merged);
+      const activeId = savedActiveId && merged.find(s => s.id === savedActiveId)
+        ? savedActiveId
+        : merged[0].id;
+      const active = merged.find(s => s.id === activeId) || merged[0];
+
+      const { figures: figs, freeLines: lines } = await loadSitemapWithDrawables(activeId);
+      setFigures(figs);
+      setFreeLines(lines);
+      setActiveSitemapId(activeId);
+      setNodes(JSON.parse(JSON.stringify(active.nodes)));
+      setExtraLinks(JSON.parse(JSON.stringify(active.extraLinks)));
+      setLinkStyles(JSON.parse(JSON.stringify(active.linkStyles)));
+      setColorOverrides(JSON.parse(JSON.stringify(active.colorOverrides)));
+      setUrls(JSON.parse(JSON.stringify(active.urls)));
+      setSelectionGroups(JSON.parse(JSON.stringify(active.selectionGroups || [])));
+
+      // Persist merged immediately for reliability across refresh
+      try {
+        localStorage.setItem('sitemaps', JSON.stringify(merged));
+        localStorage.setItem('activeSitemapId', activeId);
+      } catch {}
+    } catch (e) {
+      console.error('Failed to refresh sitemaps after auth change:', e);
+    }
+  }, []);
 
   // Check if Supabase is configured
   const isSupabaseConfigured = useCallback(() => {
-    return !!(import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_ANON_KEY);
+    return !!(import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_ANON_KEY && supabase);
   }, []);
 
-  // Initialize auth state
+  // Treat auth as ready if Supabase isn't configured or client isn't initialized (kept for future use)
+  // const authReady = !isSupabaseConfigured() || !supabase || !authLoading;
+
+  // Initialize auth state (auto-prompt sign-in if configured but no session)
   useEffect(() => {
     const initAuth = async () => {
+      // Always show local immediately to avoid blank UI on refresh
+      try {
+        const localStrEarly = localStorage.getItem('sitemaps');
+        const localActiveEarly = localStorage.getItem('activeSitemapId');
+        if (localStrEarly) {
+          const localList = JSON.parse(localStrEarly) as SitemapData[];
+          setSitemaps(localList);
+          if (localActiveEarly) setActiveSitemapId(localActiveEarly);
+        }
+      } catch {}
+
       if (!isSupabaseConfigured()) {
         setAuthLoading(false);
         return;
@@ -123,6 +229,8 @@ function App() {
         const session = await getSession();
         if (session?.user) {
           setUser(session.user);
+        } else {
+          setShowAuthModal(true);
         }
       } catch (error) {
         console.error('Error initializing auth:', error);
@@ -135,11 +243,10 @@ function App() {
 
     // Listen for auth changes
     if (supabase) {
-      const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
         setUser(session?.user ?? null);
         if (session?.user) {
-          // Reload sitemaps when user logs in
-          window.location.reload();
+          await refreshSitemapsFromSupabase();
         }
       });
 
@@ -154,19 +261,67 @@ function App() {
     if (currentUser) {
       setUser(currentUser);
       setShowAuthModal(false);
-      // Reload sitemaps after login
-      window.location.reload();
+      await refreshSitemapsFromSupabase();
     }
   };
 
   const handleSignOut = async () => {
-    await signOut();
-    setUser(null);
-    // Clear local sitemaps and reload
-    setSitemaps([]);
-    setNodes([]);
-    setUrls([]);
-    window.location.reload();
+    try {
+      await signOut();
+    } catch (e) {
+      console.error('signOut() failed:', e);
+    } finally {
+      setUser(null);
+      setShowAuthModal(false);
+
+      // Clear Supabase tokens so the auth listener doesn't immediately repopulate user
+      try {
+        const toClear: string[] = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i) as string;
+          if (/^sb-.*-(auth-token|csrf-token)$/i.test(k) || k.toLowerCase().includes('supabase')) {
+            toClear.push(k);
+          }
+        }
+        toClear.forEach(k => localStorage.removeItem(k));
+      } catch {}
+
+      // Restore local sitemaps (no wipe)
+      try {
+        const str = localStorage.getItem('sitemaps');
+        if (str) {
+          const list = JSON.parse(str) as SitemapData[];
+          setSitemaps(list);
+          const savedActiveId = localStorage.getItem('activeSitemapId');
+          const activeId = savedActiveId && list.find(s => s.id === savedActiveId)
+            ? savedActiveId
+            : (list[0]?.id ?? null);
+
+          if (activeId) {
+            const active = list.find(s => s.id === activeId)!;
+            setActiveSitemapId(activeId);
+            setNodes(JSON.parse(JSON.stringify(active.nodes)));
+            setExtraLinks(JSON.parse(JSON.stringify(active.extraLinks)));
+            setLinkStyles(JSON.parse(JSON.stringify(active.linkStyles)));
+            setColorOverrides(JSON.parse(JSON.stringify(active.colorOverrides)));
+            setUrls(JSON.parse(JSON.stringify(active.urls)));
+            setSelectionGroups(JSON.parse(JSON.stringify(active.selectionGroups || [])));
+          } else {
+            setActiveSitemapId(null);
+            setNodes([]); setExtraLinks([]); setLinkStyles({}); setColorOverrides({});
+            setUrls([]); setSelectionGroups([]); setFigures([]); setFreeLines([]);
+          }
+        } else {
+          setSitemaps([]);
+          setActiveSitemapId(null);
+          setNodes([]); setExtraLinks([]); setLinkStyles({}); setColorOverrides({});
+          setUrls([]); setSelectionGroups([]); setFigures([]); setFreeLines([]);
+        }
+        setUndoStack([]); setRedoStack([]); setSelectedNode(null);
+      } catch (e) {
+        console.error('Restore local sitemaps after sign-out failed:', e);
+      }
+    }
   };
 
   // Sitemap management functions
@@ -191,8 +346,8 @@ function App() {
       sitemap.id === activeSitemapId ? updatedSitemap : sitemap
     ));
 
-    // Save to Supabase if configured
-    if (isSupabaseConfigured()) {
+    // Save to Supabase if configured and client exists
+    if (isSupabaseConfigured() && supabase) {
       try {
         await saveSitemap(updatedSitemap, figures, freeLines);
       } catch (error) {
@@ -211,14 +366,18 @@ function App() {
   }, [activeSitemapId, nodes, extraLinks, linkStyles, colorOverrides, urls, figures, freeLines, selectionGroups, sitemaps, isSupabaseConfigured]);
 
   const createNewSitemap = useCallback(async () => {
-    // Save current state before creating a new sitemap
+    console.log('Create New Sitemap: start');
+    
+    // Don't await save - do it in background to avoid blocking
+    if (activeSitemapId) {
+      saveCurrentStateToActiveSitemap().catch(error => {
+        console.error('Failed to save current sitemap before creating new one:', error);
+      });
+    }
+
+    // Create new sitemap immediately
     const newSitemapId = `sitemap-${Date.now()}`;
     const now = Date.now();
-
-    // Save current sitemap if it exists
-    if (activeSitemapId) {
-      await saveCurrentStateToActiveSitemap();
-    }
 
     setSitemaps(prev => {
       // Find the highest number used in "Untitled Sitemap" names
@@ -245,20 +404,28 @@ function App() {
         createdAt: now
       };
 
-      // Save to Supabase if configured
-      if (isSupabaseConfigured()) {
+      const next = [...prev, newSitemap];
+      
+      // Save to localStorage immediately
+      try {
+        localStorage.setItem('sitemaps', JSON.stringify(next));
+        localStorage.setItem('activeSitemapId', newSitemapId);
+      } catch (e) {
+        console.warn('Create New Sitemap: failed to write localStorage backup', e);
+      }
+
+      // Save to Supabase in background (don't block)
+      if (isSupabaseConfigured() && supabase) {
         saveSitemap(newSitemap, [], []).catch(error => {
           console.error('Failed to save new sitemap to Supabase:', error);
         });
       }
 
-      return [...prev, newSitemap];
+      return next;
     });
 
-    // Set the new sitemap as active
+    // Set the new sitemap as active and reset state immediately
     setActiveSitemapId(newSitemapId);
-    
-    // Reset all state
     setNodes([]);
     setExtraLinks([]);
     setLinkStyles({});
@@ -268,72 +435,92 @@ function App() {
     setFreeLines([]);
     setUndoStack([]);
     setRedoStack([]);
+    setSelectionGroups([]);
     setSelectedNode(null);
+    
+    console.log('Create New Sitemap: completed', newSitemapId);
   }, [activeSitemapId, saveCurrentStateToActiveSitemap, isSupabaseConfigured]);
 
   const switchToSitemap = useCallback(async (sitemapId: string) => {
-    // Save current state before switching
-    if (activeSitemapId) {
-      await saveCurrentStateToActiveSitemap();
-    }
-    
     const sitemap = sitemaps.find(s => s.id === sitemapId);
-    if (sitemap) {
-      setActiveSitemapId(sitemapId);
-      setNodes(JSON.parse(JSON.stringify(sitemap.nodes)));
-      setExtraLinks(JSON.parse(JSON.stringify(sitemap.extraLinks)));
-      setLinkStyles(JSON.parse(JSON.stringify(sitemap.linkStyles)));
-      setColorOverrides(JSON.parse(JSON.stringify(sitemap.colorOverrides)));
-      setUrls(JSON.parse(JSON.stringify(sitemap.urls)));
-      setSelectionGroups(JSON.parse(JSON.stringify(sitemap.selectionGroups || [])));
-      
-      // Load figures and freeLines from Supabase if configured
-      if (isSupabaseConfigured()) {
-        try {
-          const { figures: loadedFigures, freeLines: loadedFreeLines } = await loadSitemapWithDrawables(sitemapId);
-          setFigures(loadedFigures);
-          setFreeLines(loadedFreeLines);
-        } catch (error) {
-          console.error('Failed to load figures/freeLines from Supabase:', error);
-          setFigures([]);
-          setFreeLines([]);
-        }
-      } else {
-        setFigures([]);
-        setFreeLines([]);
-      }
-      
-      // Clear history on switch
-      setUndoStack([]);
-      setRedoStack([]);
-      setSelectedNode(null);
+    if (!sitemap) return;
+
+    // Save current in background (don't block)
+    if (activeSitemapId && activeSitemapId !== sitemapId) {
+      saveCurrentStateToActiveSitemap().catch(err =>
+        console.error('Save before switch failed:', err)
+      );
+    }
+
+    // Immediate UI update
+    setActiveSitemapId(sitemapId);
+    setNodes(JSON.parse(JSON.stringify(sitemap.nodes)));
+    setExtraLinks(JSON.parse(JSON.stringify(sitemap.extraLinks)));
+    setLinkStyles(JSON.parse(JSON.stringify(sitemap.linkStyles)));
+    setColorOverrides(JSON.parse(JSON.stringify(sitemap.colorOverrides)));
+    setUrls(JSON.parse(JSON.stringify(sitemap.urls)));
+    setSelectionGroups(JSON.parse(JSON.stringify(sitemap.selectionGroups || [])));
+    setUndoStack([]);
+    setRedoStack([]);
+    setSelectedNode(null);
+    try { localStorage.setItem('activeSitemapId', sitemapId); } catch {}
+
+    // Load drawables in background
+    if (isSupabaseConfigured() && supabase) {
+      loadSitemapWithDrawables(sitemapId)
+        .then(({ figures: f, freeLines: fl }) => { setFigures(f); setFreeLines(fl); })
+        .catch(err => { console.error('Load drawables on switch:', err); setFigures([]); setFreeLines([]); });
+    } else {
+      setFigures([]);
+      setFreeLines([]);
     }
   }, [sitemaps, activeSitemapId, saveCurrentStateToActiveSitemap, isSupabaseConfigured]);
 
   const deleteSitemap = useCallback(async (sitemapId: string) => {
     if (sitemaps.length <= 1) {
-      // Can't delete the last sitemap - just create a new empty one
-      await createNewSitemap();
+      createNewSitemap();
       return;
     }
-    
-    // Delete from Supabase if configured
-    if (isSupabaseConfigured()) {
-      try {
-        await deleteSitemapFromSupabase(sitemapId);
-      } catch (error) {
-        console.error('Failed to delete sitemap from Supabase:', error);
-      }
-    }
-    
+
+    // Immediate UI update
     const filtered = sitemaps.filter(s => s.id !== sitemapId);
     setSitemaps(filtered);
-    
-    // If deleting active, switch to first remaining
-    if (activeSitemapId === sitemapId) {
-      await switchToSitemap(filtered[0].id);
+    try { localStorage.setItem('sitemaps', JSON.stringify(filtered)); } catch {}
+
+    // If deleting active, switch instantly to first remaining
+    if (activeSitemapId === sitemapId && filtered.length > 0) {
+      const next = filtered[0];
+      setActiveSitemapId(next.id);
+      setNodes(JSON.parse(JSON.stringify(next.nodes)));
+      setExtraLinks(JSON.parse(JSON.stringify(next.extraLinks)));
+      setLinkStyles(JSON.parse(JSON.stringify(next.linkStyles)));
+      setColorOverrides(JSON.parse(JSON.stringify(next.colorOverrides)));
+      setUrls(JSON.parse(JSON.stringify(next.urls)));
+      setSelectionGroups(JSON.parse(JSON.stringify(next.selectionGroups || [])));
+      setFigures([]);
+      setFreeLines([]);
+      setUndoStack([]);
+      setRedoStack([]);
+      setSelectedNode(null);
+      try { localStorage.setItem('activeSitemapId', next.id); } catch {}
+
+      if (isSupabaseConfigured() && supabase) {
+        loadSitemapWithDrawables(next.id)
+          .then(({ figures: loadedFigures, freeLines: loadedFreeLines }) => {
+            setFigures(loadedFigures);
+            setFreeLines(loadedFreeLines);
+          })
+          .catch(err => console.error('Load drawables after delete:', err));
+      }
     }
-  }, [sitemaps, activeSitemapId, createNewSitemap, switchToSitemap, isSupabaseConfigured]);
+
+    // Background remote delete
+    if (isSupabaseConfigured() && supabase) {
+      deleteSitemapFromSupabase(sitemapId).catch(err =>
+        console.error('Supabase delete failed (UI already updated):', err)
+      );
+    }
+  }, [sitemaps, activeSitemapId, createNewSitemap, isSupabaseConfigured]);
 
   const renameSitemap = useCallback(async (sitemapId: string, newName: string) => {
     if (!newName.trim()) return; // Still validate non-empty
@@ -347,9 +534,11 @@ function App() {
       lastModified: Date.now()
     };
 
-    setSitemaps(prev => prev.map(s => 
-      s.id === sitemapId ? renamed : s
-    ));
+    setSitemaps(prev => {
+      const next = prev.map(s => s.id === sitemapId ? renamed : s);
+      try { localStorage.setItem('sitemaps', JSON.stringify(next)); } catch {}
+      return next;
+    });
 
     // Save to Supabase if configured
     if (isSupabaseConfigured()) {
@@ -364,21 +553,46 @@ function App() {
   // Load sitemaps on mount (from Supabase or localStorage)
   useEffect(() => {
     const loadData = async () => {
+      // Show local immediately to avoid blank UI on refresh
+      try {
+        const localStrEarly = localStorage.getItem('sitemaps');
+        const localActiveEarly = localStorage.getItem('activeSitemapId');
+        if (localStrEarly) {
+          const localList = JSON.parse(localStrEarly) as SitemapData[];
+          setSitemaps(localList);
+          if (localActiveEarly) setActiveSitemapId(localActiveEarly);
+        }
+      } catch {}
+
       if (isSupabaseConfigured()) {
         try {
           const loadedSitemaps = await loadSitemaps();
           const savedActiveId = localStorage.getItem('activeSitemapId');
-          
-          if (loadedSitemaps.length > 0) {
-            setSitemaps(loadedSitemaps);
-            
-            // Use saved active ID if it exists in loaded sitemaps, otherwise use first
-            const activeId = savedActiveId && loadedSitemaps.find(s => s.id === savedActiveId)
+
+          // Merge local sitemaps not present on server (e.g., created before login)
+          let merged = loadedSitemaps;
+          try {
+            const localStr = localStorage.getItem('sitemaps');
+            if (localStr) {
+              const localList = JSON.parse(localStr) as SitemapData[];
+              const remoteIds = new Set(loadedSitemaps.map(s => s.id));
+              const toMerge = localList.filter(s => !remoteIds.has(s.id));
+              if (toMerge.length) merged = [...toMerge, ...loadedSitemaps];
+            }
+          } catch (e) {
+            console.warn('Failed to read local sitemaps for merge:', e);
+          }
+
+          if (merged.length > 0) {
+            setSitemaps(merged);
+
+            // Use saved active ID if it exists in merged sitemaps, otherwise first
+            const activeId = savedActiveId && merged.find(s => s.id === savedActiveId)
               ? savedActiveId
-              : loadedSitemaps[0].id;
-            
-            const activeSitemap = loadedSitemaps.find(s => s.id === activeId) || loadedSitemaps[0];
-            
+              : merged[0].id;
+
+            const activeSitemap = merged.find(s => s.id === activeId) || merged[0];
+
             // Load the active sitemap's drawables
             const { figures: loadedFigures, freeLines: loadedFreeLines } = await loadSitemapWithDrawables(activeId);
             setFigures(loadedFigures);
@@ -467,6 +681,28 @@ function App() {
     loadData();
   }, [isSupabaseConfigured]);
 
+  // Sync nodes from sitemap when activeSitemapId changes (but only if nodes are empty to avoid overwriting CSV upload)
+  useEffect(() => {
+    if (!initialized || !activeSitemapId || isUploadingCsvRef.current) {
+      return;
+    }
+    
+    const activeSitemap = sitemaps.find(s => s.id === activeSitemapId);
+    if (!activeSitemap) {
+      return;
+    }
+    
+    // Only sync if nodes are currently empty (to avoid overwriting during CSV upload or manual edits)
+    if (nodes.length === 0 && activeSitemap.nodes.length > 0) {
+      setNodes(JSON.parse(JSON.stringify(activeSitemap.nodes)));
+      setExtraLinks(JSON.parse(JSON.stringify(activeSitemap.extraLinks)));
+      setLinkStyles(JSON.parse(JSON.stringify(activeSitemap.linkStyles)));
+      setColorOverrides(JSON.parse(JSON.stringify(activeSitemap.colorOverrides)));
+      setUrls(JSON.parse(JSON.stringify(activeSitemap.urls)));
+      setSelectionGroups(JSON.parse(JSON.stringify(activeSitemap.selectionGroups || [])));
+    }
+  }, [activeSitemapId, sitemaps, initialized]);
+
   // Save to localStorage as backup whenever sitemaps or activeId changes
   useEffect(() => {
     if (initialized && sitemaps.length > 0) {
@@ -481,6 +717,10 @@ function App() {
   // Auto-save current state to active sitemap periodically and on changes
   useEffect(() => {
     if (!initialized || !activeSitemapId) return;
+    // Skip auto-save during CSV upload to prevent overwriting nodes
+    if (isUploadingCsvRef.current) {
+      return;
+    }
     
     const timeoutId = setTimeout(() => {
       saveCurrentStateToActiveSitemap();
@@ -489,13 +729,6 @@ function App() {
     return () => clearTimeout(timeoutId);
   }, [nodes, extraLinks, linkStyles, colorOverrides, urls, figures, freeLines, initialized, activeSitemapId, saveCurrentStateToActiveSitemap]);
 
-  // Debug focusedNode changes
-  useEffect(() => {
-    console.log('App: focusedNode changed to:', focusedNode);
-    if (focusedNode === null) {
-      console.log('App: focusedNode set to null - call stack:', new Error().stack);
-    }
-  }, [focusedNode]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -516,6 +749,9 @@ function App() {
           setExtraLinks(prev.extraLinks);
           setLinkStyles(prev.linkStyles);
           setColorOverrides(prev.colorOverrides);
+          setFigures(prev.figures);
+          setFreeLines(prev.freeLines);
+          setSelectionGroups(prev.selectionGroups);
         }
         return;
       }
@@ -530,6 +766,9 @@ function App() {
           setExtraLinks(next.extraLinks);
           setLinkStyles(next.linkStyles);
           setColorOverrides(next.colorOverrides);
+          setFigures(next.figures);
+          setFreeLines(next.freeLines);
+          setSelectionGroups(next.selectionGroups);
         }
         return;
       }
@@ -540,17 +779,27 @@ function App() {
   }, [nodes, extraLinks, linkStyles, colorOverrides, undoStack, redoStack, makeSnapshot]);
 
   useEffect(() => {
-    if (urls.length > 0) {
+    // Skip URL analysis if we're in the middle of a CSV upload
+    if (isUploadingCsvRef.current) {
+      return;
+    }
+    
+    // Only analyze URLs if we don't already have nodes (e.g., from CSV upload)
+    // This prevents overwriting nodes that were set from CSV or other sources
+    if (urls.length > 0 && nodes.length === 0) {
       const hierarchy = analyzeURLStructure(urls);
       let layoutNodes: PageNode[];
 
       // Only apply layout if nodes don't have manual positions
-      const hasManualPositions = nodes.some(node => node.x !== undefined && node.y !== undefined);
+      const hasManualPositions = hierarchy.nodes.some(node => node.x !== undefined && node.y !== undefined);
       
       if (!hasManualPositions) {
         // Apply grouped layout algorithm
         layoutNodes = applyGroupedFlowLayout(hierarchy.nodes, { width: 1800, height: 900 });
         setNodes(layoutNodes);
+        setSidebarCollapsed(true);
+      } else {
+        setNodes(hierarchy.nodes);
         setSidebarCollapsed(true);
       }
     }
@@ -606,18 +855,23 @@ function App() {
       return;
     }
 
+    // Set flag to prevent URL analysis useEffect from interfering
+    isUploadingCsvRef.current = true;
+
     try {
       const result = await parseCsvFile(file);
       
       if (result.errors.length > 0) {
         setCsvErrors(result.errors);
         setShowCsvErrors(true);
+        isUploadingCsvRef.current = false;
         return;
       }
 
       if (result.data.length === 0) {
         setCsvErrors(['No valid data found in CSV file']);
         setShowCsvErrors(true);
+        isUploadingCsvRef.current = false;
         return;
       }
 
@@ -632,50 +886,83 @@ function App() {
       const newSitemapId = `sitemap-${Date.now()}`;
       const now = Date.now();
 
-      // Save current sitemap if it exists
+      // Save current sitemap if it exists (non-blocking)
       if (activeSitemapId) {
-        await saveCurrentStateToActiveSitemap();
+        // Don't await - run in background to avoid blocking CSV upload
+        saveCurrentStateToActiveSitemap()
+          .catch(error => {
+            console.error('Failed to save current sitemap before CSV upload:', error);
+            // Continue anyway - don't block CSV upload
+          });
       }
 
-      setSitemaps(prev => {
-        // Find the highest number used in "Untitled Sitemap" names
-        const untitledPattern = /^Untitled Sitemap (\d+)$/;
-        let maxNumber = 0;
-        
-        prev.forEach(sitemap => {
-          const match = sitemap.name.match(untitledPattern);
-          if (match) {
-            const num = parseInt(match[1], 10);
-            if (num > maxNumber) maxNumber = num;
-          }
-        });
-
-        const newSitemap: SitemapData = {
-          id: newSitemapId,
-          name: `Untitled Sitemap ${maxNumber + 1}`,
-          nodes: JSON.parse(JSON.stringify(layoutNodes)),
-          extraLinks: [],
-          linkStyles: {},
-          colorOverrides: {},
-          urls: JSON.parse(JSON.stringify(result.data.map(row => row.url))),
-          lastModified: now,
-          createdAt: now
-        };
-
-        // Save to Supabase if configured
-        if (isSupabaseConfigured()) {
-          saveSitemap(newSitemap, [], []).catch(error => {
-            console.error('Failed to save new sitemap to Supabase:', error);
-          });
+      // Find the highest number used in "Untitled Sitemap" names
+      const untitledPattern = /^Untitled Sitemap (\d+)$/;
+      let maxNumber = 0;
+      
+      sitemaps.forEach(sitemap => {
+        const match = sitemap.name.match(untitledPattern);
+        if (match) {
+          const num = parseInt(match[1], 10);
+          if (num > maxNumber) maxNumber = num;
         }
-
-        return [...prev, newSitemap];
       });
 
-      // Set the new sitemap as active and load its data
-      setActiveSitemapId(newSitemapId);
-      setNodes(layoutNodes);
-      setUrls(result.data.map(row => row.url));
+      const newSitemap: SitemapData = {
+        id: newSitemapId,
+        name: `Untitled Sitemap ${maxNumber + 1}`,
+        nodes: JSON.parse(JSON.stringify(layoutNodes)),
+        extraLinks: [],
+        linkStyles: {},
+        colorOverrides: {},
+        urls: JSON.parse(JSON.stringify(result.data.map(row => row.url))),
+        lastModified: now,
+        createdAt: now
+      };
+
+      const next = [...sitemaps, newSitemap];
+      
+      // Persist immediately to survive refresh
+      try {
+        localStorage.setItem('sitemaps', JSON.stringify(next));
+        localStorage.setItem('activeSitemapId', newSitemapId);
+      } catch (e) {
+        console.error(`Failed to save to localStorage:`, e);
+      }
+
+      // Save to Supabase in background (do not block)
+      if (isSupabaseConfigured() && supabase) {
+        saveSitemap(newSitemap, [], []).catch(error => {
+          console.error('Failed to save new sitemap to Supabase:', error);
+        });
+      }
+
+      // Ensure all nodes have positive coordinates (fix negative x values from relaxOverlaps)
+      const minX = Math.min(...layoutNodes.map(n => n.x ?? 0));
+      const fixedNodes = layoutNodes.map(n => {
+        if (n.x !== undefined && n.x < 0) {
+          const offset = Math.abs(minX) + 100;
+          n.x = n.x + offset;
+        }
+        return n;
+      });
+      
+      // Set nodes FIRST so the canvas renders immediately and blocks URL-analysis overwrite
+      const nodesCopy = JSON.parse(JSON.stringify(fixedNodes));
+      flushSync(() => {
+        setNodes(nodesCopy);
+      });
+      
+      // Now update sitemaps and activate the new one
+      flushSync(() => {
+        setSitemaps(next);
+        setActiveSitemapId(newSitemapId);
+      });
+      // Set URLs after nodes to avoid triggering the URL analysis useEffect that would overwrite nodes
+      // Use setTimeout to ensure nodes are set first
+      setTimeout(() => {
+        setUrls(result.data.map(row => row.url));
+      }, 0);
       setExtraLinks([]);
       setLinkStyles({});
       setColorOverrides({});
@@ -684,15 +971,23 @@ function App() {
       setUndoStack([]);
       setRedoStack([]);
       setSelectedNode(null);
+      setSelectionGroups([]);
       setSidebarCollapsed(true);
       setCsvErrors([]);
       setShowCsvErrors(false);
       
       // Reset file input
       e.target.value = '';
+      
+      // Clear the flag after a short delay to allow state updates to complete
+      setTimeout(() => {
+        isUploadingCsvRef.current = false;
+      }, 100);
     } catch (error) {
       setCsvErrors([`Error processing CSV file: ${error}`]);
       setShowCsvErrors(true);
+      // Clear flag on error too
+      isUploadingCsvRef.current = false;
     }
   };
 
@@ -702,6 +997,25 @@ function App() {
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
     setNodes(updatedNodes);
+    
+    // Sync colorOverrides with node colors - if a node has customColor/textColor, 
+    // ensure colorOverrides matches (or clear it if node colors are removed)
+    setColorOverrides(prev => {
+      const next = { ...prev };
+      updatedNodes.forEach(node => {
+        if (node.customColor || node.textColor) {
+          // Update colorOverrides to match node colors
+          next[node.id] = {
+            customColor: node.customColor,
+            textColor: node.textColor,
+          };
+        } else {
+          // Clear colorOverrides if node colors are removed
+          delete next[node.id];
+        }
+      });
+      return next;
+    });
   };
 
   const handleNodesPreview = (updatedNodes: PageNode[]) => {
@@ -902,18 +1216,26 @@ function App() {
 
   // ===== Free-form selection groups (nodes + text figures) =====
   const createSelectionGroup = useCallback((memberNodeIds: string[], memberFigureIds: string[], name?: string) => {
+    // Add snapshot before making changes
+    setUndoStack(stack => [...stack, makeSnapshot()]);
+    setRedoStack([]);
+    
     const id = `sg-${Date.now()}`;
     const group: SelectionGroup = { id, name: name || `Group ${selectionGroups.length + 1}`, memberNodeIds, memberFigureIds };
     setSelectionGroups(prev => [...prev, group]);
-  }, [selectionGroups.length]);
+  }, [selectionGroups.length, makeSnapshot]);
 
   const ungroupSelection = useCallback((memberNodeIds: string[], memberFigureIds: string[]) => {
+    // Add snapshot before making changes
+    setUndoStack(stack => [...stack, makeSnapshot()]);
+    setRedoStack([]);
+    
     setSelectionGroups(prev => prev.map(g => ({
       ...g,
       memberNodeIds: g.memberNodeIds.filter(id => !memberNodeIds.includes(id)),
       memberFigureIds: g.memberFigureIds.filter(id => !memberFigureIds.includes(id)),
     })).filter(g => g.memberNodeIds.length > 0 || g.memberFigureIds.length > 0));
-  }, []);
+  }, [makeSnapshot]);
 
   const [snapToGuides, setSnapToGuides] = useState<boolean>(() => {
     const v = localStorage.getItem('snapToGuides');
@@ -1004,14 +1326,12 @@ function App() {
   }, []);
 
   const handleClearSearch = useCallback(() => {
-    console.log('App: handleClearSearch called - clearing search results only (keeping focusedNode)');
     setSearchResults([]);
     // Don't clear focusedNode here - it should only be cleared when user explicitly clears search
     // setFocusedNode(null); // Clear focused node when clearing search
   }, []);
 
   const handleClearFocus = useCallback(() => {
-    console.log('App: handleClearFocus called - clearing focusedNode');
     setFocusedNode(null);
   }, []);
 
@@ -1061,22 +1381,14 @@ function App() {
   }, [makeSnapshot]);
 
   const handleFocusNode = useCallback((node: PageNode) => {
-    console.log('App: handleFocusNode called with:', node.title, node.id);
-    
     // Set the focused node for visual highlighting FIRST using flushSync
-    console.log('App: Setting focusedNode to:', node.title);
-    console.log('App: About to call setFocusedNode with flushSync');
     flushSync(() => {
       setFocusedNode(node);
     });
-    console.log('App: setFocusedNode called with flushSync');
     
     // Then center the view on the selected node using ref
     if (sitemapCanvasRef.current && sitemapCanvasRef.current.centerOnNode) {
-      console.log('App: Calling centerOnNode');
       sitemapCanvasRef.current.centerOnNode(node);
-    } else {
-      console.log('App: Ref or centerOnNode not available');
     }
   }, []);
 
@@ -1109,6 +1421,7 @@ function App() {
 
   return (
     <div className="h-screen bg-white flex flex-col overflow-hidden">
+      {/* Auth Modal will auto-open on first load if Supabase is configured and no session */}
       <header className="border-b border-gray-200 bg-white flex-shrink-0 relative z-50">
         <div className="max-w-screen-5xl mx-auto px-6 py-5">
           <div className="flex items-center justify-between">
@@ -1169,9 +1482,7 @@ function App() {
               {/* Auth Section */}
               {isSupabaseConfigured() && (
                 <div className="flex items-center gap-2 ml-2 pl-2 border-l border-gray-300">
-                  {authLoading ? (
-                    <div className="px-3 py-2 text-sm text-gray-500">Loading...</div>
-                  ) : user ? (
+                  {user ? (
                     <div className="flex items-center gap-2">
                       <div className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700">
                         <User className="w-4 h-4" strokeWidth={1.5} />
@@ -1189,7 +1500,7 @@ function App() {
                   ) : (
                     <button
                       onClick={() => setShowAuthModal(true)}
-                      className="px-4 py-2 text-sm font-medium text-white bg-[#384E82]/90 hover:bg-[#384E82] text-white rounded-lg transition-colors flex items-center gap-2"
+                      className="px-4 py-2 text-sm font-medium text-white bg-[#384E82]/90 hover:bg-[#384E82] rounded-lg transition-colors flex items-center gap-2"
                       title="Sign In / Sign Up"
                     >
                       <LogIn className="w-4 h-4" strokeWidth={1.5} />
@@ -1278,6 +1589,7 @@ function App() {
               
               {/* Create New Sitemap Button */}
               <button
+                type="button"
                 onClick={createNewSitemap}
                 className="w-full mb-3 px-3 py-2 bg-gray-100 shadow-sm border border-gray-200 hover:shadow-md hover:bg-gray-150 text-gray-700 text-sm font-medium rounded transition-colors flex items-center justify-center gap-2"
               >
@@ -1495,14 +1807,10 @@ function App() {
                 layoutType={layoutType}
                 extraLinks={extraLinks}
                 onNodeClick={node => {
-                  console.log('App: onNodeClick called with:', node.title, 'clearing focusedNode');
                   setSelectedNode(node);
                   // Only clear focus if it's a different node
                   if (focusedNode && focusedNode.id !== node.id) {
-                    console.log('App: Clearing focus because different node clicked');
                     setFocusedNode(null);
-                  } else {
-                    console.log('App: Keeping focus because same node clicked');
                   }
                 }}
                 onNodesUpdate={handleNodesUpdate}
@@ -1524,6 +1832,9 @@ function App() {
                     setExtraLinks(prev.extraLinks);
                     setLinkStyles(prev.linkStyles);
                     setColorOverrides(prev.colorOverrides);
+                    setFigures(prev.figures);
+                    setFreeLines(prev.freeLines);
+                    setSelectionGroups(prev.selectionGroups);
                   }
                 }}
                 onRedo={() => {
@@ -1535,6 +1846,9 @@ function App() {
                     setExtraLinks(next.extraLinks);
                     setLinkStyles(next.linkStyles);
                     setColorOverrides(next.colorOverrides);
+                    setFigures(next.figures);
+                    setFreeLines(next.freeLines);
+                    setSelectionGroups(next.selectionGroups);
                   }
                 }}
                 searchResults={searchResults}
@@ -1570,7 +1884,7 @@ function App() {
       {/* Help Modal */}
       {showHelp && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[999] p-4" onClick={() => setShowHelp(false)}>
-          <div className="bg-white rounded-lg shadow-lg w-1/3 max-w-2xl max-h-[85vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white rounded-lg shadow-lg w-1/3 max-w-2xl max-h-[85vh] overflow-visible flex flex-col" onClick={(e) => e.stopPropagation()}>
             {/* Minimal Header */}
             <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
               <h2 className="text-xl font-semibold">Keyboard Shortcuts</h2>
@@ -1586,7 +1900,7 @@ function App() {
             </div>
 
             {/* Single Column Layout */}
-            <div className="overflow-y-auto flex-1 p-6">
+            <div className="overflow-y-auto overflow-x-visible flex-1 p-6">
               <div className="space-y-6">
                 {/* Essential Shortcuts */}
                 <div>
@@ -1655,7 +1969,7 @@ function App() {
                   <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-900 mb-1">
                     Groups
                   </h3>
-                  <p className="text-xs text-gray-500 mb-3">Source: CSV “Group/Category” column. Otherwise inferred from URL path.</p>
+                  <p className="text-xs text-gray-500 mb-3">Source: CSV "Group/Category" column. Otherwise inferred from URL path.</p>
                   <div className="space-y-2">
                     {Array.from(categoryGroups.entries()).map(([category, categoryNodes]) => (
                       <div key={category} className="flex items-center justify-between text-sm">

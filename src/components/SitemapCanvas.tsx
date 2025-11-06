@@ -122,7 +122,6 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
     onDeleteFreeLine,
   } = props;
 
-  
   // Small SVG preview for a link style option
   const MiniLinkIcon = ({
     dash = 'solid' as LineDash,
@@ -1147,7 +1146,9 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
 
   const drawNodes = (ctx: CanvasRenderingContext2D, nodes: PageNode[], hoveredId: string | null) => {
     nodes.forEach(node => {
-      if (node.x === undefined || node.y === undefined) return;
+      if (node.x === undefined || node.y === undefined) {
+        return;
+      }
 
       const isHovered = node.id === hoveredId;
       const isSearchResult = searchResults.some(result => result.id === node.id);
@@ -2123,7 +2124,6 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
         // Don't return - allow normal drag flow
       }
     }
-    console.log('SitemapCanvas: handleMouseDown called');
     
     // Close context menu if clicking elsewhere
     if (contextMenu) {
@@ -2209,7 +2209,6 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
     }
     
     if (onClearFocus) {
-      console.log('SitemapCanvas: handleMouseDown calling onClearFocus');
       onClearFocus();
     }
     
@@ -2561,12 +2560,12 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
         const oDims = calculateNodeDimensions(n, ctx);
         const oHalfW = oDims.width / 2; const oHalfH = oDims.height / 2;
         const ocx = n.x!; const ocy = n.y!;
-        // vertical: centers
-        const dxCenter = Math.abs(cx - ocx);
-        if (dxCenter <= threshold && dxCenter < bestDx) {
-          v = ocx; vRefY = ocy; bestDx = dxCenter;
-          if (snapToGuides) newX = ocx;
-        }
+        // vertical: centers - REMOVED (only show edge guides)
+        // const dxCenter = Math.abs(cx - ocx);
+        // if (dxCenter <= threshold && dxCenter < bestDx) {
+        //   v = ocx; vRefY = ocy; bestDx = dxCenter;
+        //   if (snapToGuides) newX = ocx;
+        // }
         // vertical: left edges
         const dLeft = cx - dHalfW; const oLeft = ocx - oHalfW;
         const dxLeft = Math.abs(dLeft - oLeft);
@@ -2581,12 +2580,12 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
           v = oRight; vRefY = ocy; bestDx = dxRight;
           if (snapToGuides) newX = oRight - dHalfW;
         }
-        // horizontal: centers
-        const dyCenter = Math.abs(cy - ocy);
-        if (dyCenter <= threshold && dyCenter < bestDy) {
-          h = ocy; hRefX = ocx; bestDy = dyCenter;
-          if (snapToGuides) newY = ocy;
-        }
+        // horizontal: centers - REMOVED (only show edge guides)
+        // const dyCenter = Math.abs(cy - ocy);
+        // if (dyCenter <= threshold && dyCenter < bestDy) {
+        //   h = ocy; hRefX = ocx; bestDy = dyCenter;
+        //   if (snapToGuides) newY = ocy;
+        // }
         // horizontal: top edges
         const dTop = cy - dHalfH; const oTop = ocy - oHalfH;
         const dyTop = Math.abs(dTop - oTop);
@@ -3050,17 +3049,28 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
       
       if (dragDistance < dragThreshold) {
         // Small movement = background click - clear selection
-        console.log('SitemapCanvas: Background click detected, clearing selection');
         setSelectedIds(new Set());
         setSelectedFigureIds(new Set());
         setHighlightedLink(null);
         if (onClearFocus) onClearFocus();
+        // Clear guides on background click
+        setGuideV(null);
+        setGuideH(null);
+        setGuideVRefY(null);
+        setGuideHRefX(null);
+        setDragCanvasPos(null);
       }
       // Large movement = canvas pan, no action needed
     } else if (!isDragging && !draggedNode) {
       // Handle click when no node was being dragged and no canvas panning
     const dragDistance = Math.hypot(e.clientX - dragStart.x, e.clientY - dragStart.y);
     if (dragDistance < dragThreshold) {
+      // Clear guides on any click
+      setGuideV(null);
+      setGuideH(null);
+      setGuideVRefY(null);
+      setGuideHRefX(null);
+      setDragCanvasPos(null);
       // 1) Try link first, but ignore clicks inside node boxes to avoid edge misclicks
       const tolPxUp = 14; const tolCanvasUp = tolPxUp / transform.scale;
       if (!isInsideNodeBox(e.clientX, e.clientY)) {
@@ -3173,6 +3183,12 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
     setDragStart({ x: 0, y: 0 });
     setInitialTransform({ x: 0, y: 0, scale: 1 });
     backgroundDownRef.current = null;
+    // Clear guides when drag ends
+    setGuideV(null);
+    setGuideH(null);
+    setGuideVRefY(null);
+    setGuideHRefX(null);
+    setDragCanvasPos(null);
     setSelectedFiguresStartPositions({});
   };
 
@@ -3239,7 +3255,6 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
     
     // Clear focus when zooming/panning
     if (onClearFocus) {
-      console.log('SitemapCanvas: handleWheel calling onClearFocus');
       onClearFocus();
     }
     
@@ -3514,7 +3529,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
     >
       {/* {showLineHint && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[260] px-3 py-1.5 rounded bg-gray-900 text-white text-xs shadow-lg">
-          Drag from one node to another. Lines aren’t saved unless both ends snap to nodes.
+          Drag from one node to another. Lines aren't saved unless both ends snap to nodes.
         </div>
       )} */}
       <canvas
@@ -3820,7 +3835,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
             <path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/>
           </svg>
           <span className="absolute -top-10 left-1/2 -translate-x-1/2 px-2 py-1 bg-gray-900 text-white text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
-            Undo (Ctrl+Z)
+            Undo (Ctrl+Z / Cmd+Z)
           </span>
         </button>
         
@@ -3834,7 +3849,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
             <path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3L21 13"/>
           </svg>
           <span className="absolute -top-10 left-1/2 -translate-x-1/2 px-2 py-1 bg-gray-900 text-white text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
-            Redo (Ctrl+Y)
+            Redo (Ctrl+Shift+Z / Cmd+Shift+Z)
           </span>
         </button>
       </div>
