@@ -1588,14 +1588,14 @@ function App() {
               </h2>
               
               {/* Create New Sitemap Button */}
-              <button
+              {/* <button
                 type="button"
                 onClick={createNewSitemap}
                 className="w-full mb-3 px-3 py-2 bg-gray-100 shadow-sm border border-gray-200 hover:shadow-md hover:bg-gray-150 text-gray-700 text-sm font-medium rounded transition-colors flex items-center justify-center gap-2"
               >
                 <img width="16" height="16" src="https://img.icons8.com/puffy/32/add.png" alt="add"/>
                 Create New Sitemap
-              </button>
+              </button> */}
               
               {/* Dropdown Button */}
               <div className="relative">
@@ -1790,7 +1790,7 @@ function App() {
                 <img className="w-16 h-16 mx-auto mb-4 opacity-30" src="https://img.icons8.com/?size=100&id=82795&format=png&color=000000" alt="No sitemap yet"/>
                 <h2 className="text-xl font-semibold mb-2">No Sitemap Yet</h2>
                 <p className="text-gray-500 mb-6">
-                  Upload a CSV file to generate an intelligent, auto-layout sitemap with hierarchy detection
+                  Upload a CSV file to generate a sitemap with hierarchy detection
                   and professional export formats.
                 </p>
               </div>
