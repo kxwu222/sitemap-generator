@@ -200,7 +200,13 @@ function App() {
 
   // Check if Supabase is configured
   const isSupabaseConfigured = useCallback(() => {
-    return !!(import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_ANON_KEY && supabase);
+    const hasUrl = !!import.meta.env.VITE_SUPABASE_URL;
+    const hasKey = !!import.meta.env.VITE_SUPABASE_ANON_KEY;
+    const hasClient = !!supabase;
+    
+    console.log('isSupabaseConfigured check:', { hasUrl, hasKey, hasClient });
+    
+    return !!(hasUrl && hasKey && hasClient);
   }, []);
 
   // Treat auth as ready if Supabase isn't configured or client isn't initialized (kept for future use)
