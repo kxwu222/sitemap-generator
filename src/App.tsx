@@ -882,59 +882,93 @@ function App() {
         height: 900,
       });
 
-      // Create a new sitemap with the CSV data
-      const newSitemapId = `sitemap-${Date.now()}`;
+      // Check if we should use the active sitemap (if it's empty) or create a new one
+      const activeSitemap = activeSitemapId ? sitemaps.find(s => s.id === activeSitemapId) : null;
+      const isActiveSitemapEmpty = activeSitemap && 
+        activeSitemap.nodes.length === 0 && 
+        activeSitemap.urls.length === 0 &&
+        activeSitemap.extraLinks.length === 0;
+
+      let targetSitemapId: string;
+      let next: SitemapData[];
       const now = Date.now();
 
-      // Save current sitemap if it exists (non-blocking)
-      if (activeSitemapId) {
-        // Don't await - run in background to avoid blocking CSV upload
-        saveCurrentStateToActiveSitemap()
-          .catch(error => {
-            console.error('Failed to save current sitemap before CSV upload:', error);
-            // Continue anyway - don't block CSV upload
-          });
-      }
+      if (isActiveSitemapEmpty && activeSitemap) {
+        // Use the existing empty sitemap
+        targetSitemapId = activeSitemapId!;
+        
+        // Update the existing sitemap
+        next = sitemaps.map(s => 
+          s.id === targetSitemapId
+            ? {
+                ...s,
+                nodes: JSON.parse(JSON.stringify(layoutNodes)),
+                urls: JSON.parse(JSON.stringify(result.data.map(row => row.url))),
+                extraLinks: [],
+                linkStyles: {},
+                colorOverrides: {},
+                lastModified: now
+              }
+            : s
+        );
+      } else {
+        // Create a new sitemap with the CSV data
+        const newSitemapId = `sitemap-${Date.now()}`;
+        targetSitemapId = newSitemapId;
 
-      // Find the highest number used in "Untitled Sitemap" names
-      const untitledPattern = /^Untitled Sitemap (\d+)$/;
-      let maxNumber = 0;
-      
-      sitemaps.forEach(sitemap => {
-        const match = sitemap.name.match(untitledPattern);
-        if (match) {
-          const num = parseInt(match[1], 10);
-          if (num > maxNumber) maxNumber = num;
+        // Save current sitemap if it exists (non-blocking)
+        if (activeSitemapId) {
+          // Don't await - run in background to avoid blocking CSV upload
+          saveCurrentStateToActiveSitemap()
+            .catch(error => {
+              console.error('Failed to save current sitemap before CSV upload:', error);
+              // Continue anyway - don't block CSV upload
+            });
         }
-      });
 
-      const newSitemap: SitemapData = {
-        id: newSitemapId,
-        name: `Untitled Sitemap ${maxNumber + 1}`,
-        nodes: JSON.parse(JSON.stringify(layoutNodes)),
-        extraLinks: [],
-        linkStyles: {},
-        colorOverrides: {},
-        urls: JSON.parse(JSON.stringify(result.data.map(row => row.url))),
-        lastModified: now,
-        createdAt: now
-      };
+        // Find the highest number used in "Untitled Sitemap" names
+        const untitledPattern = /^Untitled Sitemap (\d+)$/;
+        let maxNumber = 0;
+        
+        sitemaps.forEach(sitemap => {
+          const match = sitemap.name.match(untitledPattern);
+          if (match) {
+            const num = parseInt(match[1], 10);
+            if (num > maxNumber) maxNumber = num;
+          }
+        });
 
-      const next = [...sitemaps, newSitemap];
+        const newSitemap: SitemapData = {
+          id: newSitemapId,
+          name: `Untitled Sitemap ${maxNumber + 1}`,
+          nodes: JSON.parse(JSON.stringify(layoutNodes)),
+          extraLinks: [],
+          linkStyles: {},
+          colorOverrides: {},
+          urls: JSON.parse(JSON.stringify(result.data.map(row => row.url))),
+          lastModified: now,
+          createdAt: now
+        };
+
+        next = [...sitemaps, newSitemap];
+      }
       
       // Persist immediately to survive refresh
       try {
         localStorage.setItem('sitemaps', JSON.stringify(next));
-        localStorage.setItem('activeSitemapId', newSitemapId);
+        localStorage.setItem('activeSitemapId', targetSitemapId);
       } catch (e) {
         console.error(`Failed to save to localStorage:`, e);
       }
 
       // Save to Supabase in background (do not block)
       if (isSupabaseConfigured() && supabase) {
-        saveSitemap(newSitemap, [], []).catch(error => {
-          console.error('Failed to save new sitemap to Supabase:', error);
-        });
+        const sitemapToSave = next.find(s => s.id === targetSitemapId);
+        if (sitemapToSave) {
+          saveSitemap(sitemapToSave, [], []).catch(error => {
+            console.error('Failed to save sitemap to Supabase:', error);
+          });
+        }
       }
 
       // Ensure all nodes have positive coordinates (fix negative x values from relaxOverlaps)
@@ -953,10 +987,10 @@ function App() {
         setNodes(nodesCopy);
       });
       
-      // Now update sitemaps and activate the new one
+      // Now update sitemaps and activate the target one
       flushSync(() => {
         setSitemaps(next);
-        setActiveSitemapId(newSitemapId);
+        setActiveSitemapId(targetSitemapId);
       });
       // Set URLs after nodes to avoid triggering the URL analysis useEffect that would overwrite nodes
       // Use setTimeout to ensure nodes are set first
@@ -1588,14 +1622,14 @@ function App() {
               </h2>
               
               {/* Create New Sitemap Button */}
-              {/* <button
+              <button
                 type="button"
                 onClick={createNewSitemap}
                 className="w-full mb-3 px-3 py-2 bg-gray-100 shadow-sm border border-gray-200 hover:shadow-md hover:bg-gray-150 text-gray-700 text-sm font-medium rounded transition-colors flex items-center justify-center gap-2"
               >
                 <img width="16" height="16" src="https://img.icons8.com/puffy/32/add.png" alt="add"/>
                 Create New Sitemap
-              </button> */}
+              </button>
               
               {/* Dropdown Button */}
               <div className="relative">
