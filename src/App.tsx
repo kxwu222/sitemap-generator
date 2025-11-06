@@ -203,6 +203,20 @@ function App() {
     return !!(import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_ANON_KEY && supabase);
   }, []);
 
+  // Require authentication for actions (only if Supabase is configured)
+  const requireAuth = useCallback((): boolean => {
+    if (!isSupabaseConfigured()) {
+      // If Supabase is not configured, allow all actions (localStorage mode)
+      return true;
+    }
+    if (!user) {
+      // User not logged in, show auth modal
+      setShowAuthModal(true);
+      return false;
+    }
+    return true;
+  }, [isSupabaseConfigured, user]);
+
   // Treat auth as ready if Supabase isn't configured or client isn't initialized (kept for future use)
   // const authReady = !isSupabaseConfigured() || !supabase || !authLoading;
 
@@ -267,12 +281,16 @@ function App() {
 
   const handleSignOut = async () => {
     try {
-      await signOut();
+      const { error } = await signOut();
+      if (error) {
+        console.error('signOut() failed:', error);
+      }
     } catch (e) {
       console.error('signOut() failed:', e);
     } finally {
       setUser(null);
-      setShowAuthModal(false);
+      // Show auth modal immediately after logout to remind users they need to log in
+      setShowAuthModal(true);
 
       // Clear Supabase tokens so the auth listener doesn't immediately repopulate user
       try {
@@ -366,6 +384,8 @@ function App() {
   }, [activeSitemapId, nodes, extraLinks, linkStyles, colorOverrides, urls, figures, freeLines, selectionGroups, sitemaps, isSupabaseConfigured]);
 
   const createNewSitemap = useCallback(async () => {
+    if (!requireAuth()) return;
+    
     console.log('Create New Sitemap: start');
     
     // Don't await save - do it in background to avoid blocking
@@ -477,6 +497,8 @@ function App() {
   }, [sitemaps, activeSitemapId, saveCurrentStateToActiveSitemap, isSupabaseConfigured]);
 
   const deleteSitemap = useCallback(async (sitemapId: string) => {
+    if (!requireAuth()) return;
+    
     if (sitemaps.length <= 1) {
       createNewSitemap();
       return;
@@ -520,9 +542,10 @@ function App() {
         console.error('Supabase delete failed (UI already updated):', err)
       );
     }
-  }, [sitemaps, activeSitemapId, createNewSitemap, isSupabaseConfigured]);
+  }, [sitemaps, activeSitemapId, createNewSitemap, isSupabaseConfigured, requireAuth]);
 
   const renameSitemap = useCallback(async (sitemapId: string, newName: string) => {
+    if (!requireAuth()) return;
     if (!newName.trim()) return; // Still validate non-empty
     
     const updatedSitemap = sitemaps.find(s => s.id === sitemapId);
@@ -849,6 +872,11 @@ function App() {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    if (!requireAuth()) {
+      e.target.value = '';
+      return;
+    }
+
     if (!file.name.toLowerCase().endsWith('.csv')) {
       setCsvErrors(['Please select a CSV file']);
       setShowCsvErrors(true);
@@ -1028,6 +1056,8 @@ function App() {
 
 
   const handleNodesUpdate = (updatedNodes: PageNode[]) => {
+    if (!requireAuth()) return;
+    
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
     setNodes(updatedNodes);
@@ -1057,6 +1087,8 @@ function App() {
   };
 
   const handleExtraLinkCreate = (sourceId: string, targetId: string) => {
+    if (!requireAuth()) return;
+    
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
 
@@ -1093,12 +1125,16 @@ function App() {
   };
 
   const handleExtraLinkDelete = (sourceId: string, targetId: string) => {
+    if (!requireAuth()) return;
+    
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
     setExtraLinks(prev => prev.filter(l => !(l.sourceId === sourceId && l.targetId === targetId)));
   };
 
   const handleNodeEdit = (nodeId: string, updates: Partial<PageNode>) => {
+    if (!requireAuth()) return;
+    
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
     setNodes(prev => prev.map(node => 
@@ -1112,6 +1148,8 @@ function App() {
   };
 
   const handleGroupEdit = (category: string, updates: Partial<PageNode>) => {
+    if (!requireAuth()) return;
+    
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
     setNodes(prev => prev.map(node => 
@@ -1154,6 +1192,8 @@ function App() {
   }, []);
 
   const handleNodeDelete = (nodeId: string) => {
+    if (!requireAuth()) return;
+    
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
     setNodes(prev => {
@@ -1201,6 +1241,7 @@ function App() {
   }
 
   function handleMoveNodesToGroup(nodeIds: string[], targetGroup: string, opts?: { includeSubtree?: boolean; relayout?: boolean }) {
+    if (!requireAuth()) return;
     if (nodeIds.length === 0) return;
     const include = new Set<string>(nodeIds);
     if (opts?.includeSubtree) {
@@ -1227,12 +1268,14 @@ function App() {
   }
 
   function handleCreateGroupFromSelection(selectedIds: string[], newGroupName: string, opts?: { relayout?: boolean }) {
+    if (!requireAuth()) return;
     const name = (newGroupName || '').trim();
     if (!name) return;
     handleMoveNodesToGroup(selectedIds, name, { includeSubtree: false, relayout: !!opts?.relayout });
   }
 
   function handleDeleteGroup(groupName: string) {
+    if (!requireAuth()) return;
     // When deleting a group, reassign all nodes in that group to 'general'
     handleMoveNodesToGroup(
       nodes.filter(n => n.category === groupName).map(n => n.id),
@@ -1242,6 +1285,7 @@ function App() {
   }
 
   function handleRenameGroup(oldName: string, newName: string) {
+    if (!requireAuth()) return;
     const name = (newName || '').trim();
     if (!name || name === oldName) return;
     const updated = nodes.map(n => n.category === oldName ? { ...n, category: name } : n);
@@ -1250,6 +1294,7 @@ function App() {
 
   // ===== Free-form selection groups (nodes + text figures) =====
   const createSelectionGroup = useCallback((memberNodeIds: string[], memberFigureIds: string[], name?: string) => {
+    if (!requireAuth()) return;
     // Add snapshot before making changes
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
@@ -1257,9 +1302,10 @@ function App() {
     const id = `sg-${Date.now()}`;
     const group: SelectionGroup = { id, name: name || `Group ${selectionGroups.length + 1}`, memberNodeIds, memberFigureIds };
     setSelectionGroups(prev => [...prev, group]);
-  }, [selectionGroups.length, makeSnapshot]);
+  }, [selectionGroups.length, makeSnapshot, requireAuth]);
 
   const ungroupSelection = useCallback((memberNodeIds: string[], memberFigureIds: string[]) => {
+    if (!requireAuth()) return;
     // Add snapshot before making changes
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
@@ -1269,7 +1315,7 @@ function App() {
       memberNodeIds: g.memberNodeIds.filter(id => !memberNodeIds.includes(id)),
       memberFigureIds: g.memberFigureIds.filter(id => !memberFigureIds.includes(id)),
     })).filter(g => g.memberNodeIds.length > 0 || g.memberFigureIds.length > 0));
-  }, [makeSnapshot]);
+  }, [makeSnapshot, requireAuth]);
 
   const [snapToGuides, setSnapToGuides] = useState<boolean>(() => {
     const v = localStorage.getItem('snapToGuides');
@@ -1278,6 +1324,8 @@ function App() {
   useEffect(() => { localStorage.setItem('snapToGuides', snapToGuides ? '1' : '0'); }, [snapToGuides]);
 
   const handleAddNode = (parentId: string | null = null) => {
+    if (!requireAuth()) return;
+    
     const newNodeId = `node-${Date.now()}`;
     const parentNode = parentId ? nodes.find(n => n.id === parentId) : null;
     
@@ -1325,6 +1373,8 @@ function App() {
   };
 
   const handleConnectionCreate = (sourceId: string, targetId: string) => {
+    if (!requireAuth()) return;
+    
     setNodes(prev => {
       const updated = prev.map(node => {
         if (node.id === targetId) {
@@ -1370,49 +1420,63 @@ function App() {
   }, []);
 
   const handleLinkStyleChange = useCallback((linkKey: string, style: LinkStyle) => {
+    if (!requireAuth()) return;
+    
     setLinkStyles(prev => ({
       ...prev,
       [linkKey]: { ...prev[linkKey], ...style }
     }));
-  }, []);
+  }, [requireAuth]);
 
   // Figure handlers
   const handleCreateFigure = useCallback((figure: Figure) => {
+    if (!requireAuth()) return;
+    
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
     setFigures(prev => [...prev, figure]);
-  }, [makeSnapshot]);
+  }, [makeSnapshot, requireAuth]);
 
   const handleUpdateFigure = useCallback((id: string, updates: Partial<Figure>) => {
+    if (!requireAuth()) return;
+    
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
     setFigures(prev => prev.map(f => f.id === id ? { ...f, ...updates } : f));
-  }, [makeSnapshot]);
+  }, [makeSnapshot, requireAuth]);
 
   const handleDeleteFigure = useCallback((id: string) => {
+    if (!requireAuth()) return;
+    
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
     setFigures(prev => prev.filter(f => f.id !== id));
-  }, [makeSnapshot]);
+  }, [makeSnapshot, requireAuth]);
 
   // FreeLine handlers
   const handleCreateFreeLine = useCallback((line: FreeLine) => {
+    if (!requireAuth()) return;
+    
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
     setFreeLines(prev => [...prev, line]);
-  }, [makeSnapshot]);
+  }, [makeSnapshot, requireAuth]);
 
   const handleUpdateFreeLine = useCallback((id: string, updates: Partial<FreeLine>) => {
+    if (!requireAuth()) return;
+    
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
     setFreeLines(prev => prev.map(l => l.id === id ? { ...l, ...updates } : l));
-  }, [makeSnapshot]);
+  }, [makeSnapshot, requireAuth]);
 
   const handleDeleteFreeLine = useCallback((id: string) => {
+    if (!requireAuth()) return;
+    
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
     setFreeLines(prev => prev.filter(l => l.id !== id));
-  }, [makeSnapshot]);
+  }, [makeSnapshot, requireAuth]);
 
   const handleFocusNode = useCallback((node: PageNode) => {
     // Set the focused node for visual highlighting FIRST using flushSync
@@ -1454,10 +1518,88 @@ function App() {
   };
 
   return (
-    <div className="h-screen bg-white flex flex-col overflow-hidden">
-      {/* Auth Modal will auto-open on first load if Supabase is configured and no session */}
-      <header className="border-b border-gray-200 bg-white flex-shrink-0 relative z-50">
-        <div className="max-w-screen-5xl mx-auto px-6 py-5">
+    <>
+      <style>{`
+        @keyframes moveHorizontal {
+          0% {
+            transform: translateX(-50%) translateY(-10%);
+          }
+          50% {
+            transform: translateX(50%) translateY(10%);
+          }
+          100% {
+            transform: translateX(-50%) translateY(-10%);
+          }
+        }
+        @keyframes moveInCircle {
+          0% {
+            transform: rotate(0deg);
+          }
+          50% {
+            transform: rotate(180deg);
+          }
+          100% {
+            transform: rotate(360deg);
+          }
+        }
+        @keyframes moveVertical {
+          0% {
+            transform: translateY(-50%);
+          }
+          50% {
+            transform: translateY(50%);
+          }
+          100% {
+            transform: translateY(-50%);
+          }
+        }
+        .header-gradient-blob {
+          position: absolute;
+          border-radius: 50%;
+          filter: blur(80px);
+          opacity: 0.6;
+          pointer-events: none;
+        }
+        .header-gradient-blob-1 {
+          background: radial-gradient(circle, rgba(255, 165, 0, 0.5), rgba(255, 140, 105, 0.4));
+          width: 400px;
+          height: 400px;
+          animation: moveVertical 25s ease infinite;
+        }
+        .header-gradient-blob-2 {
+          background: radial-gradient(circle, rgba(135, 206, 250, 0.5), rgba(74, 144, 226, 0.4));
+          width: 350px;
+          height: 350px;
+          animation: moveInCircle 18s reverse infinite;
+        }
+        .header-gradient-blob-3 {
+          background: radial-gradient(circle, rgba(255, 192, 203, 0.4), rgba(255, 182, 193, 0.3));
+          width: 300px;
+          height: 300px;
+          animation: moveInCircle 35s linear infinite;
+        }
+        .header-gradient-background {
+          position: absolute;
+          inset: 0;
+          background: linear-gradient(135deg, rgba(255, 248, 240, 0.95), rgba(240, 248, 255, 0.95));
+        }
+      `}</style>
+      <div className="h-screen bg-white flex flex-col overflow-hidden">
+        {/* Auth Modal will auto-open on first load if Supabase is configured and no session */}
+        <header className="border-b border-gray-200 flex-shrink-0 relative z-50 overflow-hidden" style={{ backgroundColor: '#FFF8F0' }}>
+          {/* Base warm light background */}
+          <div className="header-gradient-background"></div>
+          
+          {/* Multiple moving gradient blobs */}
+          <div className="header-gradient-blob header-gradient-blob-1" style={{ top: '-20%', left: '5%' }}></div>
+          <div className="header-gradient-blob header-gradient-blob-2" style={{ top: '-15%', right: '10%' }}></div>
+          <div className="header-gradient-blob header-gradient-blob-3" style={{ top: '-10%', left: '50%', transform: 'translateX(-50%)' }}></div>
+          
+          {/* Soft warm overlay for depth */}
+          <div className="absolute inset-0 bg-gradient-to-br from-orange-50/20 to-blue-50/20"></div>
+          
+          {/* Header content */}
+          <div className="max-w-screen-5xl mx-auto px-6 py-5 relative z-10">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3 relative">
               <img width="28" height="28" src="https://img.icons8.com/?size=100&id=1rQZ4drGQD6F&format=png&color=000000" alt="Sitemap Generator"/>
@@ -1467,7 +1609,7 @@ function App() {
               {nodes.length > 0 && (
                 <button
                   onClick={() => setShowSearch(true)}
-                  className="px-4 py-2 text-sm font-medium border rounded-lg border-gray-300 hover:border-gray-400 transition-colors flex items-center gap-2"
+                  className="px-4 py-2 text-sm font-medium bg-white border rounded-lg border-gray-300 hover:border-gray-400 transition-colors flex items-center gap-2"
                   title="Search nodes (Ctrl+F)"
                 >
                   <Search className="w-4 h-4" strokeWidth={1.5} />
@@ -1478,7 +1620,7 @@ function App() {
                 <div className="relative export-menu-container">
                   <button
                     onClick={() => setShowExportMenu(v => !v)}
-                    className="px-4 py-2 text-sm font-medium border rounded-lg border-gray-300 hover:border-gray-400 transition-colors flex items-center gap-2"
+                    className="px-4 py-2 text-sm font-medium bg-white border rounded-lg border-gray-300 hover:border-gray-400 transition-colors flex items-center gap-2"
                     title="Export"
                   >
                     <Download className="w-4 h-4" strokeWidth={1.5} />
@@ -1496,7 +1638,7 @@ function App() {
               {/* Align Guides toggle removed per request */}
               <button
                 onClick={() => setShowSettings(!showSettings)}
-                className="px-4 py-2 text-sm font-medium border rounded-lg border-gray-300 hover:border-gray-400 transition-colors flex items-center gap-2"
+                className="px-4 py-2 text-sm font-medium bg-white border rounded-lg border-gray-300 hover:border-gray-400 transition-colors flex items-center gap-2"
               >
                 <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" className="text-gray-700" viewBox="0 0 16 16">
                   <path d="M.54 3.87.5 3a2 2 0 0 1 2-2h3.672a2 2 0 0 1 1.414.586l.828.828A2 2 0 0 0 9.828 3h3.982a2 2 0 0 1 1.992 2.181l-.637 7A2 2 0 0 1 13.174 14H2.826a2 2 0 0 1-1.991-1.819l-.637-7a2 2 0 0 1 .342-1.31zM2.19 4a1 1 0 0 0-.996 1.09l.637 7a1 1 0 0 0 .995.91h10.348a1 1 0 0 0 .995-.91l.637-7A1 1 0 0 0 13.81 4zm4.69-1.707A1 1 0 0 0 6.172 2H2.5a1 1 0 0 0-1 .981l.006.139q.323-.119.684-.12h5.396z"/>
@@ -1506,7 +1648,7 @@ function App() {
               {/* AI organize button removed per request */}
               <button
                 onClick={() => setShowHelp(true)}
-                className="px-3 py-2 text-sm font-medium border rounded-lg border-gray-300 hover:border-gray-400 transition-colors flex items-center gap-2"
+                className="px-3 py-2 text-sm font-medium bg-white border rounded-lg border-gray-300 hover:border-gray-400 transition-colors flex items-center gap-2"
                 title="Help"
               >
                 <HelpCircle className="w-4 h-4" strokeWidth={1.5} />
@@ -1524,7 +1666,7 @@ function App() {
                       </div>
                       <button
                         onClick={handleSignOut}
-                        className="px-3 py-2 text-sm font-medium border rounded-lg border-gray-300 hover:border-gray-400 hover:bg-gray-50 transition-colors flex items-center gap-2"
+                        className="px-3 py-2 text-sm font-medium bg-white border rounded-lg border-gray-300 hover:border-gray-400 transition-colors flex items-center gap-2"
                         title="Sign Out"
                       >
                         <LogOut className="w-4 h-4" strokeWidth={1.5} />
@@ -1534,7 +1676,7 @@ function App() {
                   ) : (
                     <button
                       onClick={() => setShowAuthModal(true)}
-                      className="px-4 py-2 text-sm font-medium text-white bg-[#384E82]/90 hover:bg-[#384E82] rounded-lg transition-colors flex items-center gap-2"
+                      className="px-4 py-2 text-sm font-medium bg-white border rounded-lg border-gray-300 hover:border-gray-400 text-gray-700 transition-colors flex items-center gap-2"
                       title="Sign In / Sign Up"
                     >
                       <LogIn className="w-4 h-4" strokeWidth={1.5} />
@@ -1545,7 +1687,7 @@ function App() {
               )}
             </div>
           </div>
-        </div>
+          </div>
       </header>
 
       <div className="flex-1 flex h-0 min-h-0">
@@ -2153,7 +2295,8 @@ function App() {
           </div>
         </div>
       )}
-    </div>
+      </div>
+    </>
   );
 }
 
