@@ -25,12 +25,18 @@ export interface URLHierarchy {
 }
 
 export function createNodesFromCsvData(csvData: Array<{title: string, url: string, group?: string, contentType?: string, lastUpdated?: string}>): URLHierarchy {
-  const nodeMap = new Map<string, PageNode>();
+  const nodeMap = new Map<string, PageNode>(); // Key: unique identifier, Value: node
   const categories = new Set<string>();
+  const seenUrls = new Map<string, number>(); // Track duplicate URLs
 
   csvData.forEach((row, index) => {
     const cleanUrl = row.url.trim();
     if (!cleanUrl) return;
+
+    // Generate unique key for duplicate URLs to preserve all rows
+    const urlCount = seenUrls.get(cleanUrl) || 0;
+    seenUrls.set(cleanUrl, urlCount + 1);
+    const uniqueKey = urlCount > 0 ? `${cleanUrl}-${urlCount}` : cleanUrl;
 
     const urlObj = parseURL(cleanUrl);
     const pathSegments = urlObj.segments;
@@ -52,24 +58,32 @@ export function createNodesFromCsvData(csvData: Array<{title: string, url: strin
       lastUpdated: row.lastUpdated || undefined,
     };
 
-    // Use index-based key to allow duplicate URLs to create separate nodes
-    nodeMap.set(`${cleanUrl}-${index}`, node);
+    // Use uniqueKey to preserve all nodes, even with duplicate URLs
+    nodeMap.set(uniqueKey, node);
   });
 
 
-  // Sort nodes by depth for proper parent-child relationship building
-  const sortedNodes = Array.from(nodeMap.values()).sort((a, b) => {
-    const depthA = parseURL(a.url).segments.length;
-    const depthB = parseURL(b.url).segments.length;
+  const sortedUrls = Array.from(nodeMap.keys()).sort((a, b) => {
+    const nodeA = nodeMap.get(a)!;
+    const nodeB = nodeMap.get(b)!;
+    const depthA = parseURL(nodeA.url).segments.length;
+    const depthB = parseURL(nodeB.url).segments.length;
     return depthA - depthB;
   });
 
-  sortedNodes.forEach(node => {
+  sortedUrls.forEach(uniqueKey => {
+    const node = nodeMap.get(uniqueKey)!;
     const parentUrl = findParentURL(node.url, nodeMap);
 
     if (parentUrl) {
-      // Find parent node by matching URL (since keys are now index-based)
-      const parentNode = Array.from(nodeMap.values()).find(n => n.url === parentUrl);
+      // Find parent by matching URL (not uniqueKey) - use first match found
+      let parentNode: PageNode | undefined;
+      for (const [key, candidateNode] of nodeMap) {
+        if (candidateNode.url === parentUrl && key !== uniqueKey) {
+          parentNode = candidateNode;
+          break;
+        }
+      }
       if (parentNode) {
         node.parent = parentNode.id;
         parentNode.children.push(node.id);
@@ -108,24 +122,22 @@ export function analyzeURLStructure(urls: string[]): URLHierarchy {
       category,
     };
 
-    // Use index-based key to allow duplicate URLs to create separate nodes
-    nodeMap.set(`${cleanUrl}-${index}`, node);
+    nodeMap.set(cleanUrl, node);
   });
 
 
-  // Sort nodes by depth for proper parent-child relationship building
-  const sortedNodes = Array.from(nodeMap.values()).sort((a, b) => {
-    const depthA = parseURL(a.url).segments.length;
-    const depthB = parseURL(b.url).segments.length;
+  const sortedUrls = Array.from(nodeMap.keys()).sort((a, b) => {
+    const depthA = parseURL(a).segments.length;
+    const depthB = parseURL(b).segments.length;
     return depthA - depthB;
   });
 
-  sortedNodes.forEach(node => {
-    const parentUrl = findParentURL(node.url, nodeMap);
+  sortedUrls.forEach(url => {
+    const node = nodeMap.get(url)!;
+    const parentUrl = findParentURL(url, nodeMap);
 
     if (parentUrl) {
-      // Find parent node by matching URL (since keys are now index-based)
-      const parentNode = Array.from(nodeMap.values()).find(n => n.url === parentUrl);
+      const parentNode = nodeMap.get(parentUrl);
       if (parentNode) {
         node.parent = parentNode.id;
         parentNode.children.push(node.id);
@@ -158,13 +170,11 @@ function findParentURL(url: string, nodeMap: Map<string, PageNode>): string | nu
 
   if (segments.length === 0) return null;
 
-  // Get all nodes from the map (since keys are now index-based)
-  const allNodes = Array.from(nodeMap.values());
-
   for (let i = segments.length - 1; i > 0; i--) {
     const parentSegments = segments.slice(0, i);
 
-    for (const candidateNode of allNodes) {
+    // Search by node.url (not uniqueKey) to find parent
+    for (const [, candidateNode] of nodeMap) {
       const candidateSegments = parseURL(candidateNode.url).segments;
 
       if (arraysEqual(candidateSegments, parentSegments)) {
@@ -174,7 +184,7 @@ function findParentURL(url: string, nodeMap: Map<string, PageNode>): string | nu
   }
 
   if (segments.length > 1) {
-    for (const candidateNode of allNodes) {
+    for (const [, candidateNode] of nodeMap) {
       const candidateSegments = parseURL(candidateNode.url).segments;
       if (candidateSegments.length === 0 ||
           (candidateSegments.length === 1 && candidateSegments[0] === segments[0])) {

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { flushSync } from 'react-dom';
-import { Download, Trash2, ChevronDown, ChevronUp, Menu, X, Search, HelpCircle, Edit2, LogIn, LogOut, User, Image, FileText, Layers } from 'lucide-react';
+import { flushSync, createPortal } from 'react-dom';
+import { Download, Trash2, ChevronDown, ChevronUp, Menu, X, Search, HelpCircle, Edit2, LogIn, LogOut, User } from 'lucide-react';
 import { SitemapCanvas } from './components/SitemapCanvas';
 import { SearchOverlay } from './components/SearchOverlay';
 import { AuthModal } from './components/AuthModal';
@@ -26,37 +26,78 @@ type HistorySnapshot = {
   colorOverrides: Record<string, { customColor?: string; textColor?: string }>;
   figures: Figure[];
   freeLines: FreeLine[];
+  selectionGroups: SelectionGroup[];
+};
+
+// Tooltip rendered to body to avoid clipping by parent containers
+const PortalTooltip = ({ anchorRect, text }: { anchorRect: DOMRect; text: string }) => {
+  const style: React.CSSProperties = {
+    position: 'fixed',
+    left: anchorRect.left,
+    top: anchorRect.bottom + 6,
+    zIndex: 1000,
+    pointerEvents: 'none',
+  };
+  return createPortal(
+    <div style={style}>
+      <div className="bg-gray-900 text-white text-xs rounded py-1 px-2 whitespace-nowrap relative">
+        {text}
+        <div className="absolute -top-1 left-2 w-2 h-2 bg-gray-900 transform rotate-45"></div>
+      </div>
+    </div>,
+    document.body
+  );
 };
 
 // Shortcut display component
-const ShortcutItem = ({ keys, label, info }: { keys: string; label: string; info?: string }) => (
-  <div className="flex items-center justify-between py-2 px-3 hover:bg-gray-50 rounded-lg transition-colors group">
-    <div className="flex items-center gap-2">
-      <span className="text-sm text-gray-700">{label}</span>
-      {info && (
-        <div className="relative inline-block">
-          <HelpCircle className="w-3.5 h-3.5 text-gray-400" strokeWidth={1.5} />
-          <div className="hidden group-hover:block absolute left-0 top-6 z-10 pointer-events-none">
-            <div className="bg-gray-900 text-white text-xs rounded py-1 px-2 whitespace-nowrap relative">
-              {info}
-              <div className="absolute -top-1 left-2 w-2 h-2 bg-gray-900 transform rotate-45"></div>
-            </div>
-          </div>
-        </div>
-      )}
+const ShortcutItem = ({ keys, label, info }: { keys: string; label: string; info?: string }) => {
+  const helpRef = useRef<HTMLSpanElement | null>(null);
+  const [showTip, setShowTip] = useState(false);
+  const [rect, setRect] = useState<DOMRect | null>(null);
+
+  useEffect(() => {
+    if (!showTip || !helpRef.current) return;
+    const update = () => {
+      if (helpRef.current) setRect(helpRef.current.getBoundingClientRect());
+    };
+    update();
+    window.addEventListener('scroll', update, true);
+    window.addEventListener('resize', update);
+    return () => {
+      window.removeEventListener('scroll', update, true);
+      window.removeEventListener('resize', update);
+    };
+  }, [showTip]);
+
+  return (
+    <div className="flex items-center justify-between py-2 px-3 hover:bg-gray-50 rounded-lg transition-colors group">
+      <div className="flex items-center gap-2">
+        <span className="text-sm text-gray-700">{label}</span>
+        {info && (
+          <span
+            ref={helpRef}
+            onMouseEnter={() => setShowTip(true)}
+            onMouseLeave={() => setShowTip(false)}
+            className="inline-flex items-center"
+          >
+            <HelpCircle className="w-3.5 h-3.5 text-gray-400" strokeWidth={1.5} />
+            {showTip && rect && <PortalTooltip anchorRect={rect} text={info} />}
+          </span>
+        )}
+      </div>
+      <div className="flex items-center gap-1">
+        {keys.split(' + ').map((key, idx) => (
+          <span key={idx}>
+            {idx > 0 && <span className="text-gray-400 mx-1">+</span>}
+            <kbd className="px-2 py-1 bg-gray-100 border border-gray-300 rounded text-xs font-mono text-gray-700 group-hover:bg-gray-200 transition-colors min-w-[32px] text-center">
+              {key}
+            </kbd>
+          </span>
+        ))}
+      </div>
     </div>
-    <div className="flex items-center gap-1">
-      {keys.split(' + ').map((key, idx) => (
-        <span key={idx}>
-          {idx > 0 && <span className="text-gray-400 mx-1">+</span>}
-          <kbd className="px-2 py-1 bg-gray-100 border border-gray-300 rounded text-xs font-mono text-gray-700 group-hover:bg-gray-200 transition-colors min-w-[32px] text-center">
-            {key}
-          </kbd>
-        </span>
-      ))}
-    </div>
-  </div>
-);
+  );
+};
 
 function App() {
   // Sitemap management state
@@ -71,6 +112,7 @@ function App() {
   // Local working state (synced with active sitemap)
   const [urls, setUrls] = useState<string[]>([]);
   const [nodes, setNodes] = useState<PageNode[]>([]);
+  const isUploadingCsvRef = useRef(false);
   const [extraLinks, setExtraLinks] = useState<Array<{ sourceId: string; targetId: string }>>([]);
   const [undoStack, setUndoStack] = useState<HistorySnapshot[]>([]);
   const [redoStack, setRedoStack] = useState<HistorySnapshot[]>([]);
@@ -96,7 +138,6 @@ function App() {
   const [user, setUser] = useState<SupabaseUser | null>(null);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authLoading, setAuthLoading] = useState(true);
-  const initialAuthLoadRef = useRef(false);
 
   const makeSnapshot = useCallback((): HistorySnapshot => ({
     nodes: JSON.parse(JSON.stringify(nodes)),
@@ -105,93 +146,128 @@ function App() {
     colorOverrides: JSON.parse(JSON.stringify(colorOverrides)),
     figures: JSON.parse(JSON.stringify(figures)),
     freeLines: JSON.parse(JSON.stringify(freeLines)),
-  }), [nodes, extraLinks, linkStyles, colorOverrides, figures, freeLines]);
+    selectionGroups: JSON.parse(JSON.stringify(selectionGroups)),
+  }), [nodes, extraLinks, linkStyles, colorOverrides, figures, freeLines, selectionGroups]);
+
+  // Refresh sitemaps after auth changes. Merge local sitemaps with remote so nothing disappears post-login.
+  const refreshSitemapsFromSupabase = useCallback(async () => {
+    try {
+      const remote = await loadSitemaps();
+      const savedActiveId = localStorage.getItem('activeSitemapId');
+
+      // Merge local sitemaps not present on server (e.g., created pre-login)
+      let merged = remote;
+      try {
+        const localStr = localStorage.getItem('sitemaps');
+        if (localStr) {
+          const localList = JSON.parse(localStr) as SitemapData[];
+          const remoteIds = new Set(remote.map(s => s.id));
+          const toMerge = localList.filter(s => !remoteIds.has(s.id));
+          if (toMerge.length) merged = [...toMerge, ...remote];
+        }
+      } catch (err) {
+        console.warn('Failed to read local sitemaps for merge:', err);
+      }
+
+      if (merged.length === 0) return; // keep current state
+
+      setSitemaps(merged);
+      const activeId = savedActiveId && merged.find(s => s.id === savedActiveId)
+        ? savedActiveId
+        : merged[0].id;
+      const active = merged.find(s => s.id === activeId) || merged[0];
+
+      const { figures: figs, freeLines: lines } = await loadSitemapWithDrawables(activeId);
+      setFigures(figs);
+      setFreeLines(lines);
+      setActiveSitemapId(activeId);
+      setNodes(JSON.parse(JSON.stringify(active.nodes)));
+      setExtraLinks(JSON.parse(JSON.stringify(active.extraLinks)));
+      setLinkStyles(JSON.parse(JSON.stringify(active.linkStyles)));
+      setColorOverrides(JSON.parse(JSON.stringify(active.colorOverrides)));
+      setUrls(JSON.parse(JSON.stringify(active.urls)));
+      setSelectionGroups(JSON.parse(JSON.stringify(active.selectionGroups || [])));
+
+      // Persist merged immediately for reliability across refresh
+      try {
+        localStorage.setItem('sitemaps', JSON.stringify(merged));
+        localStorage.setItem('activeSitemapId', activeId);
+      } catch {}
+    } catch (e) {
+      console.error('Failed to refresh sitemaps after auth change:', e);
+    }
+  }, []);
 
   // Check if Supabase is configured
   const isSupabaseConfigured = useCallback(() => {
-    return !!(import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_ANON_KEY);
+    return !!(import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_ANON_KEY && supabase);
   }, []);
 
-  // Initialize auth state
-  useEffect(() => {
-    let mounted = true;
-    let subscription: { unsubscribe: () => void } | null = null;
-    let skipFirstEvent = true; // Flag to skip the first event from onAuthStateChange
+  // Require authentication for actions (only if Supabase is configured)
+  const requireAuth = useCallback((): boolean => {
+    if (!isSupabaseConfigured()) {
+      // If Supabase is not configured, allow all actions (localStorage mode)
+      return true;
+    }
+    if (!user) {
+      // User not logged in, show auth modal
+      setShowAuthModal(true);
+      return false;
+    }
+    return true;
+  }, [isSupabaseConfigured, user]);
 
+  // Treat auth as ready if Supabase isn't configured or client isn't initialized (kept for future use)
+  // const authReady = !isSupabaseConfigured() || !supabase || !authLoading;
+
+  // Initialize auth state (auto-prompt sign-in if configured but no session)
+  useEffect(() => {
     const initAuth = async () => {
-      if (!isSupabaseConfigured()) {
-        if (mounted) {
-          setAuthLoading(false);
-          initialAuthLoadRef.current = true;
+      // Always show local immediately to avoid blank UI on refresh
+      try {
+        const localStrEarly = localStorage.getItem('sitemaps');
+        const localActiveEarly = localStorage.getItem('activeSitemapId');
+        if (localStrEarly) {
+          const localList = JSON.parse(localStrEarly) as SitemapData[];
+          setSitemaps(localList);
+          if (localActiveEarly) setActiveSitemapId(localActiveEarly);
         }
+      } catch {}
+
+      if (!isSupabaseConfigured()) {
+        setAuthLoading(false);
         return;
       }
 
       try {
         const session = await getSession();
-        if (mounted) {
-          // Set user and loading state together - React will batch these automatically
-          if (session?.user) {
-            setUser(session.user);
-          }
-          // Set loading to false after user is set to prevent flickering
-          setAuthLoading(false);
-          initialAuthLoadRef.current = true;
-
-          // Set up auth state change listener AFTER initial load completes
-          // This prevents the initial event from interfering
-          if (supabase) {
-            const { data: { subscription: sub } } = supabase.auth.onAuthStateChange((_event, session) => {
-              if (!mounted) return;
-              
-              // Skip the first event since we've already handled the initial state
-              if (skipFirstEvent) {
-                skipFirstEvent = false;
-                return;
-              }
-              
-              // Only update if user actually changed to prevent unnecessary re-renders
-              const newUser = session?.user ?? null;
-              setUser(prevUser => {
-                // If we had a user and new user is null, only update if it's a sign out event
-                // Otherwise preserve the existing user to prevent flickering
-                if (prevUser && !newUser) {
-                  // User signed out - this is intentional, allow the update
-                  return newUser;
-                }
-                // Check if user actually changed
-                if (prevUser?.id === newUser?.id) {
-                  return prevUser; // Return same reference to prevent re-render
-                }
-                return newUser;
-              });
-              // Ensure loading stays false - never show loading again once initialized
-              setAuthLoading(false);
-              if (session?.user) {
-                // Reload sitemaps when user logs in
-                window.location.reload();
-              }
-            });
-            subscription = sub;
-          }
+        if (session?.user) {
+          setUser(session.user);
+        } else {
+          setShowAuthModal(true);
         }
       } catch (error) {
         console.error('Error initializing auth:', error);
-        if (mounted) {
-          setAuthLoading(false);
-          initialAuthLoadRef.current = true;
-        }
+      } finally {
+        setAuthLoading(false);
       }
     };
 
     initAuth();
 
-    return () => {
-      mounted = false;
-      if (subscription) {
+    // Listen for auth changes
+    if (supabase) {
+      const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+        setUser(session?.user ?? null);
+        if (session?.user) {
+          await refreshSitemapsFromSupabase();
+        }
+      });
+
+      return () => {
         subscription.unsubscribe();
-      }
-    };
+      };
+    }
   }, [isSupabaseConfigured]);
 
   const handleAuthSuccess = async () => {
@@ -199,19 +275,71 @@ function App() {
     if (currentUser) {
       setUser(currentUser);
       setShowAuthModal(false);
-      // Reload sitemaps after login
-      window.location.reload();
+      await refreshSitemapsFromSupabase();
     }
   };
 
   const handleSignOut = async () => {
-    await signOut();
-    setUser(null);
-    // Clear local sitemaps and reload
-    setSitemaps([]);
-    setNodes([]);
-    setUrls([]);
-    window.location.reload();
+    try {
+      const { error } = await signOut();
+      if (error) {
+        console.error('signOut() failed:', error);
+      }
+    } catch (e) {
+      console.error('signOut() failed:', e);
+    } finally {
+      setUser(null);
+      // Show auth modal immediately after logout to remind users they need to log in
+      setShowAuthModal(true);
+
+      // Clear Supabase tokens so the auth listener doesn't immediately repopulate user
+      try {
+        const toClear: string[] = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i) as string;
+          if (/^sb-.*-(auth-token|csrf-token)$/i.test(k) || k.toLowerCase().includes('supabase')) {
+            toClear.push(k);
+          }
+        }
+        toClear.forEach(k => localStorage.removeItem(k));
+      } catch {}
+
+      // Restore local sitemaps (no wipe)
+      try {
+        const str = localStorage.getItem('sitemaps');
+        if (str) {
+          const list = JSON.parse(str) as SitemapData[];
+          setSitemaps(list);
+          const savedActiveId = localStorage.getItem('activeSitemapId');
+          const activeId = savedActiveId && list.find(s => s.id === savedActiveId)
+            ? savedActiveId
+            : (list[0]?.id ?? null);
+
+          if (activeId) {
+            const active = list.find(s => s.id === activeId)!;
+            setActiveSitemapId(activeId);
+            setNodes(JSON.parse(JSON.stringify(active.nodes)));
+            setExtraLinks(JSON.parse(JSON.stringify(active.extraLinks)));
+            setLinkStyles(JSON.parse(JSON.stringify(active.linkStyles)));
+            setColorOverrides(JSON.parse(JSON.stringify(active.colorOverrides)));
+            setUrls(JSON.parse(JSON.stringify(active.urls)));
+            setSelectionGroups(JSON.parse(JSON.stringify(active.selectionGroups || [])));
+          } else {
+            setActiveSitemapId(null);
+            setNodes([]); setExtraLinks([]); setLinkStyles({}); setColorOverrides({});
+            setUrls([]); setSelectionGroups([]); setFigures([]); setFreeLines([]);
+          }
+        } else {
+          setSitemaps([]);
+          setActiveSitemapId(null);
+          setNodes([]); setExtraLinks([]); setLinkStyles({}); setColorOverrides({});
+          setUrls([]); setSelectionGroups([]); setFigures([]); setFreeLines([]);
+        }
+        setUndoStack([]); setRedoStack([]); setSelectedNode(null);
+      } catch (e) {
+        console.error('Restore local sitemaps after sign-out failed:', e);
+      }
+    }
   };
 
   // Sitemap management functions
@@ -236,32 +364,40 @@ function App() {
       sitemap.id === activeSitemapId ? updatedSitemap : sitemap
     ));
 
-    // Update localStorage to keep it in sync (for fallback if Supabase fails)
-    const updatedSitemaps = sitemaps.map(s => 
-      s.id === activeSitemapId ? updatedSitemap : s
-    );
-    localStorage.setItem('sitemaps', JSON.stringify(updatedSitemaps));
-
-    // Save to Supabase if configured
-    if (isSupabaseConfigured()) {
+    // Save to Supabase if configured and client exists
+    if (isSupabaseConfigured() && supabase) {
       try {
         await saveSitemap(updatedSitemap, figures, freeLines);
       } catch (error) {
         console.error('Failed to save to Supabase:', error);
-        // localStorage already updated above, so fallback is ready
+        // Fallback to localStorage
+        localStorage.setItem('sitemaps', JSON.stringify(sitemaps.map(s => 
+          s.id === activeSitemapId ? updatedSitemap : s
+        )));
       }
+    } else {
+      // Fallback to localStorage
+      localStorage.setItem('sitemaps', JSON.stringify(sitemaps.map(s => 
+        s.id === activeSitemapId ? updatedSitemap : s
+      )));
     }
   }, [activeSitemapId, nodes, extraLinks, linkStyles, colorOverrides, urls, figures, freeLines, selectionGroups, sitemaps, isSupabaseConfigured]);
 
   const createNewSitemap = useCallback(async () => {
-    // Save current state before creating a new sitemap
+    if (!requireAuth()) return;
+    
+    console.log('Create New Sitemap: start');
+    
+    // Don't await save - do it in background to avoid blocking
+    if (activeSitemapId) {
+      saveCurrentStateToActiveSitemap().catch(error => {
+        console.error('Failed to save current sitemap before creating new one:', error);
+      });
+    }
+
+    // Create new sitemap immediately
     const newSitemapId = `sitemap-${Date.now()}`;
     const now = Date.now();
-
-    // Save current sitemap if it exists
-    if (activeSitemapId) {
-      await saveCurrentStateToActiveSitemap();
-    }
 
     setSitemaps(prev => {
       // Find the highest number used in "Untitled Sitemap" names
@@ -288,26 +424,28 @@ function App() {
         createdAt: now
       };
 
-      const updatedSitemaps = [...prev, newSitemap];
+      const next = [...prev, newSitemap];
       
-      // Update localStorage to keep it in sync
-      localStorage.setItem('sitemaps', JSON.stringify(updatedSitemaps));
-      localStorage.setItem('activeSitemapId', newSitemapId);
+      // Save to localStorage immediately
+      try {
+        localStorage.setItem('sitemaps', JSON.stringify(next));
+        localStorage.setItem('activeSitemapId', newSitemapId);
+      } catch (e) {
+        console.warn('Create New Sitemap: failed to write localStorage backup', e);
+      }
 
-      // Save to Supabase if configured
-      if (isSupabaseConfigured()) {
+      // Save to Supabase in background (don't block)
+      if (isSupabaseConfigured() && supabase) {
         saveSitemap(newSitemap, [], []).catch(error => {
           console.error('Failed to save new sitemap to Supabase:', error);
         });
       }
 
-      return updatedSitemaps;
+      return next;
     });
 
-    // Set the new sitemap as active
+    // Set the new sitemap as active and reset state immediately
     setActiveSitemapId(newSitemapId);
-    
-    // Reset all state
     setNodes([]);
     setExtraLinks([]);
     setLinkStyles({});
@@ -317,97 +455,97 @@ function App() {
     setFreeLines([]);
     setUndoStack([]);
     setRedoStack([]);
+    setSelectionGroups([]);
     setSelectedNode(null);
+    
+    console.log('Create New Sitemap: completed', newSitemapId);
   }, [activeSitemapId, saveCurrentStateToActiveSitemap, isSupabaseConfigured]);
 
   const switchToSitemap = useCallback(async (sitemapId: string) => {
-    // Save current state before switching
-    if (activeSitemapId) {
-      await saveCurrentStateToActiveSitemap();
-    }
-    
     const sitemap = sitemaps.find(s => s.id === sitemapId);
-    if (sitemap) {
-      setActiveSitemapId(sitemapId);
-      
-      // Update localStorage to keep it in sync
-      localStorage.setItem('activeSitemapId', sitemapId);
-      
-      setNodes(JSON.parse(JSON.stringify(sitemap.nodes)));
-      setExtraLinks(JSON.parse(JSON.stringify(sitemap.extraLinks)));
-      setLinkStyles(JSON.parse(JSON.stringify(sitemap.linkStyles)));
-      setColorOverrides(JSON.parse(JSON.stringify(sitemap.colorOverrides)));
-      setUrls(JSON.parse(JSON.stringify(sitemap.urls)));
-      setSelectionGroups(JSON.parse(JSON.stringify(sitemap.selectionGroups || [])));
-      
-      // Load figures and freeLines from Supabase if configured
-      if (isSupabaseConfigured()) {
-        try {
-          const { figures: loadedFigures, freeLines: loadedFreeLines } = await loadSitemapWithDrawables(sitemapId);
-          setFigures(loadedFigures);
-          setFreeLines(loadedFreeLines);
-        } catch (error) {
-          console.error('Failed to load figures/freeLines from Supabase:', error);
-          setFigures([]);
-          setFreeLines([]);
-        }
-      } else {
-        setFigures([]);
-        setFreeLines([]);
-      }
-      
-      // Clear history on switch
-      setUndoStack([]);
-      setRedoStack([]);
-      setSelectedNode(null);
+    if (!sitemap) return;
+
+    // Save current in background (don't block)
+    if (activeSitemapId && activeSitemapId !== sitemapId) {
+      saveCurrentStateToActiveSitemap().catch(err =>
+        console.error('Save before switch failed:', err)
+      );
+    }
+
+    // Immediate UI update
+    setActiveSitemapId(sitemapId);
+    setNodes(JSON.parse(JSON.stringify(sitemap.nodes)));
+    setExtraLinks(JSON.parse(JSON.stringify(sitemap.extraLinks)));
+    setLinkStyles(JSON.parse(JSON.stringify(sitemap.linkStyles)));
+    setColorOverrides(JSON.parse(JSON.stringify(sitemap.colorOverrides)));
+    setUrls(JSON.parse(JSON.stringify(sitemap.urls)));
+    setSelectionGroups(JSON.parse(JSON.stringify(sitemap.selectionGroups || [])));
+    setUndoStack([]);
+    setRedoStack([]);
+    setSelectedNode(null);
+    try { localStorage.setItem('activeSitemapId', sitemapId); } catch {}
+
+    // Load drawables in background
+    if (isSupabaseConfigured() && supabase) {
+      loadSitemapWithDrawables(sitemapId)
+        .then(({ figures: f, freeLines: fl }) => { setFigures(f); setFreeLines(fl); })
+        .catch(err => { console.error('Load drawables on switch:', err); setFigures([]); setFreeLines([]); });
+    } else {
+      setFigures([]);
+      setFreeLines([]);
     }
   }, [sitemaps, activeSitemapId, saveCurrentStateToActiveSitemap, isSupabaseConfigured]);
 
   const deleteSitemap = useCallback(async (sitemapId: string) => {
+    if (!requireAuth()) return;
+    
     if (sitemaps.length <= 1) {
-      // Can't delete the last sitemap - just create a new empty one
-      await createNewSitemap();
+      createNewSitemap();
       return;
     }
-    
-    // Delete from Supabase if configured
-    if (isSupabaseConfigured()) {
-      try {
-        await deleteSitemapFromSupabase(sitemapId);
-      } catch (error) {
-        console.error('Failed to delete sitemap from Supabase:', error);
-        // Don't proceed with local deletion if Supabase delete failed
-        return;
-      }
-    }
-    
+
+    // Immediate UI update
     const filtered = sitemaps.filter(s => s.id !== sitemapId);
     setSitemaps(filtered);
-    
-    // Update localStorage in both cases to prevent stale data from being used as fallback
-    // If Supabase is configured, update localStorage to match (prevents fallback issues)
-    // If Supabase is not configured, localStorage is the primary storage
-    localStorage.setItem('sitemaps', JSON.stringify(filtered));
-    
-    // If deleting active, switch to first remaining
-    if (activeSitemapId === sitemapId) {
-      const newActiveId = filtered[0]?.id;
-      if (newActiveId) {
-        await switchToSitemap(newActiveId);
-        localStorage.setItem('activeSitemapId', newActiveId);
-      } else {
-        // No sitemaps left, clear activeSitemapId
-        localStorage.removeItem('activeSitemapId');
-      }
-    } else {
-      // Update localStorage with current activeId
-      if (activeSitemapId) {
-        localStorage.setItem('activeSitemapId', activeSitemapId);
+    try { localStorage.setItem('sitemaps', JSON.stringify(filtered)); } catch {}
+
+    // If deleting active, switch instantly to first remaining
+    if (activeSitemapId === sitemapId && filtered.length > 0) {
+      const next = filtered[0];
+      setActiveSitemapId(next.id);
+      setNodes(JSON.parse(JSON.stringify(next.nodes)));
+      setExtraLinks(JSON.parse(JSON.stringify(next.extraLinks)));
+      setLinkStyles(JSON.parse(JSON.stringify(next.linkStyles)));
+      setColorOverrides(JSON.parse(JSON.stringify(next.colorOverrides)));
+      setUrls(JSON.parse(JSON.stringify(next.urls)));
+      setSelectionGroups(JSON.parse(JSON.stringify(next.selectionGroups || [])));
+      setFigures([]);
+      setFreeLines([]);
+      setUndoStack([]);
+      setRedoStack([]);
+      setSelectedNode(null);
+      try { localStorage.setItem('activeSitemapId', next.id); } catch {}
+
+      if (isSupabaseConfigured() && supabase) {
+        loadSitemapWithDrawables(next.id)
+          .then(({ figures: loadedFigures, freeLines: loadedFreeLines }) => {
+            setFigures(loadedFigures);
+            setFreeLines(loadedFreeLines);
+          })
+          .catch(err => console.error('Load drawables after delete:', err));
       }
     }
-  }, [sitemaps, activeSitemapId, createNewSitemap, switchToSitemap, isSupabaseConfigured]);
+
+    // Background remote delete
+    if (isSupabaseConfigured() && supabase) {
+      deleteSitemapFromSupabase(sitemapId).catch(err =>
+        console.error('Supabase delete failed (UI already updated):', err)
+      );
+    }
+  }, [sitemaps, activeSitemapId, createNewSitemap, isSupabaseConfigured, requireAuth]);
 
   const renameSitemap = useCallback(async (sitemapId: string, newName: string) => {
+    if (!requireAuth()) return;
     if (!newName.trim()) return; // Still validate non-empty
     
     const updatedSitemap = sitemaps.find(s => s.id === sitemapId);
@@ -419,9 +557,11 @@ function App() {
       lastModified: Date.now()
     };
 
-    setSitemaps(prev => prev.map(s => 
-      s.id === sitemapId ? renamed : s
-    ));
+    setSitemaps(prev => {
+      const next = prev.map(s => s.id === sitemapId ? renamed : s);
+      try { localStorage.setItem('sitemaps', JSON.stringify(next)); } catch {}
+      return next;
+    });
 
     // Save to Supabase if configured
     if (isSupabaseConfigured()) {
@@ -436,27 +576,46 @@ function App() {
   // Load sitemaps on mount (from Supabase or localStorage)
   useEffect(() => {
     const loadData = async () => {
+      // Show local immediately to avoid blank UI on refresh
+      try {
+        const localStrEarly = localStorage.getItem('sitemaps');
+        const localActiveEarly = localStorage.getItem('activeSitemapId');
+        if (localStrEarly) {
+          const localList = JSON.parse(localStrEarly) as SitemapData[];
+          setSitemaps(localList);
+          if (localActiveEarly) setActiveSitemapId(localActiveEarly);
+        }
+      } catch {}
+
       if (isSupabaseConfigured()) {
         try {
           const loadedSitemaps = await loadSitemaps();
           const savedActiveId = localStorage.getItem('activeSitemapId');
-          
-          // Sync localStorage with Supabase data to ensure fallback has correct data
-          // This prevents stale data from being used if Supabase fails on subsequent loads
-          if (loadedSitemaps.length > 0) {
-            localStorage.setItem('sitemaps', JSON.stringify(loadedSitemaps));
-            setSitemaps(loadedSitemaps);
-            
-            // Use saved active ID if it exists in loaded sitemaps, otherwise use first
-            const activeId = savedActiveId && loadedSitemaps.find(s => s.id === savedActiveId)
+
+          // Merge local sitemaps not present on server (e.g., created before login)
+          let merged = loadedSitemaps;
+          try {
+            const localStr = localStorage.getItem('sitemaps');
+            if (localStr) {
+              const localList = JSON.parse(localStr) as SitemapData[];
+              const remoteIds = new Set(loadedSitemaps.map(s => s.id));
+              const toMerge = localList.filter(s => !remoteIds.has(s.id));
+              if (toMerge.length) merged = [...toMerge, ...loadedSitemaps];
+            }
+          } catch (e) {
+            console.warn('Failed to read local sitemaps for merge:', e);
+          }
+
+          if (merged.length > 0) {
+            setSitemaps(merged);
+
+            // Use saved active ID if it exists in merged sitemaps, otherwise first
+            const activeId = savedActiveId && merged.find(s => s.id === savedActiveId)
               ? savedActiveId
-              : loadedSitemaps[0].id;
-            
-            const activeSitemap = loadedSitemaps.find(s => s.id === activeId) || loadedSitemaps[0];
-            
-            // Update localStorage with active ID
-            localStorage.setItem('activeSitemapId', activeId);
-            
+              : merged[0].id;
+
+            const activeSitemap = merged.find(s => s.id === activeId) || merged[0];
+
             // Load the active sitemap's drawables
             const { figures: loadedFigures, freeLines: loadedFreeLines } = await loadSitemapWithDrawables(activeId);
             setFigures(loadedFigures);
@@ -483,9 +642,6 @@ function App() {
             };
             setSitemaps([initialSitemap]);
             setActiveSitemapId(initialSitemap.id);
-            // Update localStorage to match
-            localStorage.setItem('sitemaps', JSON.stringify([initialSitemap]));
-            localStorage.setItem('activeSitemapId', initialSitemap.id);
           }
         } catch (error) {
           console.error('Failed to load from Supabase, falling back to localStorage:', error);
@@ -548,21 +704,46 @@ function App() {
     loadData();
   }, [isSupabaseConfigured]);
 
-  // Save to localStorage as backup whenever sitemaps or activeId changes
-  // Only if Supabase is NOT configured (localStorage is primary storage)
+  // Sync nodes from sitemap when activeSitemapId changes (but only if nodes are empty to avoid overwriting CSV upload)
   useEffect(() => {
-    if (initialized && sitemaps.length > 0 && !isSupabaseConfigured()) {
-      // Only save to localStorage if Supabase is not configured
+    if (!initialized || !activeSitemapId || isUploadingCsvRef.current) {
+      return;
+    }
+    
+    const activeSitemap = sitemaps.find(s => s.id === activeSitemapId);
+    if (!activeSitemap) {
+      return;
+    }
+    
+    // Only sync if nodes are currently empty (to avoid overwriting during CSV upload or manual edits)
+    if (nodes.length === 0 && activeSitemap.nodes.length > 0) {
+      setNodes(JSON.parse(JSON.stringify(activeSitemap.nodes)));
+      setExtraLinks(JSON.parse(JSON.stringify(activeSitemap.extraLinks)));
+      setLinkStyles(JSON.parse(JSON.stringify(activeSitemap.linkStyles)));
+      setColorOverrides(JSON.parse(JSON.stringify(activeSitemap.colorOverrides)));
+      setUrls(JSON.parse(JSON.stringify(activeSitemap.urls)));
+      setSelectionGroups(JSON.parse(JSON.stringify(activeSitemap.selectionGroups || [])));
+    }
+  }, [activeSitemapId, sitemaps, initialized]);
+
+  // Save to localStorage as backup whenever sitemaps or activeId changes
+  useEffect(() => {
+    if (initialized && sitemaps.length > 0) {
+      // Always save to localStorage as backup
       localStorage.setItem('sitemaps', JSON.stringify(sitemaps));
       if (activeSitemapId) {
         localStorage.setItem('activeSitemapId', activeSitemapId);
       }
     }
-  }, [sitemaps, activeSitemapId, initialized, isSupabaseConfigured]);
+  }, [sitemaps, activeSitemapId, initialized]);
 
   // Auto-save current state to active sitemap periodically and on changes
   useEffect(() => {
     if (!initialized || !activeSitemapId) return;
+    // Skip auto-save during CSV upload to prevent overwriting nodes
+    if (isUploadingCsvRef.current) {
+      return;
+    }
     
     const timeoutId = setTimeout(() => {
       saveCurrentStateToActiveSitemap();
@@ -571,13 +752,6 @@ function App() {
     return () => clearTimeout(timeoutId);
   }, [nodes, extraLinks, linkStyles, colorOverrides, urls, figures, freeLines, initialized, activeSitemapId, saveCurrentStateToActiveSitemap]);
 
-  // Debug focusedNode changes
-  useEffect(() => {
-    console.log('App: focusedNode changed to:', focusedNode);
-    if (focusedNode === null) {
-      console.log('App: focusedNode set to null - call stack:', new Error().stack);
-    }
-  }, [focusedNode]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -598,6 +772,9 @@ function App() {
           setExtraLinks(prev.extraLinks);
           setLinkStyles(prev.linkStyles);
           setColorOverrides(prev.colorOverrides);
+          setFigures(prev.figures);
+          setFreeLines(prev.freeLines);
+          setSelectionGroups(prev.selectionGroups);
         }
         return;
       }
@@ -612,6 +789,9 @@ function App() {
           setExtraLinks(next.extraLinks);
           setLinkStyles(next.linkStyles);
           setColorOverrides(next.colorOverrides);
+          setFigures(next.figures);
+          setFreeLines(next.freeLines);
+          setSelectionGroups(next.selectionGroups);
         }
         return;
       }
@@ -622,17 +802,27 @@ function App() {
   }, [nodes, extraLinks, linkStyles, colorOverrides, undoStack, redoStack, makeSnapshot]);
 
   useEffect(() => {
-    if (urls.length > 0) {
+    // Skip URL analysis if we're in the middle of a CSV upload
+    if (isUploadingCsvRef.current) {
+      return;
+    }
+    
+    // Only analyze URLs if we don't already have nodes (e.g., from CSV upload)
+    // This prevents overwriting nodes that were set from CSV or other sources
+    if (urls.length > 0 && nodes.length === 0) {
       const hierarchy = analyzeURLStructure(urls);
       let layoutNodes: PageNode[];
 
       // Only apply layout if nodes don't have manual positions
-      const hasManualPositions = nodes.some(node => node.x !== undefined && node.y !== undefined);
+      const hasManualPositions = hierarchy.nodes.some(node => node.x !== undefined && node.y !== undefined);
       
       if (!hasManualPositions) {
         // Apply grouped layout algorithm
         layoutNodes = applyGroupedFlowLayout(hierarchy.nodes, { width: 1800, height: 900 });
         setNodes(layoutNodes);
+        setSidebarCollapsed(true);
+      } else {
+        setNodes(hierarchy.nodes);
         setSidebarCollapsed(true);
       }
     }
@@ -682,11 +872,19 @@ function App() {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    if (!requireAuth()) {
+      e.target.value = '';
+      return;
+    }
+
     if (!file.name.toLowerCase().endsWith('.csv')) {
       setCsvErrors(['Please select a CSV file']);
       setShowCsvErrors(true);
       return;
     }
+
+    // Set flag to prevent URL analysis useEffect from interfering
+    isUploadingCsvRef.current = true;
 
     try {
       const result = await parseCsvFile(file);
@@ -694,12 +892,14 @@ function App() {
       if (result.errors.length > 0) {
         setCsvErrors(result.errors);
         setShowCsvErrors(true);
+        isUploadingCsvRef.current = false;
         return;
       }
 
       if (result.data.length === 0) {
         setCsvErrors(['No valid data found in CSV file']);
         setShowCsvErrors(true);
+        isUploadingCsvRef.current = false;
         return;
       }
 
@@ -710,131 +910,176 @@ function App() {
         height: 900,
       });
 
-      // Check if current sitemap is empty
-      const isCurrentSitemapEmpty = nodes.length === 0 && figures.length === 0 && freeLines.length === 0;
+      // Check if we should use the active sitemap (if it's empty) or create a new one
+      const activeSitemap = activeSitemapId ? sitemaps.find(s => s.id === activeSitemapId) : null;
+      const isActiveSitemapEmpty = activeSitemap && 
+        activeSitemap.nodes.length === 0 && 
+        activeSitemap.urls.length === 0 &&
+        activeSitemap.extraLinks.length === 0;
 
-      if (isCurrentSitemapEmpty && activeSitemapId) {
-        // Current sitemap is empty - assign CSV data to it
-        const now = Date.now();
-        const csvUrls = JSON.parse(JSON.stringify(result.data.map(row => row.url)));
+      let targetSitemapId: string;
+      let next: SitemapData[];
+      const now = Date.now();
+
+      if (isActiveSitemapEmpty && activeSitemap) {
+        // Use the existing empty sitemap
+        targetSitemapId = activeSitemapId!;
         
-        setSitemaps(prev => {
-          const updated = prev.map(sitemap => {
-            if (sitemap.id === activeSitemapId) {
-              const updatedSitemap: SitemapData = {
-                ...sitemap,
+        // Update the existing sitemap
+        next = sitemaps.map(s => 
+          s.id === targetSitemapId
+            ? {
+                ...s,
                 nodes: JSON.parse(JSON.stringify(layoutNodes)),
+                urls: JSON.parse(JSON.stringify(result.data.map(row => row.url))),
                 extraLinks: [],
                 linkStyles: {},
                 colorOverrides: {},
-                urls: csvUrls,
-                lastModified: now,
-              };
-              
-              // Save to Supabase if configured
-              if (isSupabaseConfigured()) {
-                saveSitemap(updatedSitemap, [], []).catch(error => {
-                  console.error('Failed to save updated sitemap to Supabase:', error);
-                });
+                lastModified: now
               }
-              
-              return updatedSitemap;
-            }
-            return sitemap;
-          });
-          return updated;
-        });
-
-        // Update local state
-        setNodes(layoutNodes);
-        setUrls(csvUrls);
-        setExtraLinks([]);
-        setLinkStyles({});
-        setColorOverrides({});
-        setFigures([]);
-        setFreeLines([]);
-        setUndoStack([]);
-        setRedoStack([]);
-        setSelectedNode(null);
-        setSidebarCollapsed(true);
-        setCsvErrors([]);
-        setShowCsvErrors(false);
+            : s
+        );
       } else {
-        // Current sitemap is not empty - create a new sitemap
+        // Create a new sitemap with the CSV data
         const newSitemapId = `sitemap-${Date.now()}`;
-        const now = Date.now();
+        targetSitemapId = newSitemapId;
 
-        // Save current sitemap if it exists
+        // Save current sitemap if it exists (non-blocking)
         if (activeSitemapId) {
-          await saveCurrentStateToActiveSitemap();
+          // Don't await - run in background to avoid blocking CSV upload
+          saveCurrentStateToActiveSitemap()
+            .catch(error => {
+              console.error('Failed to save current sitemap before CSV upload:', error);
+              // Continue anyway - don't block CSV upload
+            });
         }
 
-        setSitemaps(prev => {
-          // Find the highest number used in "Untitled Sitemap" names
-          const untitledPattern = /^Untitled Sitemap (\d+)$/;
-          let maxNumber = 0;
-          
-          prev.forEach(sitemap => {
-            const match = sitemap.name.match(untitledPattern);
-            if (match) {
-              const num = parseInt(match[1], 10);
-              if (num > maxNumber) maxNumber = num;
-            }
-          });
-
-          const newSitemap: SitemapData = {
-            id: newSitemapId,
-            name: `Untitled Sitemap ${maxNumber + 1}`,
-            nodes: JSON.parse(JSON.stringify(layoutNodes)),
-            extraLinks: [],
-            linkStyles: {},
-            colorOverrides: {},
-            urls: JSON.parse(JSON.stringify(result.data.map(row => row.url))),
-            lastModified: now,
-            createdAt: now
-          };
-
-          // Save to Supabase if configured
-          if (isSupabaseConfigured()) {
-            saveSitemap(newSitemap, [], []).catch(error => {
-              console.error('Failed to save new sitemap to Supabase:', error);
-            });
+        // Find the highest number used in "Untitled Sitemap" names
+        const untitledPattern = /^Untitled Sitemap (\d+)$/;
+        let maxNumber = 0;
+        
+        sitemaps.forEach(sitemap => {
+          const match = sitemap.name.match(untitledPattern);
+          if (match) {
+            const num = parseInt(match[1], 10);
+            if (num > maxNumber) maxNumber = num;
           }
-
-          return [...prev, newSitemap];
         });
 
-        // Set the new sitemap as active and load its data
-        setActiveSitemapId(newSitemapId);
-        setNodes(layoutNodes);
-        setUrls(result.data.map(row => row.url));
-        setExtraLinks([]);
-        setLinkStyles({});
-        setColorOverrides({});
-        setFigures([]);
-        setFreeLines([]);
-        setUndoStack([]);
-        setRedoStack([]);
-        setSelectedNode(null);
-        setSidebarCollapsed(true);
-        setCsvErrors([]);
-        setShowCsvErrors(false);
+        const newSitemap: SitemapData = {
+          id: newSitemapId,
+          name: `Untitled Sitemap ${maxNumber + 1}`,
+          nodes: JSON.parse(JSON.stringify(layoutNodes)),
+          extraLinks: [],
+          linkStyles: {},
+          colorOverrides: {},
+          urls: JSON.parse(JSON.stringify(result.data.map(row => row.url))),
+          lastModified: now,
+          createdAt: now
+        };
+
+        next = [...sitemaps, newSitemap];
       }
+      
+      // Persist immediately to survive refresh
+      try {
+        localStorage.setItem('sitemaps', JSON.stringify(next));
+        localStorage.setItem('activeSitemapId', targetSitemapId);
+      } catch (e) {
+        console.error(`Failed to save to localStorage:`, e);
+      }
+
+      // Save to Supabase in background (do not block)
+      if (isSupabaseConfigured() && supabase) {
+        const sitemapToSave = next.find(s => s.id === targetSitemapId);
+        if (sitemapToSave) {
+          saveSitemap(sitemapToSave, [], []).catch(error => {
+            console.error('Failed to save sitemap to Supabase:', error);
+          });
+        }
+      }
+
+      // Ensure all nodes have positive coordinates (fix negative x values from relaxOverlaps)
+      const minX = Math.min(...layoutNodes.map(n => n.x ?? 0));
+      const fixedNodes = layoutNodes.map(n => {
+        if (n.x !== undefined && n.x < 0) {
+          const offset = Math.abs(minX) + 100;
+          n.x = n.x + offset;
+        }
+        return n;
+      });
+      
+      // Set nodes FIRST so the canvas renders immediately and blocks URL-analysis overwrite
+      const nodesCopy = JSON.parse(JSON.stringify(fixedNodes));
+      flushSync(() => {
+        setNodes(nodesCopy);
+      });
+      
+      // Now update sitemaps and activate the target one
+      flushSync(() => {
+        setSitemaps(next);
+        setActiveSitemapId(targetSitemapId);
+      });
+      // Set URLs after nodes to avoid triggering the URL analysis useEffect that would overwrite nodes
+      // Use setTimeout to ensure nodes are set first
+      setTimeout(() => {
+        setUrls(result.data.map(row => row.url));
+      }, 0);
+      setExtraLinks([]);
+      setLinkStyles({});
+      setColorOverrides({});
+      setFigures([]);
+      setFreeLines([]);
+      setUndoStack([]);
+      setRedoStack([]);
+      setSelectedNode(null);
+      setSelectionGroups([]);
+      setSidebarCollapsed(true);
+      setCsvErrors([]);
+      setShowCsvErrors(false);
       
       // Reset file input
       e.target.value = '';
+      
+      // Clear the flag after a short delay to allow state updates to complete
+      setTimeout(() => {
+        isUploadingCsvRef.current = false;
+      }, 100);
     } catch (error) {
       setCsvErrors([`Error processing CSV file: ${error}`]);
       setShowCsvErrors(true);
+      // Clear flag on error too
+      isUploadingCsvRef.current = false;
     }
   };
 
 
 
   const handleNodesUpdate = (updatedNodes: PageNode[]) => {
+    if (!requireAuth()) return;
+    
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
     setNodes(updatedNodes);
+    
+    // Sync colorOverrides with node colors - if a node has customColor/textColor, 
+    // ensure colorOverrides matches (or clear it if node colors are removed)
+    setColorOverrides(prev => {
+      const next = { ...prev };
+      updatedNodes.forEach(node => {
+        if (node.customColor || node.textColor) {
+          // Update colorOverrides to match node colors
+          next[node.id] = {
+            customColor: node.customColor,
+            textColor: node.textColor,
+          };
+        } else {
+          // Clear colorOverrides if node colors are removed
+          delete next[node.id];
+        }
+      });
+      return next;
+    });
   };
 
   const handleNodesPreview = (updatedNodes: PageNode[]) => {
@@ -842,6 +1087,8 @@ function App() {
   };
 
   const handleExtraLinkCreate = (sourceId: string, targetId: string) => {
+    if (!requireAuth()) return;
+    
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
 
@@ -878,12 +1125,16 @@ function App() {
   };
 
   const handleExtraLinkDelete = (sourceId: string, targetId: string) => {
+    if (!requireAuth()) return;
+    
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
     setExtraLinks(prev => prev.filter(l => !(l.sourceId === sourceId && l.targetId === targetId)));
   };
 
   const handleNodeEdit = (nodeId: string, updates: Partial<PageNode>) => {
+    if (!requireAuth()) return;
+    
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
     setNodes(prev => prev.map(node => 
@@ -897,6 +1148,8 @@ function App() {
   };
 
   const handleGroupEdit = (category: string, updates: Partial<PageNode>) => {
+    if (!requireAuth()) return;
+    
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
     setNodes(prev => prev.map(node => 
@@ -939,6 +1192,8 @@ function App() {
   }, []);
 
   const handleNodeDelete = (nodeId: string) => {
+    if (!requireAuth()) return;
+    
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
     setNodes(prev => {
@@ -986,6 +1241,7 @@ function App() {
   }
 
   function handleMoveNodesToGroup(nodeIds: string[], targetGroup: string, opts?: { includeSubtree?: boolean; relayout?: boolean }) {
+    if (!requireAuth()) return;
     if (nodeIds.length === 0) return;
     const include = new Set<string>(nodeIds);
     if (opts?.includeSubtree) {
@@ -1012,12 +1268,14 @@ function App() {
   }
 
   function handleCreateGroupFromSelection(selectedIds: string[], newGroupName: string, opts?: { relayout?: boolean }) {
+    if (!requireAuth()) return;
     const name = (newGroupName || '').trim();
     if (!name) return;
     handleMoveNodesToGroup(selectedIds, name, { includeSubtree: false, relayout: !!opts?.relayout });
   }
 
   function handleDeleteGroup(groupName: string) {
+    if (!requireAuth()) return;
     // When deleting a group, reassign all nodes in that group to 'general'
     handleMoveNodesToGroup(
       nodes.filter(n => n.category === groupName).map(n => n.id),
@@ -1027,6 +1285,7 @@ function App() {
   }
 
   function handleRenameGroup(oldName: string, newName: string) {
+    if (!requireAuth()) return;
     const name = (newName || '').trim();
     if (!name || name === oldName) return;
     const updated = nodes.map(n => n.category === oldName ? { ...n, category: name } : n);
@@ -1035,18 +1294,28 @@ function App() {
 
   // ===== Free-form selection groups (nodes + text figures) =====
   const createSelectionGroup = useCallback((memberNodeIds: string[], memberFigureIds: string[], name?: string) => {
+    if (!requireAuth()) return;
+    // Add snapshot before making changes
+    setUndoStack(stack => [...stack, makeSnapshot()]);
+    setRedoStack([]);
+    
     const id = `sg-${Date.now()}`;
     const group: SelectionGroup = { id, name: name || `Group ${selectionGroups.length + 1}`, memberNodeIds, memberFigureIds };
     setSelectionGroups(prev => [...prev, group]);
-  }, [selectionGroups.length]);
+  }, [selectionGroups.length, makeSnapshot, requireAuth]);
 
   const ungroupSelection = useCallback((memberNodeIds: string[], memberFigureIds: string[]) => {
+    if (!requireAuth()) return;
+    // Add snapshot before making changes
+    setUndoStack(stack => [...stack, makeSnapshot()]);
+    setRedoStack([]);
+    
     setSelectionGroups(prev => prev.map(g => ({
       ...g,
       memberNodeIds: g.memberNodeIds.filter(id => !memberNodeIds.includes(id)),
       memberFigureIds: g.memberFigureIds.filter(id => !memberFigureIds.includes(id)),
     })).filter(g => g.memberNodeIds.length > 0 || g.memberFigureIds.length > 0));
-  }, []);
+  }, [makeSnapshot, requireAuth]);
 
   const [snapToGuides, setSnapToGuides] = useState<boolean>(() => {
     const v = localStorage.getItem('snapToGuides');
@@ -1055,6 +1324,8 @@ function App() {
   useEffect(() => { localStorage.setItem('snapToGuides', snapToGuides ? '1' : '0'); }, [snapToGuides]);
 
   const handleAddNode = (parentId: string | null = null) => {
+    if (!requireAuth()) return;
+    
     const newNodeId = `node-${Date.now()}`;
     const parentNode = parentId ? nodes.find(n => n.id === parentId) : null;
     
@@ -1102,6 +1373,8 @@ function App() {
   };
 
   const handleConnectionCreate = (sourceId: string, targetId: string) => {
+    if (!requireAuth()) return;
+    
     setNodes(prev => {
       const updated = prev.map(node => {
         if (node.id === targetId) {
@@ -1137,101 +1410,95 @@ function App() {
   }, []);
 
   const handleClearSearch = useCallback(() => {
-    console.log('App: handleClearSearch called - clearing search results only (keeping focusedNode)');
     setSearchResults([]);
     // Don't clear focusedNode here - it should only be cleared when user explicitly clears search
     // setFocusedNode(null); // Clear focused node when clearing search
   }, []);
 
   const handleClearFocus = useCallback(() => {
-    console.log('App: handleClearFocus called - clearing focusedNode');
     setFocusedNode(null);
   }, []);
 
   const handleLinkStyleChange = useCallback((linkKey: string, style: LinkStyle) => {
+    if (!requireAuth()) return;
+    
     setLinkStyles(prev => ({
       ...prev,
       [linkKey]: { ...prev[linkKey], ...style }
     }));
-  }, []);
+  }, [requireAuth]);
 
   // Figure handlers
   const handleCreateFigure = useCallback((figure: Figure) => {
+    if (!requireAuth()) return;
+    
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
     setFigures(prev => [...prev, figure]);
-  }, [makeSnapshot]);
+  }, [makeSnapshot, requireAuth]);
 
   const handleUpdateFigure = useCallback((id: string, updates: Partial<Figure>) => {
+    if (!requireAuth()) return;
+    
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
     setFigures(prev => prev.map(f => f.id === id ? { ...f, ...updates } : f));
-  }, [makeSnapshot]);
+  }, [makeSnapshot, requireAuth]);
 
   const handleDeleteFigure = useCallback((id: string) => {
+    if (!requireAuth()) return;
+    
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
     setFigures(prev => prev.filter(f => f.id !== id));
-  }, [makeSnapshot]);
+  }, [makeSnapshot, requireAuth]);
 
   // FreeLine handlers
   const handleCreateFreeLine = useCallback((line: FreeLine) => {
+    if (!requireAuth()) return;
+    
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
     setFreeLines(prev => [...prev, line]);
-  }, [makeSnapshot]);
+  }, [makeSnapshot, requireAuth]);
 
   const handleUpdateFreeLine = useCallback((id: string, updates: Partial<FreeLine>) => {
+    if (!requireAuth()) return;
+    
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
     setFreeLines(prev => prev.map(l => l.id === id ? { ...l, ...updates } : l));
-  }, [makeSnapshot]);
+  }, [makeSnapshot, requireAuth]);
 
   const handleDeleteFreeLine = useCallback((id: string) => {
+    if (!requireAuth()) return;
+    
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
     setFreeLines(prev => prev.filter(l => l.id !== id));
-  }, [makeSnapshot]);
+  }, [makeSnapshot, requireAuth]);
 
   const handleFocusNode = useCallback((node: PageNode) => {
-    console.log('App: handleFocusNode called with:', node.title, node.id);
-    
     // Set the focused node for visual highlighting FIRST using flushSync
-    console.log('App: Setting focusedNode to:', node.title);
-    console.log('App: About to call setFocusedNode with flushSync');
     flushSync(() => {
       setFocusedNode(node);
     });
-    console.log('App: setFocusedNode called with flushSync');
     
     // Then center the view on the selected node using ref
     if (sitemapCanvasRef.current && sitemapCanvasRef.current.centerOnNode) {
-      console.log('App: Calling centerOnNode');
       sitemapCanvasRef.current.centerOnNode(node);
-    } else {
-      console.log('App: Ref or centerOnNode not available');
     }
   }, []);
 
-  const handleExport = async (format: 'png' | 'png-white' | 'csv' | 'xml') => {
+  const handleExport = async (format: 'png' | 'csv' | 'xml') => {
     switch (format) {
       case 'png':
         await exportToPNG(
           nodes,
           extraLinks,
           linkStyles,
-          1,
+          2,
           figures.filter((f): f is Figure & { type: 'text' } => f.type === 'text')
-        );
-        break;
-      case 'png-white':
-        await exportToPNG(
-          nodes,
-          extraLinks,
-          linkStyles,
-          1,
-          figures.filter((f): f is Figure & { type: 'text' } => f.type === 'text'),
-          '#ffffff'
         );
         break;
       case 'csv':
@@ -1245,15 +1512,94 @@ function App() {
 
   const categoryGroups = groupByCategory(nodes);
   const stats = {
-    total: urls.length, // Use urls.length to match the URLs section count
+    total: nodes.length,
     categories: categoryGroups.size,
     maxDepth: Math.max(...nodes.map(n => n.depth), 0),
   };
 
   return (
-    <div className="h-screen bg-white flex flex-col overflow-hidden">
-      <header className="border-b border-gray-200 bg-white flex-shrink-0 relative z-50">
-        <div className="max-w-screen-5xl mx-auto px-6 py-5">
+    <>
+      <style>{`
+        @keyframes moveHorizontal {
+          0% {
+            transform: translateX(-50%) translateY(-10%);
+          }
+          50% {
+            transform: translateX(50%) translateY(10%);
+          }
+          100% {
+            transform: translateX(-50%) translateY(-10%);
+          }
+        }
+        @keyframes moveInCircle {
+          0% {
+            transform: rotate(0deg);
+          }
+          50% {
+            transform: rotate(180deg);
+          }
+          100% {
+            transform: rotate(360deg);
+          }
+        }
+        @keyframes moveVertical {
+          0% {
+            transform: translateY(-50%);
+          }
+          50% {
+            transform: translateY(50%);
+          }
+          100% {
+            transform: translateY(-50%);
+          }
+        }
+        .header-gradient-blob {
+          position: absolute;
+          border-radius: 50%;
+          filter: blur(80px);
+          opacity: 0.6;
+          pointer-events: none;
+        }
+        .header-gradient-blob-1 {
+          background: radial-gradient(circle, rgba(255, 165, 0, 0.5), rgba(255, 140, 105, 0.4));
+          width: 400px;
+          height: 400px;
+          animation: moveVertical 25s ease infinite;
+        }
+        .header-gradient-blob-2 {
+          background: radial-gradient(circle, rgba(135, 206, 250, 0.5), rgba(74, 144, 226, 0.4));
+          width: 350px;
+          height: 350px;
+          animation: moveInCircle 18s reverse infinite;
+        }
+        .header-gradient-blob-3 {
+          background: radial-gradient(circle, rgba(255, 192, 203, 0.4), rgba(255, 182, 193, 0.3));
+          width: 300px;
+          height: 300px;
+          animation: moveInCircle 35s linear infinite;
+        }
+        .header-gradient-background {
+          position: absolute;
+          inset: 0;
+          background: linear-gradient(135deg, rgba(255, 248, 240, 0.95), rgba(240, 248, 255, 0.95));
+        }
+      `}</style>
+      <div className="h-screen bg-white flex flex-col overflow-hidden">
+        {/* Auth Modal will auto-open on first load if Supabase is configured and no session */}
+        <header className="border-b border-gray-200 flex-shrink-0 relative z-50 overflow-hidden" style={{ backgroundColor: '#FFF8F0' }}>
+          {/* Base warm light background */}
+          <div className="header-gradient-background"></div>
+          
+          {/* Multiple moving gradient blobs */}
+          <div className="header-gradient-blob header-gradient-blob-1" style={{ top: '-20%', left: '5%' }}></div>
+          <div className="header-gradient-blob header-gradient-blob-2" style={{ top: '-15%', right: '10%' }}></div>
+          <div className="header-gradient-blob header-gradient-blob-3" style={{ top: '-10%', left: '50%', transform: 'translateX(-50%)' }}></div>
+          
+          {/* Soft warm overlay for depth */}
+          <div className="absolute inset-0 bg-gradient-to-br from-orange-50/20 to-blue-50/20"></div>
+          
+          {/* Header content */}
+          <div className="max-w-screen-5xl mx-auto px-6 py-5 relative z-10">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3 relative">
               <img width="28" height="28" src="https://img.icons8.com/?size=100&id=1rQZ4drGQD6F&format=png&color=000000" alt="Sitemap Generator"/>
@@ -1263,7 +1609,7 @@ function App() {
               {nodes.length > 0 && (
                 <button
                   onClick={() => setShowSearch(true)}
-                  className="px-4 py-2 text-sm font-medium border rounded-lg border-gray-300 hover:border-gray-400 transition-colors flex items-center gap-2"
+                  className="px-4 py-2 text-sm font-medium bg-white border rounded-lg border-gray-300 hover:border-gray-400 transition-colors flex items-center gap-2"
                   title="Search nodes (Ctrl+F)"
                 >
                   <Search className="w-4 h-4" strokeWidth={1.5} />
@@ -1274,27 +1620,17 @@ function App() {
                 <div className="relative export-menu-container">
                   <button
                     onClick={() => setShowExportMenu(v => !v)}
-                    className="px-4 py-2 text-sm font-medium border rounded-lg border-gray-300 hover:border-gray-400 transition-colors flex items-center gap-2"
+                    className="px-4 py-2 text-sm font-medium bg-white border rounded-lg border-gray-300 hover:border-gray-400 transition-colors flex items-center gap-2"
                     title="Export"
                   >
                     <Download className="w-4 h-4" strokeWidth={1.5} />
                     Export
                   </button>
                   {showExportMenu && (
-                    <div className="absolute right-0 mt-2 w-48 bg-white border border-gray-200 shadow-lg z-50" onClick={(e) => e.stopPropagation()}>
-                      <button onClick={() => { setShowExportMenu(false); handleExport('png-white'); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm flex items-center gap-2">
-                        <Image className="w-4 h-4 text-gray-600" strokeWidth={1.5} />
-                        PNG
-                      </button>
-                      <button onClick={() => { setShowExportMenu(false); handleExport('png'); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm flex items-center gap-2">
-                        <Layers className="w-4 h-4 text-gray-600" strokeWidth={1.5} />
-                        PNG (Transparent)
-                      </button>
+                    <div className="absolute right-0 mt-2 w-44 bg-white border border-gray-200 shadow-lg z-50" onClick={(e) => e.stopPropagation()}>
+                      <button onClick={() => { setShowExportMenu(false); handleExport('png'); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm">PNG</button>
                       {/* <button onClick={() => { setShowExportMenu(false); handleExport('xml'); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm">XML (Sitemap)</button> */}
-                      <button onClick={() => { setShowExportMenu(false); handleExport('csv'); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm flex items-center gap-2">
-                        <FileText className="w-4 h-4 text-gray-600" strokeWidth={1.5} />
-                        CSV
-                      </button>
+                      <button onClick={() => { setShowExportMenu(false); handleExport('csv'); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm">CSV</button>
                     </div>
                   )}
                 </div>
@@ -1302,7 +1638,7 @@ function App() {
               {/* Align Guides toggle removed per request */}
               <button
                 onClick={() => setShowSettings(!showSettings)}
-                className="px-4 py-2 text-sm font-medium border rounded-lg border-gray-300 hover:border-gray-400 transition-colors flex items-center gap-2"
+                className="px-4 py-2 text-sm font-medium bg-white border rounded-lg border-gray-300 hover:border-gray-400 transition-colors flex items-center gap-2"
               >
                 <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" className="text-gray-700" viewBox="0 0 16 16">
                   <path d="M.54 3.87.5 3a2 2 0 0 1 2-2h3.672a2 2 0 0 1 1.414.586l.828.828A2 2 0 0 0 9.828 3h3.982a2 2 0 0 1 1.992 2.181l-.637 7A2 2 0 0 1 13.174 14H2.826a2 2 0 0 1-1.991-1.819l-.637-7a2 2 0 0 1 .342-1.31zM2.19 4a1 1 0 0 0-.996 1.09l.637 7a1 1 0 0 0 .995.91h10.348a1 1 0 0 0 .995-.91l.637-7A1 1 0 0 0 13.81 4zm4.69-1.707A1 1 0 0 0 6.172 2H2.5a1 1 0 0 0-1 .981l.006.139q.323-.119.684-.12h5.396z"/>
@@ -1312,7 +1648,7 @@ function App() {
               {/* AI organize button removed per request */}
               <button
                 onClick={() => setShowHelp(true)}
-                className="px-3 py-2 text-sm font-medium border rounded-lg border-gray-300 hover:border-gray-400 transition-colors flex items-center gap-2"
+                className="px-3 py-2 text-sm font-medium bg-white border rounded-lg border-gray-300 hover:border-gray-400 transition-colors flex items-center gap-2"
                 title="Help"
               >
                 <HelpCircle className="w-4 h-4" strokeWidth={1.5} />
@@ -1322,37 +1658,25 @@ function App() {
               {/* Auth Section */}
               {isSupabaseConfigured() && (
                 <div className="flex items-center gap-2 ml-2 pl-2 border-l border-gray-300">
-                  {/* Always prioritize showing user if it exists - never show loading if user exists */}
-                  {user && user.email ? (
-                    <div className="relative group">
-                      <button
-                        className="p-2 rounded-lg hover:bg-gray-100 transition-colors flex items-center justify-center"
-                        title={user.email || 'User'}
-                      >
-                        <User className="w-5 h-5 text-gray-700" strokeWidth={1.5} />
-                      </button>
-                      
-                      {/* Dropdown on hover */}
-                      <div className="absolute right-0 top-full mt-2 w-56 bg-white border border-gray-200 rounded-lg shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50">
-                        <div className="p-4 border-b border-gray-100">
-                          <div className="text-xs text-gray-500 mb-1">Signed in as</div>
-                          <div className="text-sm font-medium text-gray-900 truncate">{user.email}</div>
-                        </div>
-                        <button
-                          onClick={handleSignOut}
-                          className="w-full px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors flex items-center gap-2"
-                        >
-                          <LogOut className="w-4 h-4" strokeWidth={1.5} />
-                          Sign Out
-                        </button>
+                  {user ? (
+                    <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700">
+                        <User className="w-4 h-4" strokeWidth={1.5} />
+                        <span className="max-w-[120px] truncate">{user.email}</span>
                       </div>
+                      <button
+                        onClick={handleSignOut}
+                        className="px-3 py-2 text-sm font-medium bg-white border rounded-lg border-gray-300 hover:border-gray-400 transition-colors flex items-center gap-2"
+                        title="Sign Out"
+                      >
+                        <LogOut className="w-4 h-4" strokeWidth={1.5} />
+                        Sign Out
+                      </button>
                     </div>
-                  ) : !user && authLoading ? (
-                    <div className="px-3 py-2 text-sm text-gray-500">Loading...</div>
                   ) : (
                     <button
                       onClick={() => setShowAuthModal(true)}
-                      className="px-4 py-2 text-sm font-medium text-white bg-[#384E82]/90 hover:bg-[#384E82] rounded-lg transition-colors flex items-center gap-2"
+                      className="px-4 py-2 text-sm font-medium bg-white border rounded-lg border-gray-300 hover:border-gray-400 text-gray-700 transition-colors flex items-center gap-2"
                       title="Sign In / Sign Up"
                     >
                       <LogIn className="w-4 h-4" strokeWidth={1.5} />
@@ -1363,7 +1687,7 @@ function App() {
               )}
             </div>
           </div>
-        </div>
+          </div>
       </header>
 
       <div className="flex-1 flex h-0 min-h-0">
@@ -1441,6 +1765,7 @@ function App() {
               
               {/* Create New Sitemap Button */}
               <button
+                type="button"
                 onClick={createNewSitemap}
                 className="w-full mb-3 px-3 py-2 bg-gray-100 shadow-sm border border-gray-200 hover:shadow-md hover:bg-gray-150 text-gray-700 text-sm font-medium rounded transition-colors flex items-center justify-center gap-2"
               >
@@ -1641,7 +1966,7 @@ function App() {
                 <img className="w-16 h-16 mx-auto mb-4 opacity-30" src="https://img.icons8.com/?size=100&id=82795&format=png&color=000000" alt="No sitemap yet"/>
                 <h2 className="text-xl font-semibold mb-2">No Sitemap Yet</h2>
                 <p className="text-gray-500 mb-6">
-                  Upload a CSV file to generate an intelligent, auto-layout sitemap with hierarchy detection
+                  Upload a CSV file to generate a sitemap with hierarchy detection
                   and professional export formats.
                 </p>
               </div>
@@ -1658,14 +1983,10 @@ function App() {
                 layoutType={layoutType}
                 extraLinks={extraLinks}
                 onNodeClick={node => {
-                  console.log('App: onNodeClick called with:', node.title, 'clearing focusedNode');
                   setSelectedNode(node);
                   // Only clear focus if it's a different node
                   if (focusedNode && focusedNode.id !== node.id) {
-                    console.log('App: Clearing focus because different node clicked');
                     setFocusedNode(null);
-                  } else {
-                    console.log('App: Keeping focus because same node clicked');
                   }
                 }}
                 onNodesUpdate={handleNodesUpdate}
@@ -1687,6 +2008,9 @@ function App() {
                     setExtraLinks(prev.extraLinks);
                     setLinkStyles(prev.linkStyles);
                     setColorOverrides(prev.colorOverrides);
+                    setFigures(prev.figures);
+                    setFreeLines(prev.freeLines);
+                    setSelectionGroups(prev.selectionGroups);
                   }
                 }}
                 onRedo={() => {
@@ -1698,6 +2022,9 @@ function App() {
                     setExtraLinks(next.extraLinks);
                     setLinkStyles(next.linkStyles);
                     setColorOverrides(next.colorOverrides);
+                    setFigures(next.figures);
+                    setFreeLines(next.freeLines);
+                    setSelectionGroups(next.selectionGroups);
                   }
                 }}
                 searchResults={searchResults}
@@ -1733,7 +2060,7 @@ function App() {
       {/* Help Modal */}
       {showHelp && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[999] p-4" onClick={() => setShowHelp(false)}>
-          <div className="bg-white rounded-lg shadow-lg w-1/3 max-w-2xl max-h-[85vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white rounded-lg shadow-lg w-1/3 max-w-2xl max-h-[85vh] overflow-visible flex flex-col" onClick={(e) => e.stopPropagation()}>
             {/* Minimal Header */}
             <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
               <h2 className="text-xl font-semibold">Keyboard Shortcuts</h2>
@@ -1749,7 +2076,7 @@ function App() {
             </div>
 
             {/* Single Column Layout */}
-            <div className="overflow-y-auto flex-1 p-6">
+            <div className="overflow-y-auto overflow-x-visible flex-1 p-6">
               <div className="space-y-6">
                 {/* Essential Shortcuts */}
                 <div>
@@ -1818,7 +2145,7 @@ function App() {
                   <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-900 mb-1">
                     Groups
                   </h3>
-                  <p className="text-xs text-gray-500 mb-3">Source: CSV “Group/Category” column. Otherwise inferred from URL path.</p>
+                  <p className="text-xs text-gray-500 mb-3">Source: CSV "Group/Category" column. Otherwise inferred from URL path.</p>
                   <div className="space-y-2">
                     {Array.from(categoryGroups.entries()).map(([category, categoryNodes]) => (
                       <div key={category} className="flex items-center justify-between text-sm">
@@ -1968,7 +2295,8 @@ function App() {
           </div>
         </div>
       )}
-    </div>
+      </div>
+    </>
   );
 }
 
