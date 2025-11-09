@@ -141,6 +141,7 @@ function App() {
   const [showAuthDropdown, setShowAuthDropdown] = useState(false);
   const authButtonRef = useRef<HTMLButtonElement | null>(null);
   const [authDropdownPosition, setAuthDropdownPosition] = useState<{ top: number; right: number } | null>(null);
+  const authDropdownTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const makeSnapshot = useCallback((): HistorySnapshot => ({
     nodes: JSON.parse(JSON.stringify(nodes)),
@@ -270,6 +271,10 @@ function App() {
 
       return () => {
         subscription.unsubscribe();
+        // Cleanup dropdown timeout on unmount
+        if (authDropdownTimeoutRef.current) {
+          clearTimeout(authDropdownTimeoutRef.current);
+        }
       };
     }
   }, [isSupabaseConfigured]);
@@ -1692,16 +1697,27 @@ function App() {
                     <div 
                       className="relative"
                       onMouseEnter={() => {
+                        // Clear any pending close timeout
+                        if (authDropdownTimeoutRef.current) {
+                          clearTimeout(authDropdownTimeoutRef.current);
+                          authDropdownTimeoutRef.current = null;
+                        }
+                        
                         if (authButtonRef.current) {
                           const rect = authButtonRef.current.getBoundingClientRect();
                           setAuthDropdownPosition({
-                            top: rect.bottom + 8,
+                            top: rect.bottom + 4, // Reduced gap to 4px
                             right: window.innerWidth - rect.right
                           });
                         }
                         setShowAuthDropdown(true);
                       }}
-                      onMouseLeave={() => setShowAuthDropdown(false)}
+                      onMouseLeave={() => {
+                        // Add a small delay before closing to allow mouse to reach dropdown
+                        authDropdownTimeoutRef.current = setTimeout(() => {
+                          setShowAuthDropdown(false);
+                        }, 150);
+                      }}
                     >
                       <button
                         ref={authButtonRef}
@@ -1718,8 +1734,18 @@ function App() {
                             top: `${authDropdownPosition.top}px`,
                             right: `${authDropdownPosition.right}px`
                           }}
-                          onMouseEnter={() => setShowAuthDropdown(true)}
-                          onMouseLeave={() => setShowAuthDropdown(false)}
+                          onMouseEnter={() => {
+                            // Clear close timeout when mouse enters dropdown
+                            if (authDropdownTimeoutRef.current) {
+                              clearTimeout(authDropdownTimeoutRef.current);
+                              authDropdownTimeoutRef.current = null;
+                            }
+                            setShowAuthDropdown(true);
+                          }}
+                          onMouseLeave={() => {
+                            // Close when mouse leaves dropdown
+                            setShowAuthDropdown(false);
+                          }}
                         >
                           <div className="px-4 py-3 border-b border-gray-200">
                             <p className="text-sm font-medium text-gray-900">Signed in as</p>
