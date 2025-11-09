@@ -139,6 +139,8 @@ function App() {
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authLoading, setAuthLoading] = useState(true);
   const [showAuthDropdown, setShowAuthDropdown] = useState(false);
+  const authButtonRef = useRef<HTMLButtonElement | null>(null);
+  const [authDropdownPosition, setAuthDropdownPosition] = useState<{ top: number; right: number } | null>(null);
 
   const makeSnapshot = useCallback((): HistorySnapshot => ({
     nodes: JSON.parse(JSON.stringify(nodes)),
@@ -1684,18 +1686,36 @@ function App() {
                   {user ? (
                     <div 
                       className="relative"
-                      onMouseEnter={() => setShowAuthDropdown(true)}
+                      onMouseEnter={() => {
+                        if (authButtonRef.current) {
+                          const rect = authButtonRef.current.getBoundingClientRect();
+                          setAuthDropdownPosition({
+                            top: rect.bottom + 8,
+                            right: window.innerWidth - rect.right
+                          });
+                        }
+                        setShowAuthDropdown(true);
+                      }}
                       onMouseLeave={() => setShowAuthDropdown(false)}
                     >
                       <button
+                        ref={authButtonRef}
                         className="p-2 text-gray-700 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
                         title="User account"
                       >
                         <User className="w-5 h-5" strokeWidth={1.5} />
                       </button>
                       
-                      {showAuthDropdown && (
-                        <div className="absolute right-0 mt-2 w-56 bg-white border border-gray-200 shadow-lg rounded-lg z-[100]">
+                      {showAuthDropdown && authDropdownPosition && createPortal(
+                        <div 
+                          className="fixed w-56 bg-white border border-gray-200 shadow-lg rounded-lg z-[100]"
+                          style={{
+                            top: `${authDropdownPosition.top}px`,
+                            right: `${authDropdownPosition.right}px`
+                          }}
+                          onMouseEnter={() => setShowAuthDropdown(true)}
+                          onMouseLeave={() => setShowAuthDropdown(false)}
+                        >
                           <div className="px-4 py-3 border-b border-gray-200">
                             <p className="text-sm font-medium text-gray-900">Signed in as</p>
                             <p className="text-sm text-gray-600 truncate mt-1">{user.email}</p>
@@ -1709,7 +1729,8 @@ function App() {
                               Sign Out
                             </button>
                           </div>
-                        </div>
+                        </div>,
+                        document.body
                       )}
                     </div>
                   ) : (
