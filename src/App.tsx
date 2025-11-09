@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { flushSync, createPortal } from 'react-dom';
-import { Download, Trash2, ChevronDown, ChevronUp, Menu, X, Search, HelpCircle, Edit2, LogIn, LogOut, User } from 'lucide-react';
+import { Download, Trash2, ChevronDown, ChevronUp, Menu, X, Search, HelpCircle, Edit2, LogIn, LogOut, User, Image, FileText, Layers } from 'lucide-react';
 import { SitemapCanvas } from './components/SitemapCanvas';
 import { SearchOverlay } from './components/SearchOverlay';
 import { AuthModal } from './components/AuthModal';
@@ -1490,15 +1490,26 @@ function App() {
     }
   }, []);
 
-  const handleExport = async (format: 'png' | 'csv' | 'xml') => {
+  const handleExport = async (format: 'png' | 'png-white' | 'csv' | 'xml') => {
     switch (format) {
       case 'png':
         await exportToPNG(
           nodes,
           extraLinks,
           linkStyles,
-          2,
-          figures.filter((f): f is Figure & { type: 'text' } => f.type === 'text')
+          1,
+          figures.filter((f): f is Figure & { type: 'text' } => f.type === 'text'),
+          undefined // transparent background
+        );
+        break;
+      case 'png-white':
+        await exportToPNG(
+          nodes,
+          extraLinks,
+          linkStyles,
+          1,
+          figures.filter((f): f is Figure & { type: 'text' } => f.type === 'text'),
+          '#ffffff' // white background
         );
         break;
       case 'csv':
@@ -1627,10 +1638,20 @@ function App() {
                     Export
                   </button>
                   {showExportMenu && (
-                    <div className="absolute right-0 mt-2 w-44 bg-white border border-gray-200 shadow-lg z-50" onClick={(e) => e.stopPropagation()}>
-                      <button onClick={() => { setShowExportMenu(false); handleExport('png'); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm">PNG</button>
+                    <div className="absolute right-0 mt-2 w-48 bg-white border border-gray-200 shadow-lg z-50" onClick={(e) => e.stopPropagation()}>
+                      <button onClick={() => { setShowExportMenu(false); handleExport('png-white'); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm flex items-center gap-2">
+                        <Image className="w-4 h-4 text-gray-600" strokeWidth={1.5} />
+                        PNG
+                      </button>
+                      <button onClick={() => { setShowExportMenu(false); handleExport('png'); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm flex items-center gap-2">
+                        <Layers className="w-4 h-4 text-gray-600" strokeWidth={1.5} />
+                        PNG (Transparent)
+                      </button>
                       {/* <button onClick={() => { setShowExportMenu(false); handleExport('xml'); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm">XML (Sitemap)</button> */}
-                      <button onClick={() => { setShowExportMenu(false); handleExport('csv'); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm">CSV</button>
+                      <button onClick={() => { setShowExportMenu(false); handleExport('csv'); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm flex items-center gap-2">
+                        <FileText className="w-4 h-4 text-gray-600" strokeWidth={1.5} />
+                        CSV
+                      </button>
                     </div>
                   )}
                 </div>
