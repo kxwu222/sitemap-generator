@@ -269,13 +269,15 @@ function App() {
         setUser(newUser);
         
         if (newUser) {
+          // User signed in - close modal and refresh sitemaps
+          setShowAuthModal(false);
           await refreshSitemapsFromSupabase();
-        } else if (event === 'SIGNED_OUT') {
-          // User signed out - show auth modal
-          // Use a longer timeout to ensure handleSignOut has completed
+        } else if (event === 'SIGNED_OUT' || (!newUser && event === 'TOKEN_REFRESHED')) {
+          // User signed out - ensure auth modal is shown
+          // handleSignOut already shows it, but this ensures it stays visible
           setTimeout(() => {
             setShowAuthModal(true);
-          }, 200);
+          }, 100);
         }
       });
 
@@ -307,8 +309,12 @@ function App() {
     // Close dropdown first
     setShowAuthDropdown(false);
     
+    // Set user to null and show modal immediately for better UX
+    setUser(null);
+    setShowAuthModal(true);
+    
     try {
-      // Call signOut first so the auth state change event fires properly
+      // Call signOut to trigger auth state change event
       const { error } = await signOut();
       if (error) {
         console.error('signOut() failed:', error);
@@ -328,13 +334,6 @@ function App() {
       }
       toClear.forEach(k => localStorage.removeItem(k));
     } catch {}
-    
-    // Set user to null and show modal
-    // Use a longer timeout to ensure it happens after the auth state change listener
-    setUser(null);
-    setTimeout(() => {
-      setShowAuthModal(true);
-    }, 150);
 
     // Restore local sitemaps (no wipe)
     try {
@@ -530,40 +529,56 @@ function App() {
   const deleteSitemap = useCallback(async (sitemapId: string) => {
     if (!requireAuth()) return;
     
-    if (sitemaps.length <= 1) {
-      createNewSitemap();
-      return;
-    }
-
     // Immediate UI update
     const filtered = sitemaps.filter(s => s.id !== sitemapId);
     setSitemaps(filtered);
     try { localStorage.setItem('sitemaps', JSON.stringify(filtered)); } catch {}
 
-    // If deleting active, switch instantly to first remaining
-    if (activeSitemapId === sitemapId && filtered.length > 0) {
-      const next = filtered[0];
-      setActiveSitemapId(next.id);
-      setNodes(JSON.parse(JSON.stringify(next.nodes)));
-      setExtraLinks(JSON.parse(JSON.stringify(next.extraLinks)));
-      setLinkStyles(JSON.parse(JSON.stringify(next.linkStyles)));
-      setColorOverrides(JSON.parse(JSON.stringify(next.colorOverrides)));
-      setUrls(JSON.parse(JSON.stringify(next.urls)));
-      setSelectionGroups(JSON.parse(JSON.stringify(next.selectionGroups || [])));
-      setFigures([]);
-      setFreeLines([]);
-      setUndoStack([]);
-      setRedoStack([]);
-      setSelectedNode(null);
-      try { localStorage.setItem('activeSitemapId', next.id); } catch {}
+    // If deleting active sitemap
+    if (activeSitemapId === sitemapId) {
+      if (filtered.length > 0) {
+        // Switch to first remaining sitemap
+        const next = filtered[0];
+        setActiveSitemapId(next.id);
+        setNodes(JSON.parse(JSON.stringify(next.nodes)));
+        setExtraLinks(JSON.parse(JSON.stringify(next.extraLinks)));
+        setLinkStyles(JSON.parse(JSON.stringify(next.linkStyles)));
+        setColorOverrides(JSON.parse(JSON.stringify(next.colorOverrides)));
+        setUrls(JSON.parse(JSON.stringify(next.urls)));
+        setSelectionGroups(JSON.parse(JSON.stringify(next.selectionGroups || [])));
+        setFigures([]);
+        setFreeLines([]);
+        setUndoStack([]);
+        setRedoStack([]);
+        setSelectedNode(null);
+        try { localStorage.setItem('activeSitemapId', next.id); } catch {}
 
-      if (isSupabaseConfigured() && supabase) {
-        loadSitemapWithDrawables(next.id)
-          .then(({ figures: loadedFigures, freeLines: loadedFreeLines }) => {
-            setFigures(loadedFigures);
-            setFreeLines(loadedFreeLines);
-          })
-          .catch(err => console.error('Load drawables after delete:', err));
+        if (isSupabaseConfigured() && supabase) {
+          loadSitemapWithDrawables(next.id)
+            .then(({ figures: loadedFigures, freeLines: loadedFreeLines }) => {
+              setFigures(loadedFigures);
+              setFreeLines(loadedFreeLines);
+            })
+            .catch(err => console.error('Load drawables after delete:', err));
+        }
+      } else {
+        // No sitemaps remaining - clear all state
+        setActiveSitemapId(null);
+        setNodes([]);
+        setExtraLinks([]);
+        setLinkStyles({});
+        setColorOverrides({});
+        setUrls([]);
+        setSelectionGroups([]);
+        setFigures([]);
+        setFreeLines([]);
+        setUndoStack([]);
+        setRedoStack([]);
+        setSelectedNode(null);
+        try { 
+          localStorage.setItem('activeSitemapId', '');
+          localStorage.removeItem('activeSitemapId');
+        } catch {}
       }
     }
 
@@ -573,7 +588,7 @@ function App() {
         console.error('Supabase delete failed (UI already updated):', err)
       );
     }
-  }, [sitemaps, activeSitemapId, createNewSitemap, isSupabaseConfigured, requireAuth]);
+  }, [sitemaps, activeSitemapId, isSupabaseConfigured, requireAuth]);
 
   const renameSitemap = useCallback(async (sitemapId: string, newName: string) => {
     if (!requireAuth()) return;
@@ -1959,20 +1974,18 @@ function App() {
                               >
                                 <Edit2 className="w-4 h-4 text-gray-600" strokeWidth={1.5} />
                               </button>
-                              {sitemaps.length > 1 && (
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setShowSitemapDropdown(false);
-                                    setSitemapToDelete(sitemap.id);
-                                  }}
-                                  className="p-1.5 hover:bg-red-100 rounded transition-colors"
-                                  title="Delete"
-                                  type="button"
-                                >
-                                  <Trash2 className="w-4 h-4 text-red-600" strokeWidth={1.5} />
-                                </button>
-                              )}
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setShowSitemapDropdown(false);
+                                  setSitemapToDelete(sitemap.id);
+                                }}
+                                className="p-1.5 hover:bg-red-100 rounded transition-colors"
+                                title="Delete"
+                                type="button"
+                              >
+                                <Trash2 className="w-4 h-4 text-red-600" strokeWidth={1.5} />
+                              </button>
                             </div>
                           </div>
                         ))}
