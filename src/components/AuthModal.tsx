@@ -41,8 +41,9 @@ export function AuthModal({ isOpen, onSuccess }: AuthModalProps) {
           return;
         }
         if (user) {
-          onSuccess();
+          setLoading(false);
           resetForm();
+          onSuccess();
         }
       } else {
         // Validate password match
@@ -75,6 +76,7 @@ export function AuthModal({ isOpen, onSuccess }: AuthModalProps) {
           return;
         }
         if (user) {
+          setLoading(false);
           setError('Registration successful! Please check your email to verify your account.');
           // Auto switch to login after successful registration
           setTimeout(() => {

@@ -275,11 +275,16 @@ function App() {
   }, [isSupabaseConfigured]);
 
   const handleAuthSuccess = async () => {
+    // Close modal immediately for better UX
+    setShowAuthModal(false);
+    
     const currentUser = await getCurrentUser();
     if (currentUser) {
       setUser(currentUser);
-      setShowAuthModal(false);
-      await refreshSitemapsFromSupabase();
+      // Refresh sitemaps in background (don't block UI)
+      refreshSitemapsFromSupabase().catch(err => {
+        console.error('Failed to refresh sitemaps after login:', err);
+      });
     }
   };
 
