@@ -262,10 +262,17 @@ function App() {
 
     // Listen for auth changes
     if (supabase) {
-      const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
-        setUser(session?.user ?? null);
-        if (session?.user) {
+      const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+        const newUser = session?.user ?? null;
+        setUser(newUser);
+        
+        if (newUser) {
           await refreshSitemapsFromSupabase();
+        } else if (event === 'SIGNED_OUT') {
+          // User signed out - show auth modal
+          setTimeout(() => {
+            setShowAuthModal(true);
+          }, 100);
         }
       });
 
@@ -294,6 +301,21 @@ function App() {
   };
 
   const handleSignOut = async () => {
+    // Close dropdown first
+    setShowAuthDropdown(false);
+    
+    // Clear Supabase tokens first to prevent auth listener from interfering
+    try {
+      const toClear: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i) as string;
+        if (/^sb-.*-(auth-token|csrf-token)$/i.test(k) || k.toLowerCase().includes('supabase')) {
+          toClear.push(k);
+        }
+      }
+      toClear.forEach(k => localStorage.removeItem(k));
+    } catch {}
+    
     try {
       const { error } = await signOut();
       if (error) {
@@ -302,21 +324,13 @@ function App() {
     } catch (e) {
       console.error('signOut() failed:', e);
     } finally {
+      // Set user to null and show modal
       setUser(null);
-      // Show auth modal immediately after logout to remind users they need to log in
-      setShowAuthModal(true);
-
-      // Clear Supabase tokens so the auth listener doesn't immediately repopulate user
-      try {
-        const toClear: string[] = [];
-        for (let i = 0; i < localStorage.length; i++) {
-          const k = localStorage.key(i) as string;
-          if (/^sb-.*-(auth-token|csrf-token)$/i.test(k) || k.toLowerCase().includes('supabase')) {
-            toClear.push(k);
-          }
-        }
-        toClear.forEach(k => localStorage.removeItem(k));
-      } catch {}
+      
+      // Use setTimeout to ensure modal shows after state updates
+      setTimeout(() => {
+        setShowAuthModal(true);
+      }, 0);
 
       // Restore local sitemaps (no wipe)
       try {
@@ -1586,22 +1600,22 @@ function App() {
           pointer-events: none;
         }
         .header-gradient-blob-1 {
-          background: radial-gradient(circle, rgba(255, 165, 0, 0.5), rgba(255, 140, 105, 0.4));
+          background: radial-gradient(circle, rgba(255, 218, 185, 0.5), rgba(255, 182, 193, 0.4));
           width: 400px;
           height: 400px;
-          animation: moveVertical 25s ease infinite;
+          animation: moveHorizontal 5s ease infinite;
         }
         .header-gradient-blob-2 {
           background: radial-gradient(circle, rgba(135, 206, 250, 0.5), rgba(74, 144, 226, 0.4));
           width: 350px;
           height: 350px;
-          animation: moveInCircle 18s reverse infinite;
+          animation: moveInCircle 2.5s reverse infinite;
         }
         .header-gradient-blob-3 {
           background: radial-gradient(circle, rgba(255, 192, 203, 0.4), rgba(255, 182, 193, 0.3));
           width: 300px;
           height: 300px;
-          animation: moveInCircle 35s linear infinite;
+          animation: moveInCircle 5s linear infinite;
         }
         .header-gradient-background {
           position: absolute;

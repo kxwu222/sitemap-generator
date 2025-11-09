@@ -147,34 +147,34 @@ export function AuthModal({ isOpen, onSuccess }: AuthModalProps) {
           opacity: 0.7;
         }
         .gradient-blob-1 {
-          background: radial-gradient(circle, rgba(255, 165, 0, 0.6), rgba(255, 140, 105, 0.5));
+          background: radial-gradient(circle, rgba(255, 218, 185, 0.6), rgba(255, 182, 193, 0.5));
           width: 600px;
           height: 600px;
-          animation: moveVertical 30s ease infinite;
+          animation: moveHorizontal 5s ease infinite;
         }
         .gradient-blob-2 {
           background: radial-gradient(circle, rgba(135, 206, 250, 0.6), rgba(74, 144, 226, 0.5));
           width: 550px;
           height: 550px;
-          animation: moveInCircle 20s reverse infinite;
+          animation: moveInCircle 2.5s reverse infinite;
         }
         .gradient-blob-3 {
           background: radial-gradient(circle, rgba(255, 192, 203, 0.6), rgba(255, 182, 193, 0.5));
           width: 500px;
           height: 500px;
-          animation: moveInCircle 40s linear infinite;
+          animation: moveInCircle 5s linear infinite;
         }
         .gradient-blob-4 {
           background: radial-gradient(circle, rgba(173, 216, 230, 0.6), rgba(135, 206, 235, 0.5));
           width: 550px;
           height: 550px;
-          animation: moveHorizontal 40s ease infinite;
+          animation: moveHorizontal 4s ease infinite;
         }
         .gradient-blob-5 {
           background: radial-gradient(circle, rgba(255, 218, 185, 0.6), rgba(255, 182, 193, 0.5));
           width: 450px;
           height: 450px;
-          animation: moveInCircle 20s ease infinite;
+          animation: moveInCircle 2.5s ease infinite;
         }
         .gradient-background {
           position: absolute;
@@ -183,7 +183,7 @@ export function AuthModal({ isOpen, onSuccess }: AuthModalProps) {
         }
       `}</style>
       <div 
-        className="fixed inset-0 z-[999] flex items-center justify-center p-4 overflow-hidden"
+        className="fixed inset-0 z-[999] flex flex-col items-center justify-center p-4 overflow-hidden"
         style={{ backgroundColor: '#FFF8F0' }}
       >
         {/* Base warm light background */}
@@ -200,14 +200,14 @@ export function AuthModal({ isOpen, onSuccess }: AuthModalProps) {
         <div className="absolute inset-0 bg-gradient-to-br from-orange-50/30 to-blue-50/30"></div>
         
         {/* App Name and Description - Above Modal */}
-        <div className="absolute top-40 left-1/2 transform -translate-x-1/2 z-10 text-center mb-10 px-20">
+        <div className="relative z-10 text-center mb-8 px-4">
           <h1 className="text-4xl font-bold text-gray-900 mb-2" style={{ 
             fontFamily: 'system-ui, -apple-system, sans-serif'
           }}>
             Sitemap Generator
           </h1>
-          <p className="text-md text-gray-800 mt-4 max-w-md mx-auto leading-relaxed">
-            Visualise the website structure with interactive sitemaps
+          <p className="text-sm text-gray-700 mt-2 max-w-lg mx-auto">
+          Turns your CMS URLs into sitemaps organised by your content groups.
           </p>
         </div>
         
