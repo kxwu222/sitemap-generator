@@ -126,28 +126,6 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
     onDeleteFreeLine,
   } = props;
 
-  // Helper function to get connection anchor position (needs props, so defined after destructuring)
-  const getConnectionAnchor = (sourceId: string, targetId: string) => {
-    const s = nodes.find(n => n.id === sourceId);
-    const t = nodes.find(n => n.id === targetId);
-    if (!s || !t || s.x === undefined || s.y === undefined || t.x === undefined || t.y === undefined) return null;
-    let ax = (s.x + t.x) / 2;
-    let ay = (s.y + t.y) / 2;
-    const style = linkStyles[linkKey(sourceId, targetId)] || {};
-    if ((style.path ?? 'elbow') === 'elbow') {
-      // place near elbow corner using dynamic calculation
-      const { elbowX, elbowY } = calculateElbowCorner(s, t);
-      ax = elbowX;
-      ay = elbowY;
-    }
-    const canvas = canvasRef.current;
-    if (!canvas) return null;
-    const rect = canvas.getBoundingClientRect();
-    const sx = rect.left + (ax * transform.scale) + transform.x;
-    const sy = rect.top + (ay * transform.scale) + transform.y - 8;
-    return { x: sx, y: sy };
-  };
-
   
   // Small SVG preview for a link style option
   const MiniLinkIcon = ({
@@ -328,6 +306,29 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
   // Track initial positions of selected text figures when node drag starts (for live move)
   const [selectedFiguresStartPositions, setSelectedFiguresStartPositions] = useState<Record<string, { x: number; y: number }>>({});
   const [didLiveFigureDrag, setDidLiveFigureDrag] = useState(false);
+  
+  // Helper function to get connection anchor position (needs props and state, so defined after destructuring and state)
+  const getConnectionAnchor = (sourceId: string, targetId: string) => {
+    const s = nodes.find(n => n.id === sourceId);
+    const t = nodes.find(n => n.id === targetId);
+    if (!s || !t || s.x === undefined || s.y === undefined || t.x === undefined || t.y === undefined) return null;
+    let ax = (s.x + t.x) / 2;
+    let ay = (s.y + t.y) / 2;
+    const style = linkStyles[linkKey(sourceId, targetId)] || {};
+    if ((style.path ?? 'elbow') === 'elbow') {
+      // place near elbow corner using dynamic calculation
+      const { elbowX, elbowY } = calculateElbowCorner(s, t);
+      ax = elbowX;
+      ay = elbowY;
+    }
+    const canvas = canvasRef.current;
+    if (!canvas) return null;
+    const rect = canvas.getBoundingClientRect();
+    const sx = rect.left + (ax * transform.scale) + transform.x;
+    const sy = rect.top + (ay * transform.scale) + transform.y - 8;
+    return { x: sx, y: sy };
+  };
+  
   // Unified draw tool state
   const [activeTool, setActiveTool] = useState<'select' | 'text' | 'draw'>('select');
   const [drawKind, setDrawKind] = useState<'rect' | 'square' | 'ellipse' | 'circle' | 'line' | null>(null);

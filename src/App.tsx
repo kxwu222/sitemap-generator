@@ -142,6 +142,8 @@ function App() {
   const authButtonRef = useRef<HTMLButtonElement | null>(null);
   const [authDropdownPosition, setAuthDropdownPosition] = useState<{ top: number; right: number } | null>(null);
   const authDropdownTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const exportButtonRef = useRef<HTMLButtonElement | null>(null);
+  const [exportDropdownPosition, setExportDropdownPosition] = useState<{ top: number; right: number } | null>(null);
 
   const makeSnapshot = useCallback((): HistorySnapshot => ({
     nodes: JSON.parse(JSON.stringify(nodes)),
@@ -270,9 +272,10 @@ function App() {
           await refreshSitemapsFromSupabase();
         } else if (event === 'SIGNED_OUT') {
           // User signed out - show auth modal
+          // Use a longer timeout to ensure handleSignOut has completed
           setTimeout(() => {
             setShowAuthModal(true);
-          }, 100);
+          }, 200);
         }
       });
 
@@ -304,7 +307,17 @@ function App() {
     // Close dropdown first
     setShowAuthDropdown(false);
     
-    // Clear Supabase tokens first to prevent auth listener from interfering
+    try {
+      // Call signOut first so the auth state change event fires properly
+      const { error } = await signOut();
+      if (error) {
+        console.error('signOut() failed:', error);
+      }
+    } catch (e) {
+      console.error('signOut() failed:', e);
+    }
+    
+    // Clear Supabase tokens after signOut
     try {
       const toClear: string[] = [];
       for (let i = 0; i < localStorage.length; i++) {
@@ -316,57 +329,47 @@ function App() {
       toClear.forEach(k => localStorage.removeItem(k));
     } catch {}
     
+    // Set user to null and show modal
+    // Use a longer timeout to ensure it happens after the auth state change listener
+    setUser(null);
+    setTimeout(() => {
+      setShowAuthModal(true);
+    }, 150);
+
+    // Restore local sitemaps (no wipe)
     try {
-      const { error } = await signOut();
-      if (error) {
-        console.error('signOut() failed:', error);
-      }
-    } catch (e) {
-      console.error('signOut() failed:', e);
-    } finally {
-      // Set user to null and show modal
-      setUser(null);
-      
-      // Use setTimeout to ensure modal shows after state updates
-      setTimeout(() => {
-        setShowAuthModal(true);
-      }, 0);
+      const str = localStorage.getItem('sitemaps');
+      if (str) {
+        const list = JSON.parse(str) as SitemapData[];
+        setSitemaps(list);
+        const savedActiveId = localStorage.getItem('activeSitemapId');
+        const activeId = savedActiveId && list.find(s => s.id === savedActiveId)
+          ? savedActiveId
+          : (list[0]?.id ?? null);
 
-      // Restore local sitemaps (no wipe)
-      try {
-        const str = localStorage.getItem('sitemaps');
-        if (str) {
-          const list = JSON.parse(str) as SitemapData[];
-          setSitemaps(list);
-          const savedActiveId = localStorage.getItem('activeSitemapId');
-          const activeId = savedActiveId && list.find(s => s.id === savedActiveId)
-            ? savedActiveId
-            : (list[0]?.id ?? null);
-
-          if (activeId) {
-            const active = list.find(s => s.id === activeId)!;
-            setActiveSitemapId(activeId);
-            setNodes(JSON.parse(JSON.stringify(active.nodes)));
-            setExtraLinks(JSON.parse(JSON.stringify(active.extraLinks)));
-            setLinkStyles(JSON.parse(JSON.stringify(active.linkStyles)));
-            setColorOverrides(JSON.parse(JSON.stringify(active.colorOverrides)));
-            setUrls(JSON.parse(JSON.stringify(active.urls)));
-            setSelectionGroups(JSON.parse(JSON.stringify(active.selectionGroups || [])));
-          } else {
-            setActiveSitemapId(null);
-            setNodes([]); setExtraLinks([]); setLinkStyles({}); setColorOverrides({});
-            setUrls([]); setSelectionGroups([]); setFigures([]); setFreeLines([]);
-          }
+        if (activeId) {
+          const active = list.find(s => s.id === activeId)!;
+          setActiveSitemapId(activeId);
+          setNodes(JSON.parse(JSON.stringify(active.nodes)));
+          setExtraLinks(JSON.parse(JSON.stringify(active.extraLinks)));
+          setLinkStyles(JSON.parse(JSON.stringify(active.linkStyles)));
+          setColorOverrides(JSON.parse(JSON.stringify(active.colorOverrides)));
+          setUrls(JSON.parse(JSON.stringify(active.urls)));
+          setSelectionGroups(JSON.parse(JSON.stringify(active.selectionGroups || [])));
         } else {
-          setSitemaps([]);
           setActiveSitemapId(null);
           setNodes([]); setExtraLinks([]); setLinkStyles({}); setColorOverrides({});
           setUrls([]); setSelectionGroups([]); setFigures([]); setFreeLines([]);
         }
-        setUndoStack([]); setRedoStack([]); setSelectedNode(null);
-      } catch (e) {
-        console.error('Restore local sitemaps after sign-out failed:', e);
+      } else {
+        setSitemaps([]);
+        setActiveSitemapId(null);
+        setNodes([]); setExtraLinks([]); setLinkStyles({}); setColorOverrides({});
+        setUrls([]); setSelectionGroups([]); setFigures([]); setFreeLines([]);
       }
+      setUndoStack([]); setRedoStack([]); setSelectedNode(null);
+    } catch (e) {
+      console.error('Restore local sitemaps after sign-out failed:', e);
     }
   };
 
@@ -878,7 +881,9 @@ function App() {
   // Close export menu when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (showExportMenu && !(event.target as Element).closest('.export-menu-container')) {
+      if (showExportMenu && 
+          !(event.target as Element).closest('.export-menu-container') &&
+          !(event.target as Element).closest('[data-export-dropdown]')) {
         setShowExportMenu(false);
       }
     };
@@ -1652,16 +1657,34 @@ function App() {
               {nodes.length > 0 && (
                 <div className="relative export-menu-container">
                   <button
-                    onClick={() => setShowExportMenu(v => !v)}
+                    ref={exportButtonRef}
+                    onClick={() => {
+                      if (exportButtonRef.current) {
+                        const rect = exportButtonRef.current.getBoundingClientRect();
+                        setExportDropdownPosition({
+                          top: rect.bottom + 4,
+                          right: window.innerWidth - rect.right
+                        });
+                      }
+                      setShowExportMenu(v => !v);
+                    }}
                     className="px-4 py-2 text-sm font-medium bg-white border rounded-lg border-gray-300 hover:border-gray-400 transition-colors flex items-center gap-2"
                     title="Export"
                   >
                     <Download className="w-4 h-4" strokeWidth={1.5} />
                     Export
                   </button>
-                  {showExportMenu && (
-                    <div className="absolute right-0 mt-2 w-48 bg-white border border-gray-200 shadow-lg z-50" onClick={(e) => e.stopPropagation()}>
-                      <button onClick={() => { setShowExportMenu(false); handleExport('png-white'); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm flex items-center gap-2">
+                  {showExportMenu && exportDropdownPosition && createPortal(
+                    <div 
+                      data-export-dropdown
+                      className="fixed w-48 bg-white border border-gray-200 shadow-lg z-[100] rounded-lg"
+                      style={{
+                        top: `${exportDropdownPosition.top}px`,
+                        right: `${exportDropdownPosition.right}px`
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <button onClick={() => { setShowExportMenu(false); handleExport('png-white'); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm flex items-center gap-2 rounded-t-lg">
                         <Image className="w-4 h-4 text-gray-600" strokeWidth={1.5} />
                         PNG
                       </button>
@@ -1670,11 +1693,12 @@ function App() {
                         PNG (Transparent)
                       </button>
                       {/* <button onClick={() => { setShowExportMenu(false); handleExport('xml'); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm">XML (Sitemap)</button> */}
-                      <button onClick={() => { setShowExportMenu(false); handleExport('csv'); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm flex items-center gap-2">
+                      <button onClick={() => { setShowExportMenu(false); handleExport('csv'); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm flex items-center gap-2 rounded-b-lg">
                         <FileText className="w-4 h-4 text-gray-600" strokeWidth={1.5} />
                         CSV
                       </button>
-                    </div>
+                    </div>,
+                    document.body
                   )}
                 </div>
               )}
@@ -2193,7 +2217,7 @@ function App() {
                   <h3 className="text-sm font-medium text-gray-900 mb-3 uppercase tracking-wide">Selection</h3>
                   <div className="space-y-2">
                     <ShortcutItem
-                      keys="Shift + Drag (background)"
+                      keys="Shift + Drag"
                       label="Multi-select"
                     />
                   </div>

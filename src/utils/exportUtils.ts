@@ -277,6 +277,29 @@ function calculateNodeBounds(nodes: PageNode[]): { minX: number; minY: number; m
   };
 }
 
+// Helper function to calculate optimal elbow corner based on relative node positions
+function calculateElbowCorner(source: PageNode, target: PageNode): { elbowX: number; elbowY: number } {
+  if (source.x === undefined || source.y === undefined || target.x === undefined || target.y === undefined) {
+    // Fallback to original behavior if positions are undefined
+    return { elbowX: source.x ?? 0, elbowY: target.y ?? 0 };
+  }
+
+  const dx = Math.abs(target.x - source.x);
+  const dy = Math.abs(target.y - source.y);
+
+  // Choose path direction based on which distance is greater
+  // If horizontal distance is greater, go horizontal first (elbow at target.x, source.y)
+  // If vertical distance is greater, go vertical first (elbow at source.x, target.y)
+  // If equal, default to horizontal-first for consistency
+  if (dx >= dy) {
+    // Go horizontal first: source -> (target.x, source.y) -> target
+    return { elbowX: target.x, elbowY: source.y };
+  } else {
+    // Go vertical first: source -> (source.x, target.y) -> target
+    return { elbowX: source.x, elbowY: target.y };
+  }
+}
+
 function drawSitemapToContext(
   ctx: CanvasRenderingContext2D,
   nodes: PageNode[],
@@ -324,8 +347,7 @@ function drawSitemapToContext(
     }
 
     const path = style.path || 'elbow';
-    const elbowX = parent.x;
-    const elbowY = node.y;
+    const { elbowX, elbowY } = path === 'elbow' ? calculateElbowCorner(parent, node) : { elbowX: parent.x, elbowY: node.y };
 
     ctx.beginPath();
     if (path === 'straight') {
@@ -372,14 +394,13 @@ function drawSitemapToContext(
       }
       
       const path = style.path || 'straight';
+      const { elbowX, elbowY } = path === 'elbow' ? calculateElbowCorner(source, target) : { elbowX: source.x, elbowY: target.y };
       
       ctx.beginPath();
       if (path === 'straight') {
         ctx.moveTo(source.x, source.y);
         ctx.lineTo(target.x, target.y);
       } else if (path === 'elbow') {
-        const elbowX = source.x;
-        const elbowY = target.y;
         ctx.moveTo(source.x, source.y);
         ctx.lineTo(elbowX, elbowY);
         ctx.lineTo(target.x, target.y);

@@ -4,7 +4,7 @@ import { signIn, signUp } from '../services/authService';
 interface AuthModalProps {
   isOpen: boolean;
   onClose: () => void; // Kept for type compatibility but not used (modal only closes on successful auth)
-  onSuccess: () => void;
+  onSuccess: () => void | Promise<void>;
 }
 
 export function AuthModal({ isOpen, onSuccess }: AuthModalProps) {
@@ -41,9 +41,17 @@ export function AuthModal({ isOpen, onSuccess }: AuthModalProps) {
           return;
         }
         if (user) {
-          setLoading(false);
           resetForm();
-          onSuccess();
+          // Set loading to false before calling onSuccess to ensure UI updates
+          setLoading(false);
+          // Call onSuccess to close modal and update auth state
+          // Await it to ensure it completes before the finally block runs
+          try {
+            await onSuccess();
+          } catch (err) {
+            console.error('Error in onSuccess callback:', err);
+          }
+          return; // Exit early to prevent finally block from resetting loading
         }
       } else {
         // Validate password match
