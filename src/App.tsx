@@ -138,6 +138,7 @@ function App() {
   const [user, setUser] = useState<SupabaseUser | null>(null);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authLoading, setAuthLoading] = useState(true);
+  const [showAuthDropdown, setShowAuthDropdown] = useState(false);
 
   const makeSnapshot = useCallback((): HistorySnapshot => ({
     nodes: JSON.parse(JSON.stringify(nodes)),
@@ -1680,19 +1681,35 @@ function App() {
               {isSupabaseConfigured() && (
                 <div className="flex items-center gap-2 ml-2 pl-2 border-l border-gray-300">
                   {user ? (
-                    <div className="flex items-center gap-2">
-                      <div className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700">
-                        <User className="w-4 h-4" strokeWidth={1.5} />
-                        <span className="max-w-[120px] truncate">{user.email}</span>
-                      </div>
+                    <div 
+                      className="relative"
+                      onMouseEnter={() => setShowAuthDropdown(true)}
+                      onMouseLeave={() => setShowAuthDropdown(false)}
+                    >
                       <button
-                        onClick={handleSignOut}
-                        className="px-3 py-2 text-sm font-medium bg-white border rounded-lg border-gray-300 hover:border-gray-400 transition-colors flex items-center gap-2"
-                        title="Sign Out"
+                        className="p-2 text-gray-700 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
+                        title="User account"
                       >
-                        <LogOut className="w-4 h-4" strokeWidth={1.5} />
-                        Sign Out
+                        <User className="w-5 h-5" strokeWidth={1.5} />
                       </button>
+                      
+                      {showAuthDropdown && (
+                        <div className="absolute right-0 mt-2 w-56 bg-white border border-gray-200 shadow-lg rounded-lg z-50">
+                          <div className="px-4 py-3 border-b border-gray-200">
+                            <p className="text-sm font-medium text-gray-900">Signed in as</p>
+                            <p className="text-sm text-gray-600 truncate mt-1">{user.email}</p>
+                          </div>
+                          <div className="py-1">
+                            <button
+                              onClick={handleSignOut}
+                              className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2 transition-colors"
+                            >
+                              <LogOut className="w-4 h-4" strokeWidth={1.5} />
+                              Sign Out
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   ) : (
                     <button
