@@ -240,6 +240,9 @@ function App() {
         return;
       }
 
+      // Set loading to false immediately so canvas can render
+      setAuthLoading(false);
+
       try {
         const session = await getSession();
         if (session?.user) {
@@ -249,8 +252,6 @@ function App() {
         }
       } catch (error) {
         console.error('Error initializing auth:', error);
-      } finally {
-        setAuthLoading(false);
       }
     };
 
@@ -1610,8 +1611,8 @@ function App() {
           {/* Soft warm overlay for depth */}
           <div className="absolute inset-0 bg-gradient-to-br from-orange-50/20 to-blue-50/20"></div>
           
-          {/* Header content */}
-          <div className="max-w-screen-5xl mx-auto px-6 py-5 relative z-10">
+          {/* Header content - overflow-visible to allow dropdowns */}
+          <div className="max-w-screen-5xl mx-auto px-6 py-5 relative z-10 overflow-visible">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3 relative">
               <img width="28" height="28" src="https://img.icons8.com/?size=100&id=1rQZ4drGQD6F&format=png&color=000000" alt="Sitemap Generator"/>
@@ -1694,7 +1695,7 @@ function App() {
                       </button>
                       
                       {showAuthDropdown && (
-                        <div className="absolute right-0 mt-2 w-56 bg-white border border-gray-200 shadow-lg rounded-lg z-50">
+                        <div className="absolute right-0 mt-2 w-56 bg-white border border-gray-200 shadow-lg rounded-lg z-[100]">
                           <div className="px-4 py-3 border-b border-gray-200">
                             <p className="text-sm font-medium text-gray-900">Signed in as</p>
                             <p className="text-sm text-gray-600 truncate mt-1">{user.email}</p>
