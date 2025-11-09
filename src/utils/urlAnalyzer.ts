@@ -52,22 +52,24 @@ export function createNodesFromCsvData(csvData: Array<{title: string, url: strin
       lastUpdated: row.lastUpdated || undefined,
     };
 
-    nodeMap.set(cleanUrl, node);
+    // Use index-based key to allow duplicate URLs to create separate nodes
+    nodeMap.set(`${cleanUrl}-${index}`, node);
   });
 
 
-  const sortedUrls = Array.from(nodeMap.keys()).sort((a, b) => {
-    const depthA = parseURL(a).segments.length;
-    const depthB = parseURL(b).segments.length;
+  // Sort nodes by depth for proper parent-child relationship building
+  const sortedNodes = Array.from(nodeMap.values()).sort((a, b) => {
+    const depthA = parseURL(a.url).segments.length;
+    const depthB = parseURL(b.url).segments.length;
     return depthA - depthB;
   });
 
-  sortedUrls.forEach(url => {
-    const node = nodeMap.get(url)!;
-    const parentUrl = findParentURL(url, nodeMap);
+  sortedNodes.forEach(node => {
+    const parentUrl = findParentURL(node.url, nodeMap);
 
     if (parentUrl) {
-      const parentNode = nodeMap.get(parentUrl);
+      // Find parent node by matching URL (since keys are now index-based)
+      const parentNode = Array.from(nodeMap.values()).find(n => n.url === parentUrl);
       if (parentNode) {
         node.parent = parentNode.id;
         parentNode.children.push(node.id);
@@ -106,22 +108,24 @@ export function analyzeURLStructure(urls: string[]): URLHierarchy {
       category,
     };
 
-    nodeMap.set(cleanUrl, node);
+    // Use index-based key to allow duplicate URLs to create separate nodes
+    nodeMap.set(`${cleanUrl}-${index}`, node);
   });
 
 
-  const sortedUrls = Array.from(nodeMap.keys()).sort((a, b) => {
-    const depthA = parseURL(a).segments.length;
-    const depthB = parseURL(b).segments.length;
+  // Sort nodes by depth for proper parent-child relationship building
+  const sortedNodes = Array.from(nodeMap.values()).sort((a, b) => {
+    const depthA = parseURL(a.url).segments.length;
+    const depthB = parseURL(b.url).segments.length;
     return depthA - depthB;
   });
 
-  sortedUrls.forEach(url => {
-    const node = nodeMap.get(url)!;
-    const parentUrl = findParentURL(url, nodeMap);
+  sortedNodes.forEach(node => {
+    const parentUrl = findParentURL(node.url, nodeMap);
 
     if (parentUrl) {
-      const parentNode = nodeMap.get(parentUrl);
+      // Find parent node by matching URL (since keys are now index-based)
+      const parentNode = Array.from(nodeMap.values()).find(n => n.url === parentUrl);
       if (parentNode) {
         node.parent = parentNode.id;
         parentNode.children.push(node.id);
@@ -154,24 +158,27 @@ function findParentURL(url: string, nodeMap: Map<string, PageNode>): string | nu
 
   if (segments.length === 0) return null;
 
+  // Get all nodes from the map (since keys are now index-based)
+  const allNodes = Array.from(nodeMap.values());
+
   for (let i = segments.length - 1; i > 0; i--) {
     const parentSegments = segments.slice(0, i);
 
-    for (const [candidateUrl] of nodeMap) {
-      const candidateSegments = parseURL(candidateUrl).segments;
+    for (const candidateNode of allNodes) {
+      const candidateSegments = parseURL(candidateNode.url).segments;
 
       if (arraysEqual(candidateSegments, parentSegments)) {
-        return candidateUrl;
+        return candidateNode.url;
       }
     }
   }
 
   if (segments.length > 1) {
-    for (const [candidateUrl] of nodeMap) {
-      const candidateSegments = parseURL(candidateUrl).segments;
+    for (const candidateNode of allNodes) {
+      const candidateSegments = parseURL(candidateNode.url).segments;
       if (candidateSegments.length === 0 ||
           (candidateSegments.length === 1 && candidateSegments[0] === segments[0])) {
-        return candidateUrl;
+        return candidateNode.url;
       }
     }
   }

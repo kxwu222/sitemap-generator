@@ -5,8 +5,9 @@ export async function exportToPNG(
   nodes: PageNode[],
   extraLinks?: Array<{ sourceId: string; targetId: string }>,
   linkStyles?: Record<string, LinkStyle>,
-  scale: number = 2,
-  figures: Array<{ id: string; type: 'text'; x: number; y: number; text?: string; textColor?: string; fontSize?: number; fontWeight?: 'normal' | 'bold' }> = []
+  scale: number = 1.8,
+  figures: Array<{ id: string; type: 'text'; x: number; y: number; text?: string; textColor?: string; fontSize?: number; fontWeight?: 'normal' | 'bold' }> = [],
+  backgroundColor?: string
 ): Promise<void> {
   // Calculate bounds to include all nodes with proper padding
   const bounds = calculateNodeBounds(nodes);
@@ -22,8 +23,12 @@ export async function exportToPNG(
   if (!ctx) return;
 
   ctx.scale(scale, scale);
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, width, height);
+  
+  // Fill background if specified (otherwise transparent)
+  if (backgroundColor) {
+    ctx.fillStyle = backgroundColor;
+    ctx.fillRect(0, 0, width, height);
+  }
 
   // Offset all nodes by padding to center them
   const offsetNodes = nodes.map(node => ({
@@ -157,24 +162,50 @@ export function exportToXMLSitemap(nodes: PageNode[]): void {
       .replace(/'/g, '&apos;');
   };
 
-  // Helper function to validate URLs (only HTTP/HTTPS)
-  const isValidURL = (url: string): boolean => {
+  // Helper function to normalize and validate URLs
+  const normalizeURL = (url: string): string | null => {
+    if (!url || !url.trim()) {
+      return null;
+    }
+    
+    const trimmed = url.trim();
+    
+    // If URL already has a protocol, validate it
+    if (trimmed.match(/^https?:\/\//i)) {
+      try {
+        new URL(trimmed);
+        return trimmed;
+      } catch {
+        return null;
+      }
+    }
+    
+    // If URL doesn't have a protocol, try adding https://
     try {
-      const parsed = new URL(url);
-      return ['http:', 'https:'].includes(parsed.protocol);
+      const normalized = trimmed.startsWith('//') 
+        ? `https:${trimmed}` 
+        : `https://${trimmed}`;
+      new URL(normalized); // Validate it can be parsed
+      return normalized;
     } catch {
-      return false;
+      // If it still fails, return the original if it looks like a URL
+      // This allows relative URLs or other formats to be exported
+      return trimmed.length > 0 ? trimmed : null;
     }
   };
 
   // Generate minimal URL entries (only required <loc> element)
   const urlEntries = nodes
     .filter(node => node.url && node.url.trim())
-    .filter(node => isValidURL(node.url.trim()))
     .map(node => {
-      const url = escapeXML(node.url.trim());
+      const normalized = normalizeURL(node.url);
+      return normalized ? { node, url: normalized } : null;
+    })
+    .filter((entry): entry is { node: PageNode; url: string } => entry !== null)
+    .map(({ url }) => {
+      const escaped = escapeXML(url);
       return `  <url>
-    <loc>${url}</loc>
+    <loc>${escaped}</loc>
   </url>`;
     });
 
@@ -198,165 +229,6 @@ ${urlEntries.join('\n')}
   URL.revokeObjectURL(url);
 }
 
-/* Removed unused exportToHTML()
-  // Calculate bounds to include all nodes with proper padding
-  const bounds = calculateNodeBounds(nodes);
-  const padding = 300; // Extra padding around the content for safety
-  const width = bounds.width + (padding * 2);
-  const height = bounds.height + (padding * 2);
-  
-  // Offset all nodes by padding to center them
-  // const offsetNodes = nodes.map(node => ({
-  //   ...node,
-  //   x: node.x !== undefined ? node.x - bounds.minX + padding : undefined,
-  //   y: node.y !== undefined ? node.y - bounds.minY + padding : undefined,
-  // }));
-  
-  // Note: SVG generation removed; exporting a static HTML with no embedded SVG
-  const svg = '';
-
-  const html = `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Interactive Sitemap</title>
-  <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: #f5f5f5;
-      padding: 20px;
-    }
-    .container {
-      max-width: 1400px;
-      margin: 0 auto;
-      background: white;
-      border: 1px solid #e0e0e0;
-      padding: 20px;
-    }
-    h1 {
-      font-size: 24px;
-      font-weight: 600;
-      margin-bottom: 20px;
-      color: #000;
-    }
-    .controls {
-      margin-bottom: 20px;
-      display: flex;
-      gap: 10px;
-    }
-    button {
-      padding: 8px 16px;
-      background: #000;
-      color: #fff;
-      border: none;
-      font-size: 14px;
-      font-weight: 500;
-      cursor: pointer;
-      transition: background 0.2s;
-    }
-    button:hover {
-      background: #333;
-    }
-    .svg-container {
-      width: 100%;
-      overflow: auto;
-      border: 1px solid #e0e0e0;
-    }
-    svg {
-      display: block;
-    }
-    .legend {
-      margin-top: 20px;
-      padding: 15px;
-      background: #f9f9f9;
-      border: 1px solid #e0e0e0;
-    }
-    .legend-title {
-      font-weight: 600;
-      margin-bottom: 10px;
-    }
-    .legend-items {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 15px;
-    }
-    .legend-item {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .legend-color {
-      width: 16px;
-      height: 16px;
-      border: 1px solid #ccc;
-    }
-  </style>
-</head>
-<body>
-  <div class="container">
-    <h1>Interactive Sitemap</h1>
-    <div class="controls">
-      <button onclick="zoomIn()">Zoom In</button>
-      <button onclick="zoomOut()">Zoom Out</button>
-      <button onclick="resetZoom()">Reset</button>
-    </div>
-    <div class="svg-container" id="svgContainer">
-      ${svg}
-    </div>
-    <div class="legend">
-      <div class="legend-title">Categories</div>
-      <div class="legend-items">
-        <div class="legend-item">
-          <div class="legend-color" style="background: #ffffff; border: 1px solid #000000;"></div>
-          <span>All Categories</span>
-        </div>
-      </div>
-    </div>
-  </div>
-  <script>
-    let scale = 1;
-    const svg = document.querySelector('svg');
-
-    function zoomIn() {
-      scale = Math.min(3, scale * 1.2);
-      updateScale();
-    }
-
-    function zoomOut() {
-      scale = Math.max(0.5, scale * 0.8);
-      updateScale();
-    }
-
-    function resetZoom() {
-      scale = 1;
-      updateScale();
-    }
-
-    function updateScale() {
-      if (svg) {
-        svg.style.transform = \`scale(\${scale})\`;
-        svg.style.transformOrigin = 'top left';
-      }
-    }
-  </script>
-</body>
-</html>`;
-
-  const blob = new Blob([html], { type: 'text/html' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.download = `sitemap-${Date.now()}.html`;
-  link.href = url;
-  link.click();
-  URL.revokeObjectURL(url);
-*/
-
 function calculateNodeBounds(nodes: PageNode[]): { minX: number; minY: number; maxX: number; maxY: number; width: number; height: number } {
   if (nodes.length === 0) {
     return { minX: 0, minY: 0, maxX: 800, maxY: 600, width: 800, height: 600 };
@@ -376,8 +248,9 @@ function calculateNodeBounds(nodes: PageNode[]): { minX: number; minY: number; m
       const subtitleLength = subtitle.length;
       const maxTextLength = Math.max(titleLength, subtitleLength);
       // Be more generous with width calculation to account for longer URLs and titles
-      const nodeWidth = Math.max(180, maxTextLength * 8 + 60); // Increased margin
-      const nodeHeight = 60; // Enough for title + subtitle
+      const maxWidth = 380; // Maximum width to prevent nodes from becoming too wide
+      const nodeWidth = Math.min(maxWidth, Math.max(150, maxTextLength * 8 + 60)); // 3:2 ratio - width, capped at maxWidth
+      const nodeHeight = 100; // 3:2 ratio - height (150:100 = 3:2)
       
       minX = Math.min(minX, node.x - nodeWidth / 2);
       minY = Math.min(minY, node.y - nodeHeight / 2);
@@ -545,47 +418,68 @@ function drawSitemapToContext(
     ctx.fill();
     ctx.stroke();
 
-    // Draw title text
+    // Calculate consistent width for title and URL containers
+    const textContainerWidth = dimensions.width - 20;
+    
+    // Draw content type (if exists) at the top
+    if (node.contentType) {
+      const contentTypeColor = node.textColor ? `${node.textColor}AA` : 'rgba(0, 0, 0, 0.6)';
+      ctx.fillStyle = contentTypeColor;
+      ctx.font = '9px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      
+      const contentTypeY = node.y - 25; // Top position
+      const contentTypeText = truncateText(ctx, node.contentType, textContainerWidth);
+      ctx.fillText(contentTypeText, node.x, contentTypeY);
+    }
+
+    // Draw title text in the middle
     const titleColor = node.textColor || '#000000'; // Default to black text
     ctx.fillStyle = titleColor;
     ctx.font = 'bold 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
 
-    const titleY = node.y - 8;
-    const maxTitleWidth = dimensions.width - 20;
-    const titleText = truncateText(ctx, node.title, maxTitleWidth);
+    const titleY = node.y - 5; // Middle position (adjusted for content type above)
+    const titleText = truncateText(ctx, node.title, textContainerWidth);
     ctx.fillText(titleText, node.x, titleY);
 
-    // Draw subtitle: URL + optional content type
+    // Draw URL at the bottom
     const urlColor = node.textColor ? `${node.textColor}CC` : 'rgba(0, 0, 0, 0.8)'; // Default to black with transparency
     ctx.fillStyle = urlColor;
     ctx.font = '10px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
     
-    const urlY = node.y + 8;
-    const maxUrlWidth = dimensions.width - 20;
-    const subtitleRaw = node.contentType ? `(${node.contentType}) ${node.url}` : node.url;
-    const urlText = truncateText(ctx, subtitleRaw, maxUrlWidth);
+    const urlY = node.y + 15; // Bottom position
+    const urlText = truncateText(ctx, node.url, textContainerWidth);
     ctx.fillText(urlText, node.x, urlY);
   });
 }
 
 function calculateNodeDimensions(node: PageNode, ctx: CanvasRenderingContext2D): { width: number; height: number } {
-  const padding = 20;
-  const minWidth = 120;
-  const minHeight = 50;
+  const padding = 24;
+  const minWidth = 150; // 3:2 ratio - width
+  const maxWidth = 280; // Maximum width to prevent nodes from becoming too wide
+  const minHeight = 100; // 3:2 ratio - height (150:100 = 3:2)
 
   // Measure title text
   ctx.font = 'bold 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
   const titleWidth = ctx.measureText(node.title).width;
 
-  // Measure subtitle text (URL + optional content type)
+  // Measure URL (now separate from content type)
   ctx.font = '10px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
-  const subtitleRaw = node.contentType ? `(${node.contentType}) ${node.url}` : node.url;
-  const urlWidth = ctx.measureText(subtitleRaw).width;
+  const urlWidth = ctx.measureText(node.url).width;
 
-  const contentWidth = Math.max(titleWidth, urlWidth);
-  const width = Math.max(minWidth, contentWidth + padding);
+  // Measure content type if it exists (displayed separately above title)
+  let contentTypeWidth = 0;
+  if (node.contentType) {
+    ctx.font = '9px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+    contentTypeWidth = ctx.measureText(node.contentType).width;
+  }
+
+  // Use the maximum width of title, URL, and content type
+  const contentWidth = Math.max(titleWidth, urlWidth, contentTypeWidth);
+  const width = Math.min(maxWidth, Math.max(minWidth, contentWidth + padding));
   const height = minHeight;
 
   return { width, height };
@@ -623,5 +517,3 @@ function truncateText(ctx: CanvasRenderingContext2D, text: string, maxWidth: num
   }
   return truncated + '...';
 }
-
-// SVG generation helpers removed per request

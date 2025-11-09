@@ -87,11 +87,11 @@ export async function parseCsvFile(file: File): Promise<CsvParseResult> {
               return;
             }
 
-            // Basic URL validation
-            try {
-              new URL(url.startsWith('http') ? url : `https://${url}`);
-            } catch {
-              errors.push(`Row ${index + 1}: Invalid URL format`);
+            // Basic URL validation - be lenient to accept all URLs
+            // Invalid URLs will be normalized during export if needed
+            // Only reject completely empty or whitespace-only URLs
+            if (!url.trim()) {
+              errors.push(`Row ${index + 1}: Empty URL`);
               return;
             }
 

@@ -4,8 +4,8 @@ function estimateNodeSize(n: PageNode) {
   const titleLen = (n.title || '').length;
   const urlLen = (n.url || '').length;
   const content = Math.max(titleLen, Math.min(60, urlLen));
-  const width = Math.max(140, Math.min(360, 16 * Math.ceil(content / 8)));
-  const height = 50;
+  const width = Math.max(150, Math.min(360, 16 * Math.ceil(content / 8))); // 3:2 ratio - width
+  const height = 100; // 3:2 ratio - height (150:100 = 3:2)
   return { width, height };
 }
 
@@ -333,50 +333,78 @@ export function applyGroupedFlowLayout(
   });
 
   const groupKeys = Array.from(byGroup.keys());
-  // Tighten spacing to allow overview of whole layout
-  const groupBlockWidth = 720;
-  const groupBlockHeight = 320;
-  const groupMargin = 70;
-  const cols = Math.max(1, Math.floor(cfg.width / (groupBlockWidth + groupMargin)));
+  // Arrange all groups vertically (stacked on top of each other)
+  const groupBlockWidth = 1800; // Increased significantly to provide much more width for nodes across groups
+  const groupBlockHeight = 600; // Reduced to make groups more compact vertically
+  const groupMargin = 400; // Vertical margin between groups
   
-  // Calculate starting position to center all groups
-  const totalGroupsWidth = Math.min(groupKeys.length, cols) * (groupBlockWidth + groupMargin) - groupMargin;
-  const startX = Math.max(50, (cfg.width - totalGroupsWidth) / 2);
-  const startY = 80;
+  // Place all groups vertically (stacked)
+  const totalHeight = groupKeys.length * (groupBlockHeight + groupMargin) - groupMargin;
+  const startX = Math.max(100, (cfg.width - groupBlockWidth) / 2); // Center each group horizontally
+  const startY = Math.max(80, (cfg.height - totalHeight) / 2); // Start from top with some margin
 
   groupKeys.forEach((g, idx) => {
-    const col = idx % cols;
-    const row = Math.floor(idx / cols);
-    const gx = startX + col * (groupBlockWidth + groupMargin);
-    const gy = startY + row * (groupBlockHeight + groupMargin);
+    // Place all groups vertically (stacked)
+    const gx = startX;
+    const gy = startY + idx * (groupBlockHeight + groupMargin);
+    
+    // Define group boundaries to keep nodes within their allocated space
+    const groupLeftBound = gx;
+    const groupRightBound = gx + groupBlockWidth;
+    const groupTopBound = gy;
+    const groupBottomBound = gy + groupBlockHeight;
     
     const gnodes = byGroup.get(g)!;
     const gMap = new Map(gnodes.map(n => [n.id, n]));
     const levelMap = buildGroupLevelMap(gnodes, gMap);
     const levels = Array.from(levelMap.keys()).sort((a, b) => a - b);
     
-    // Group-specific spacing tightened for overview while keeping clarity
-    const levelSpacing = 100; // emphasize vertical flow
-    const nodeSpacing = 240;  // tighter horizontal columns
-    const blockPadding = 40;
-    const subRowSpacing = 70;
+    // Group-specific spacing with better padding to ensure nodes stay within margins
+    const levelSpacing = 80; // Reduced from 100 to make groups more compact vertically
+    const nodeSpacing = 350;  // Increased from 300 to take advantage of wider group width and prevent overlaps
+    const blockPadding = 100; // Increased from 80 to provide more margin space for nodes
+    const subRowSpacing = 50; // Reduced from 70 to make groups more compact
     
     levels.forEach((lvl, li) => {
       const band = levelMap.get(lvl)!;
       const y = gy + blockPadding + (li * levelSpacing);
+      
+      // Ensure y position doesn't exceed group bottom boundary
+      if (y > groupBottomBound - blockPadding) {
+        // Skip if level would overflow the group boundary
+        return;
+      }
       
       // Place all nodes at the same level in a single horizontal row
       const totalWidth = (Math.max(0, band.length - 1)) * nodeSpacing;
       const startX = gx + (groupBlockWidth - totalWidth) / 2;
       
       band.forEach((n, i) => {
-        if (n.x === undefined) n.x = startX + (i * nodeSpacing);
-        if (n.y === undefined) n.y = y;
+        if (n.x === undefined) {
+          const nodeX = startX + (i * nodeSpacing);
+          // Ensure node stays within group boundaries
+          n.x = Math.max(groupLeftBound + blockPadding, Math.min(groupRightBound - blockPadding, nodeX));
+        }
+        if (n.y === undefined) {
+          // Ensure node stays within group boundaries
+          n.y = Math.max(groupTopBound + blockPadding, Math.min(groupBottomBound - blockPadding, y));
+        }
       });
+    });
+    
+    // Ensure all nodes in this group stay within boundaries after placement
+    gnodes.forEach(n => {
+      if (n.x !== undefined) {
+        n.x = Math.max(groupLeftBound + blockPadding, Math.min(groupRightBound - blockPadding, n.x));
+      }
+      if (n.y !== undefined) {
+        n.y = Math.max(groupTopBound + blockPadding, Math.min(groupBottomBound - blockPadding, n.y));
+      }
     });
   });
 
-  return relaxOverlaps(nodes, { padding: 80, iterations: 6, strength: 0.95 });
+  // Use a more conservative relaxOverlaps that respects group boundaries
+  return relaxOverlaps(nodes, { padding: 100, iterations: 5, strength: 0.7 });
 }
 
 function applyFlowchartForceAdjustment(nodes: PageNode[], cfg: ForceLayoutConfig): PageNode[] {

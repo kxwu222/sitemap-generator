@@ -1246,52 +1246,73 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
 
       // Do not outline endpoints when a link is highlighted
 
-      // Draw title text
+      // Calculate consistent width for title and URL containers
+      const textContainerWidth = dimensions.width - 32;
+      
+      // Draw content type (if exists) at the top
+      if (node.contentType) {
+        const contentTypeColor = (override.textColor || node.textColor)
+          ? `${(override.textColor || node.textColor)}AA`
+          : 'rgba(0, 0, 0, 0.6)';
+        ctx.fillStyle = contentTypeColor;
+        ctx.font = '10px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        
+        const contentTypeY = node.y - 30; // Top position
+        const contentTypeText = truncateText(ctx, node.contentType, textContainerWidth);
+        ctx.fillText(contentTypeText, node.x, contentTypeY);
+      }
+
+      // Draw title text in the middle
       const titleColor = override.textColor || node.textColor || '#000000';
       ctx.fillStyle = titleColor;
       ctx.font = 'bold 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
 
-      const titleY = node.y - 10;
-      const maxTitleWidth = dimensions.width - 32;
-      const titleText = truncateText(ctx, node.title, maxTitleWidth);
+      const titleY = node.y - 8; // Middle position (adjusted for content type above)
+      const titleText = truncateText(ctx, node.title, textContainerWidth);
       ctx.fillText(titleText, node.x, titleY);
 
-      // Draw subtitle: URL + subtle content type
-      const subtitleColor = (override.textColor || node.textColor)
+      // Draw URL at the bottom
+      const urlColor = (override.textColor || node.textColor)
         ? `${(override.textColor || node.textColor)}CC`
         : 'rgba(0, 0, 0, 0.8)';
-      ctx.fillStyle = subtitleColor;
+      ctx.fillStyle = urlColor;
       ctx.font = '12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
 
-      const subtitleY = node.y + 10;
-      const maxSubtitleWidth = dimensions.width - 32;
-      // draw subtitle
-      const subtitleRaw = node.contentType ? `(${node.contentType}) ${node.url}` : node.url;
-      const subtitleText = truncateText(ctx, subtitleRaw, maxSubtitleWidth);
-      ctx.fillText(subtitleText, node.x, subtitleY);
+      const urlY = node.y + 18; // Bottom position
+      const urlText = truncateText(ctx, node.url, textContainerWidth);
+      ctx.fillText(urlText, node.x, urlY);
     });
   };
 
 
   const calculateNodeDimensions = (node: PageNode, ctx: CanvasRenderingContext2D): { width: number; height: number } => {
-    const padding = 32;
-    const minWidth = 160;
-    const minHeight = 68; // allow two lines
+    const padding = 24;
+    const minWidth = 200; 
+    const maxWidth = 380; // Maximum width to prevent nodes from becoming too wide
+    const minHeight = 100; // 3:2 ratio - height (150:100 = 3:2)
 
     // Measure title
     ctx.font = 'bold 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
     const titleWidth = ctx.measureText(node.title).width;
 
-    // Measure subtitle
+    // Measure URL (now separate from content type)
     ctx.font = '12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
-    // sizing (keep in sync)
-    const subtitleRaw = node.contentType ? `(${node.contentType}) ${node.url}` : node.url;
-    const subtitleWidth = ctx.measureText(subtitleRaw).width;
+    const urlWidth = ctx.measureText(node.url).width;
 
-    const contentWidth = Math.max(titleWidth, subtitleWidth);
-    const width = Math.max(minWidth, contentWidth + padding);
+    // Measure content type if it exists (displayed separately above title)
+    let contentTypeWidth = 0;
+    if (node.contentType) {
+      ctx.font = '10px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+      contentTypeWidth = ctx.measureText(node.contentType).width;
+    }
+
+    // Use the maximum width of title, URL, and content type
+    const contentWidth = Math.max(titleWidth, urlWidth, contentTypeWidth);
+    const width = Math.min(maxWidth, Math.max(minWidth, contentWidth + padding));
     const height = minHeight;
 
     return { width, height };
@@ -3174,6 +3195,12 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
     setInitialTransform({ x: 0, y: 0, scale: 1 });
     backgroundDownRef.current = null;
     setSelectedFiguresStartPositions({});
+    // Clear alignment guides when mouse up
+    setGuideV(null);
+    setGuideH(null);
+    setGuideVRefY(null);
+    setGuideHRefX(null);
+    setDragCanvasPos(null);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {

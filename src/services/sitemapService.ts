@@ -133,10 +133,23 @@ export async function deleteSitemap(sitemapId: string): Promise<void> {
     throw new Error('Supabase client not initialized. Please set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY');
   }
 
-  const { error } = await supabase
+  // Get current user
+  const { data: { user } } = await supabase.auth.getUser();
+  const userId = user?.id || null;
+
+  let query = supabase
     .from('sitemaps')
     .delete()
     .eq('id', sitemapId);
+
+  // Filter by user_id if logged in, otherwise only delete sitemaps without user_id (local/anonymous)
+  if (userId) {
+    query = query.eq('user_id', userId);
+  } else {
+    query = query.is('user_id', null);
+  }
+
+  const { error } = await query;
 
   if (error) {
     console.error('Error deleting sitemap:', error);
