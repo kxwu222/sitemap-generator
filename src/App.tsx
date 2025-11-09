@@ -1599,23 +1599,17 @@ function App() {
           opacity: 0.6;
           pointer-events: none;
         }
-        .header-gradient-blob-1 {
-          background: radial-gradient(circle, rgba(255, 218, 185, 0.5), rgba(255, 182, 193, 0.4));
-          width: 400px;
-          height: 400px;
-          animation: moveHorizontal 5s ease infinite;
-        }
         .header-gradient-blob-2 {
           background: radial-gradient(circle, rgba(135, 206, 250, 0.5), rgba(74, 144, 226, 0.4));
           width: 350px;
           height: 350px;
-          animation: moveInCircle 2.5s reverse infinite;
+          animation: moveHorizontal 8s reverse infinite;
         }
         .header-gradient-blob-3 {
           background: radial-gradient(circle, rgba(255, 192, 203, 0.4), rgba(255, 182, 193, 0.3));
           width: 300px;
           height: 300px;
-          animation: moveInCircle 5s linear infinite;
+          animation: moveHorizontal 8s linear infinite;
         }
         .header-gradient-background {
           position: absolute;
