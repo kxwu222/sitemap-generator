@@ -1564,7 +1564,7 @@ function App() {
         exportToCSV(nodes);
         break;
       case 'xml':
-        exportToXMLSitemap(nodes);
+        exportToXMLSitemap(nodes, false);
         break;
     }
   };
@@ -1707,7 +1707,10 @@ function App() {
                         <Layers className="w-4 h-4 text-gray-600" strokeWidth={1.5} />
                         PNG (Transparent)
                       </button>
-                      {/* <button onClick={() => { setShowExportMenu(false); handleExport('xml'); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm">XML (Sitemap)</button> */}
+                      <button onClick={() => { setShowExportMenu(false); handleExport('xml'); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm flex items-center gap-2">
+                        <FileText className="w-4 h-4 text-gray-600" strokeWidth={1.5} />
+                        XML (Sitemap)
+                      </button>
                       <button onClick={() => { setShowExportMenu(false); handleExport('csv'); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm flex items-center gap-2 rounded-b-lg">
                         <FileText className="w-4 h-4 text-gray-600" strokeWidth={1.5} />
                         CSV

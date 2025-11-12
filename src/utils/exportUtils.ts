@@ -151,7 +151,7 @@ export function exportToCSV(nodes: PageNode[]): void {
   URL.revokeObjectURL(url);
 }
 
-export function exportToXMLSitemap(nodes: PageNode[]): void {
+export function exportToXMLSitemap(nodes: PageNode[], preview: boolean = false): void {
   // Helper function to escape XML special characters
   const escapeXML = (str: string): string => {
     return str
@@ -194,7 +194,35 @@ export function exportToXMLSitemap(nodes: PageNode[]): void {
     }
   };
 
-  // Generate minimal URL entries (only required <loc> element)
+  // Helper function to calculate priority based on depth
+  const calculatePriority = (depth: number): number => {
+    const priority = Math.max(0.1, Math.min(1.0, 1.0 - (depth * 0.1)));
+    return Math.round(priority * 10) / 10; // Round to 1 decimal place
+  };
+
+  // Helper function to format lastmod date
+  const formatLastmod = (lastUpdated?: string): string => {
+    if (lastUpdated) {
+      // Validate and use the provided date (YYYY-MM-DD format is valid for XML sitemaps)
+      const dateMatch = lastUpdated.match(/^(\d{4})-(\d{2})-(\d{2})/);
+      if (dateMatch) {
+        return dateMatch[0]; // Return YYYY-MM-DD format
+      }
+    }
+    // Use current date if lastUpdated is not available or invalid
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  // Helper function to get changefreq (default: monthly)
+  const getChangefreq = (): string => {
+    return 'monthly';
+  };
+
+  // Generate URL entries with all optional elements for Drupal compatibility
   const urlEntries = nodes
     .filter(node => node.url && node.url.trim())
     .map(node => {
@@ -202,10 +230,17 @@ export function exportToXMLSitemap(nodes: PageNode[]): void {
       return normalized ? { node, url: normalized } : null;
     })
     .filter((entry): entry is { node: PageNode; url: string } => entry !== null)
-    .map(({ url }) => {
+    .map(({ node, url }) => {
       const escaped = escapeXML(url);
+      const lastmod = formatLastmod(node.lastUpdated);
+      const changefreq = getChangefreq();
+      const priority = calculatePriority(node.depth);
+      
       return `  <url>
     <loc>${escaped}</loc>
+    <lastmod>${lastmod}</lastmod>
+    <changefreq>${changefreq}</changefreq>
+    <priority>${priority}</priority>
   </url>`;
     });
 
@@ -214,19 +249,39 @@ export function exportToXMLSitemap(nodes: PageNode[]): void {
     return;
   }
 
-  // Construct minimal XML sitemap (compliant with sitemaps.org protocol)
+  // Construct XML sitemap (compliant with sitemaps.org protocol and Drupal-compatible)
   const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
 ${urlEntries.join('\n')}
 </urlset>`;
 
   const blob = new Blob([xml], { type: 'application/xml' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.download = `sitemap.xml`;
-  link.href = url;
-  link.click();
-  URL.revokeObjectURL(url);
+  const blobUrl = URL.createObjectURL(blob);
+  
+  if (preview) {
+    // Open in new tab for preview
+    const previewWindow = window.open(blobUrl, '_blank');
+    if (previewWindow) {
+      // Clean up the blob URL after a delay to allow the browser to load it
+      setTimeout(() => {
+        URL.revokeObjectURL(blobUrl);
+      }, 1000);
+    } else {
+      // If popup was blocked, fall back to download
+      const link = document.createElement('a');
+      link.download = `sitemap.xml`;
+      link.href = blobUrl;
+      link.click();
+      URL.revokeObjectURL(blobUrl);
+    }
+  } else {
+    // Download as before
+    const link = document.createElement('a');
+    link.download = `sitemap.xml`;
+    link.href = blobUrl;
+    link.click();
+    URL.revokeObjectURL(blobUrl);
+  }
 }
 
 function calculateNodeBounds(nodes: PageNode[]): { minX: number; minY: number; maxX: number; maxY: number; width: number; height: number } {
