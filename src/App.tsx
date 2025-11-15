@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { flushSync, createPortal } from 'react-dom';
-import { Download, Trash2, ChevronDown, ChevronUp, Menu, X, Search, HelpCircle, Edit2, LogIn, LogOut, User, Image, FileText, Layers } from 'lucide-react';
+import { Download, Trash2, ChevronDown, Menu, X, Search, HelpCircle, Edit2, LogIn, LogOut, User, Image, FileText, Layers, Share2, MessageSquare, Link, Lock, Copy } from 'lucide-react';
 import { SitemapCanvas } from './components/SitemapCanvas';
 import { SearchOverlay } from './components/SearchOverlay';
 import { AuthModal } from './components/AuthModal';
+import { CommentsPanel } from './components/CommentsPanel';
 import { analyzeURLStructure, PageNode, groupByCategory, createNodesFromCsvData } from './utils/urlAnalyzer';
 import { applyGroupedFlowLayout } from './utils/forceLayout';
 import { exportToPNG, exportToCSV, exportToXMLSitemap } from './utils/exportUtils';
@@ -11,10 +12,14 @@ import { parseCsvFile } from './utils/csvParser';
 import { SitemapData, SelectionGroup } from './types/sitemap';
 import { LinkStyle } from './types/linkStyle';
 import { Figure, FreeLine } from './types/drawables';
+import { Comment, ShareMode, SharePermission } from './types/comments';
 import { saveSitemap, loadSitemaps, deleteSitemap as deleteSitemapFromSupabase, loadSitemapWithDrawables } from './services/sitemapService';
 import { getCurrentUser, signOut, getSession } from './services/authService';
+import { generateShareToken, getSitemapByShareToken, revokeShareToken, getShareToken, getShareTokenWithPermission, updateSharePermission, sendInvite } from './services/sharingService';
+import { createComment, getComments, updateComment, updateCommentPosition, resolveComment, deleteComment, subscribeToComments } from './services/commentsService';
 import { supabase } from './lib/supabase';
 import type { User as SupabaseUser } from '@supabase/supabase-js';
+import type { RealtimeChannel } from '@supabase/supabase-js';
 
 type LayoutType = 'grouped';
 
@@ -27,6 +32,7 @@ type HistorySnapshot = {
   figures: Figure[];
   freeLines: FreeLine[];
   selectionGroups: SelectionGroup[];
+  comments: Comment[];
 };
 
 // Tooltip rendered to body to avoid clipping by parent containers
@@ -121,7 +127,6 @@ function App() {
   const [selectedNode, setSelectedNode] = useState<PageNode | null>(null);
   const [csvErrors, setCsvErrors] = useState<string[]>([]);
   const [showCsvErrors, setShowCsvErrors] = useState(false);
-  const [showAllUrls, setShowAllUrls] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [searchResults, setSearchResults] = useState<PageNode[]>([]);
@@ -144,6 +149,27 @@ function App() {
   const authDropdownTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const exportButtonRef = useRef<HTMLButtonElement | null>(null);
   const [exportDropdownPosition, setExportDropdownPosition] = useState<{ top: number; right: number } | null>(null);
+  const [showXmlExportWarning, setShowXmlExportWarning] = useState(false);
+  const permissionManuallyUpdatedRef = useRef(false);
+  const shareModalPermissionLoadedRef = useRef<string | null>(null); // Track which sitemap's permission was loaded
+  
+  // Sharing and comments state
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [shareToken, setShareToken] = useState<string | null>(null);
+  const [shareMode, setShareMode] = useState<ShareMode>('owner');
+  const [sharePermission, setSharePermission] = useState<SharePermission>('view'); // Permission for current share link
+  const [sharedSitemapName, setSharedSitemapName] = useState<string | null>(null); // Store original name of shared sitemap
+  const [inviteEmails, setInviteEmails] = useState<string[]>([]);
+  const [inviteEmailInput, setInviteEmailInput] = useState('');
+  const [inviteEmailError, setInviteEmailError] = useState('');
+  const [inviteSuccessMessage, setInviteSuccessMessage] = useState('');
+  const [showCopySuccess, setShowCopySuccess] = useState(false);
+  const [isViewerMode, setIsViewerMode] = useState(false);
+  const [comments, setComments] = useState<Comment[]>([]);
+  const [commentChannel, setCommentChannel] = useState<RealtimeChannel | null>(null);
+  const [commentFilter, setCommentFilter] = useState<'all' | 'unresolved' | 'resolved'>('all');
+  const [sidebarTab, setSidebarTab] = useState<'sitemap' | 'comments'>('sitemap');
+  const [sitemapViewTab, setSitemapViewTab] = useState<'my' | 'shared'>('my');
 
   const makeSnapshot = useCallback((): HistorySnapshot => ({
     nodes: JSON.parse(JSON.stringify(nodes)),
@@ -153,7 +179,8 @@ function App() {
     figures: JSON.parse(JSON.stringify(figures)),
     freeLines: JSON.parse(JSON.stringify(freeLines)),
     selectionGroups: JSON.parse(JSON.stringify(selectionGroups)),
-  }), [nodes, extraLinks, linkStyles, colorOverrides, figures, freeLines, selectionGroups]);
+    comments: JSON.parse(JSON.stringify(comments)),
+  }), [nodes, extraLinks, linkStyles, colorOverrides, figures, freeLines, selectionGroups, comments]);
 
   // Refresh sitemaps after auth changes. Merge local sitemaps with remote so nothing disappears post-login.
   const refreshSitemapsFromSupabase = useCallback(async () => {
@@ -209,6 +236,13 @@ function App() {
     return !!(import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_ANON_KEY && supabase);
   }, []);
 
+  // Check if running on localhost
+  const isLocalhost = useCallback(() => {
+    return window.location.hostname === 'localhost' || 
+           window.location.hostname === '127.0.0.1' || 
+           window.location.hostname === '';
+  }, []);
+
   // Require authentication for actions (only if Supabase is configured)
   const requireAuth = useCallback((): boolean => {
     if (!isSupabaseConfigured()) {
@@ -222,6 +256,17 @@ function App() {
     }
     return true;
   }, [isSupabaseConfigured, user]);
+
+  // Check if a sitemap is editable
+  const isSitemapEditable = useCallback((sitemap: SitemapData | null): boolean => {
+    if (!sitemap) return false;
+    // If sitemap is shared with view-only permission, it's not editable
+    if (sitemap.isShared === true && sitemap.sharePermission === 'view') {
+      return false;
+    }
+    // Otherwise, it's editable (owned sitemaps or shared with edit permission)
+    return true;
+  }, []);
 
   // Treat auth as ready if Supabase isn't configured or client isn't initialized (kept for future use)
   // const authReady = !isSupabaseConfigured() || !supabase || !authLoading;
@@ -290,6 +335,204 @@ function App() {
       };
     }
   }, [isSupabaseConfigured]);
+
+  // Handle share link URL parameter
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const shareTokenParam = urlParams.get('share');
+    
+    if (shareTokenParam) {
+      // Load sitemap via share token
+      getSitemapByShareToken(shareTokenParam)
+        .then(async (result) => {
+          if (result) {
+            const { sitemap, permission } = result;
+            
+            // Check if user is authenticated (required for comments)
+            if (!user && isSupabaseConfigured()) {
+              setShowAuthModal(true);
+              return;
+            }
+            
+            // Check if current user is the owner
+            const currentUser = await getCurrentUser();
+            const isOwner = currentUser && sitemaps.find(s => s.id === sitemap.id)?.id === sitemap.id && 
+              sitemaps.find(s => s.id === sitemap.id && s.id === sitemap.id);
+            // For shared links, we'll check ownership by comparing user_id from database
+            // For now, assume viewer mode unless we can verify ownership
+            const mode: ShareMode = isOwner ? 'owner' : 'viewer';
+            
+            setShareToken(shareTokenParam);
+            setShareMode(mode);
+            setSharePermission(permission); // Store the permission
+            // Viewer mode should reflect whether the user is accessing via a shared link (not ownership)
+            setIsViewerMode(mode === 'viewer');
+            setSharedSitemapName(sitemap.name); // Store the original name
+            
+            // Load the shared sitemap
+            setActiveSitemapId(sitemap.id);
+            setNodes(JSON.parse(JSON.stringify(sitemap.nodes)));
+            setExtraLinks(JSON.parse(JSON.stringify(sitemap.extraLinks)));
+            setLinkStyles(JSON.parse(JSON.stringify(sitemap.linkStyles)));
+            setColorOverrides(JSON.parse(JSON.stringify(sitemap.colorOverrides)));
+            setUrls(JSON.parse(JSON.stringify(sitemap.urls)));
+            setSelectionGroups(JSON.parse(JSON.stringify(sitemap.selectionGroups || [])));
+            
+            // Load drawables
+            if (isSupabaseConfigured() && supabase) {
+              try {
+                const { figures: f, freeLines: fl } = await loadSitemapWithDrawables(sitemap.id);
+                setFigures(f);
+                setFreeLines(fl);
+              } catch (err) {
+                console.error('Failed to load drawables:', err);
+              }
+            }
+            
+            // Load comments
+            try {
+              const loadedComments = await getComments(sitemap.id);
+              setComments(loadedComments);
+            } catch (err) {
+              console.error('Failed to load comments:', err);
+            }
+          }
+        })
+        .catch(err => {
+          console.error('Failed to load shared sitemap:', err);
+          alert('Invalid or expired share link.');
+        });
+    } else {
+      // Not viewing via share link - reset viewer mode
+      setIsViewerMode(false);
+      setShareMode('owner');
+      setSharedSitemapName(null);
+    }
+  }, [user, isSupabaseConfigured, sitemaps]);
+
+  // Load comments when active sitemap changes
+  useEffect(() => {
+    if (!activeSitemapId) return;
+    
+    // Load from localStorage if on localhost without Supabase
+    const isLocal = isLocalhost();
+    if (isLocal && !isSupabaseConfigured()) {
+      const storageKey = `comments_${activeSitemapId}`;
+      const storedComments = JSON.parse(localStorage.getItem(storageKey) || '[]');
+      setComments(storedComments);
+      return;
+    }
+    
+    if (!isSupabaseConfigured()) return;
+    
+    // Cleanup previous subscription
+    if (commentChannel) {
+      supabase?.removeChannel(commentChannel);
+      setCommentChannel(null);
+    }
+    
+    // Load comments
+    getComments(activeSitemapId)
+      .then(setComments)
+      .catch(err => console.error('Failed to load comments:', err));
+    
+    // Subscribe to real-time updates
+    if (supabase) {
+      const channel = subscribeToComments(activeSitemapId, (comment, eventType) => {
+        if (eventType === 'INSERT') {
+          setComments(prev => {
+            // Check if comment already exists (from optimistic update)
+            if (prev.some(c => c.id === comment.id)) {
+              return prev;
+            }
+            return [comment, ...prev];
+          });
+        } else if (eventType === 'UPDATE') {
+          setComments(prev => prev.map(c => c.id === comment.id ? comment : c));
+        } else if (eventType === 'DELETE') {
+          setComments(prev => prev.filter(c => c.id !== comment.id));
+        }
+      });
+      
+      if (channel) {
+        setCommentChannel(channel);
+      }
+    }
+    
+    return () => {
+      if (commentChannel) {
+        supabase?.removeChannel(commentChannel);
+      }
+    };
+  }, [activeSitemapId, isSupabaseConfigured, isLocalhost]);
+
+  // Auto-generate share token when modal opens if it doesn't exist
+  useEffect(() => {
+    if (showShareModal && activeSitemapId && shareMode !== 'viewer') {
+      // Only load permission once per modal session for this sitemap
+      // This prevents the useEffect from overwriting manual permission changes
+      if (shareModalPermissionLoadedRef.current === activeSitemapId) {
+        // Permission already loaded for this sitemap in this modal session, skip
+        return;
+      }
+      
+      // Reset the manual update flag when modal opens for a new sitemap
+      if (shareModalPermissionLoadedRef.current !== activeSitemapId) {
+        permissionManuallyUpdatedRef.current = false;
+        shareModalPermissionLoadedRef.current = activeSitemapId;
+      }
+      
+      // Load existing token and permission if available
+      getShareTokenWithPermission(activeSitemapId)
+        .then(({ token, permission }) => {
+          // Check ref again at the time the promise resolves (in case it was set during the async operation)
+          if (permissionManuallyUpdatedRef.current) {
+            // Permission was manually updated, don't overwrite it
+            if (token) {
+              setShareToken(token);
+            }
+            return;
+          }
+          
+          if (token) {
+            setShareToken(token);
+            setSharePermission(permission);
+          } else {
+            // Generate new token with default 'view' permission
+            generateShareToken(activeSitemapId, 'view')
+              .then(newToken => {
+                // Check ref again at the time this promise resolves
+                if (permissionManuallyUpdatedRef.current) {
+                  // Permission was manually updated, don't overwrite it
+                  if (newToken) {
+                    setShareToken(newToken);
+                  }
+                  return;
+                }
+                
+                if (newToken) {
+                  setShareToken(newToken);
+                  setSharePermission('view');
+                }
+              })
+              .catch(error => {
+                // Silently handle errors - token generation will work with localStorage fallback
+                // Only log if it's an unexpected error
+                if (error.message !== 'Failed to generate share token') {
+                  console.error('Failed to auto-generate share token:', error);
+                }
+              });
+          }
+        })
+        .catch(error => {
+          console.error('Failed to get share token:', error);
+        });
+    } else if (!showShareModal) {
+      // Reset the loaded ref when modal closes
+      shareModalPermissionLoadedRef.current = null;
+      permissionManuallyUpdatedRef.current = false;
+    }
+  }, [showShareModal, activeSitemapId, shareMode]);
 
   const handleAuthSuccess = async () => {
     // Close modal immediately for better UX
@@ -372,13 +615,182 @@ function App() {
     }
   };
 
+  const validateEmail = (email: string): boolean => {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(email.trim());
+  };
+
+  const handleAddEmail = (email: string) => {
+    const trimmedEmail = email.trim();
+    if (!trimmedEmail) return;
+
+    // Validate email
+    if (!validateEmail(trimmedEmail)) {
+      setInviteEmailError('Please enter a valid email address');
+      return;
+    }
+
+    // Check for duplicates
+    if (inviteEmails.includes(trimmedEmail)) {
+      setInviteEmailError('This email is already added');
+      return;
+    }
+
+    // Add email to list
+    setInviteEmails(prev => [...prev, trimmedEmail]);
+    setInviteEmailInput('');
+    setInviteEmailError('');
+    setInviteSuccessMessage('');
+  };
+
+  const handleRemoveEmail = (emailToRemove: string) => {
+    setInviteEmails(prev => prev.filter(email => email !== emailToRemove));
+  };
+
+  const handleSendInvite = async (e?: React.MouseEvent) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    
+    if (inviteEmails.length === 0 || !activeSitemapId) return;
+    
+    // Clear any previous error and success message
+    setInviteEmailError('');
+    setInviteSuccessMessage('');
+    
+    try {
+      // Send invites to all emails
+      for (const email of inviteEmails) {
+        await sendInvite(activeSitemapId, email);
+      }
+      // Show success message and keep email pills
+      setInviteSuccessMessage('Invite sent!');
+      setInviteEmailInput('');
+      // Auto-hide success message after 3 seconds
+      setTimeout(() => setInviteSuccessMessage(''), 3000);
+    } catch (error) {
+      console.error('Failed to send invite:', error);
+      setInviteEmailError('Failed to send invites. Please try again.');
+    }
+  };
+
+  const handleExitViewerMode = async () => {
+    // If we're viewing a shared sitemap (either in viewer or edit mode), save it to the viewer's storage
+    if (shareToken && activeSitemapId) {
+      // Check if this sitemap is already in the viewer's sitemaps
+      const existingSitemap = sitemaps.find(s => s.id === activeSitemapId);
+      
+      if (!existingSitemap) {
+        // Create a new sitemap with a new ID but keep the original name
+        const newSitemapId = `sitemap-${Date.now()}`;
+        const now = Date.now();
+        
+        // Get the original name from the shared sitemap
+        // Use the stored name if available, otherwise try to infer from nodes
+        let finalName = sharedSitemapName || 'Shared Sitemap';
+        
+        // If we don't have the stored name, try to infer from nodes
+        if (!sharedSitemapName && nodes.length > 0) {
+          // Try to get name from the first node's URL or title
+          const firstNode = nodes[0];
+          if (firstNode.url) {
+            try {
+              const urlObj = new URL(firstNode.url);
+              const domain = urlObj.hostname.replace('www.', '');
+              finalName = `${domain} Sitemap`;
+            } catch {
+              finalName = 'Shared Sitemap';
+            }
+          } else if (firstNode.title) {
+            finalName = `${firstNode.title} Sitemap`;
+          }
+        }
+        
+        // Check for name conflicts and append number if needed
+        const nameExists = sitemaps.some(s => s.name === finalName);
+        if (nameExists) {
+          let counter = 1;
+          while (sitemaps.some(s => s.name === `${finalName} ${counter}`)) {
+            counter++;
+          }
+          finalName = `${finalName} ${counter}`;
+        }
+        
+        const savedSitemap: SitemapData = {
+          id: newSitemapId,
+          name: finalName,
+          nodes: JSON.parse(JSON.stringify(nodes)),
+          extraLinks: JSON.parse(JSON.stringify(extraLinks)),
+          linkStyles: JSON.parse(JSON.stringify(linkStyles)),
+          colorOverrides: JSON.parse(JSON.stringify(colorOverrides)),
+          urls: JSON.parse(JSON.stringify(urls)),
+          selectionGroups: JSON.parse(JSON.stringify(selectionGroups)),
+          lastModified: now,
+          createdAt: now,
+          isShared: true, // Mark as shared
+          sharePermission: sharePermission, // Store the permission level
+          originalSitemapId: activeSitemapId // Track original sitemap
+        };
+        
+        // Add to sitemaps array
+        setSitemaps(prev => {
+          const updated = [...prev, savedSitemap];
+          // Save to localStorage immediately
+          try {
+            localStorage.setItem('sitemaps', JSON.stringify(updated));
+            localStorage.setItem('activeSitemapId', newSitemapId);
+          } catch (e) {
+            console.warn('Failed to save to localStorage:', e);
+          }
+          return updated;
+        });
+        
+        // Save to Supabase if configured
+        if (isSupabaseConfigured() && supabase) {
+          try {
+            await saveSitemap(savedSitemap, figures, freeLines);
+          } catch (error) {
+            console.error('Failed to save shared sitemap to Supabase:', error);
+            // Already saved to localStorage above, so continue
+          }
+        }
+        
+        // Set as active sitemap
+        setActiveSitemapId(newSitemapId);
+      } else {
+        // Sitemap already exists in viewer's list, just switch to it
+        // But we should still save any changes made while viewing
+        await saveCurrentStateToActiveSitemap();
+      }
+    }
+    
+    // Clear URL parameter
+    window.history.replaceState({}, '', window.location.pathname);
+    
+    // Reset viewer mode state
+    setIsViewerMode(false);
+    setShareMode('owner');
+    setShareToken(null);
+    setSharePermission('view');
+    setSharedSitemapName(null);
+    
+    // The existing useEffect at line 384-389 will handle resetting when share param is removed
+  };
+
   // Sitemap management functions
   const saveCurrentStateToActiveSitemap = useCallback(async () => {
     if (!activeSitemapId) return;
     
+    const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
+    // Prevent saving view-only shared sitemaps
+    if (!isSitemapEditable(currentSitemap || null)) {
+      return;
+    }
+    
     const updatedSitemap: SitemapData = {
       id: activeSitemapId,
-      name: sitemaps.find(s => s.id === activeSitemapId)?.name || 'Untitled Sitemap',
+      name: currentSitemap?.name || 'Untitled Sitemap',
       nodes: JSON.parse(JSON.stringify(nodes)),
       extraLinks: JSON.parse(JSON.stringify(extraLinks)),
       linkStyles: JSON.parse(JSON.stringify(linkStyles)),
@@ -386,7 +798,11 @@ function App() {
       urls: JSON.parse(JSON.stringify(urls)),
       selectionGroups: JSON.parse(JSON.stringify(selectionGroups)),
       lastModified: Date.now(),
-      createdAt: sitemaps.find(s => s.id === activeSitemapId)?.createdAt || Date.now()
+      createdAt: currentSitemap?.createdAt || Date.now(),
+      // Preserve shared metadata if present
+      isShared: currentSitemap?.isShared,
+      sharePermission: currentSitemap?.sharePermission,
+      originalSitemapId: currentSitemap?.originalSitemapId,
     };
 
     // Update local state
@@ -411,7 +827,100 @@ function App() {
         s.id === activeSitemapId ? updatedSitemap : s
       )));
     }
-  }, [activeSitemapId, nodes, extraLinks, linkStyles, colorOverrides, urls, figures, freeLines, selectionGroups, sitemaps, isSupabaseConfigured]);
+  }, [activeSitemapId, nodes, extraLinks, linkStyles, colorOverrides, urls, figures, freeLines, selectionGroups, sitemaps, isSupabaseConfigured, isSitemapEditable]);
+
+  // Duplicate a sitemap (creates an editable copy)
+  const duplicateSitemap = useCallback(async (sitemapId: string) => {
+    if (!requireAuth()) return;
+    
+    const sitemapToDuplicate = sitemaps.find(s => s.id === sitemapId);
+    if (!sitemapToDuplicate) return;
+    
+    const newSitemapId = `sitemap-${Date.now()}`;
+    const now = Date.now();
+    
+    // Create duplicate with same data but new ID and remove shared metadata
+    const duplicated: SitemapData = {
+      id: newSitemapId,
+      name: `${sitemapToDuplicate.name} (Copy)`,
+      nodes: JSON.parse(JSON.stringify(sitemapToDuplicate.nodes)),
+      extraLinks: JSON.parse(JSON.stringify(sitemapToDuplicate.extraLinks)),
+      linkStyles: JSON.parse(JSON.stringify(sitemapToDuplicate.linkStyles)),
+      colorOverrides: JSON.parse(JSON.stringify(sitemapToDuplicate.colorOverrides)),
+      urls: JSON.parse(JSON.stringify(sitemapToDuplicate.urls)),
+      selectionGroups: JSON.parse(JSON.stringify(sitemapToDuplicate.selectionGroups || [])),
+      lastModified: now,
+      createdAt: now,
+      // Remove shared metadata - this becomes an owned sitemap
+      // isShared, sharePermission, originalSitemapId are not set (undefined)
+    };
+    
+    // Add to sitemaps array
+    setSitemaps(prev => {
+      const updated = [...prev, duplicated];
+      // Save to localStorage immediately
+      try {
+        localStorage.setItem('sitemaps', JSON.stringify(updated));
+      } catch (e) {
+        console.warn('Failed to save to localStorage:', e);
+      }
+      return updated;
+    });
+    
+    // Save to Supabase if configured
+    if (isSupabaseConfigured() && supabase) {
+      try {
+        // Load drawables from original sitemap if available
+        let figuresToSave: Figure[] = [];
+        let freeLinesToSave: FreeLine[] = [];
+        try {
+          const { figures: f, freeLines: fl } = await loadSitemapWithDrawables(sitemapId);
+          figuresToSave = f;
+          freeLinesToSave = fl;
+        } catch (err) {
+          // Ignore errors - drawables are optional
+        }
+        await saveSitemap(duplicated, figuresToSave, freeLinesToSave);
+      } catch (error) {
+        console.error('Failed to save duplicated sitemap to Supabase:', error);
+        // Already saved to localStorage above, so continue
+      }
+    }
+    
+    // Switch to the duplicated sitemap
+    setActiveSitemapId(newSitemapId);
+    setNodes(JSON.parse(JSON.stringify(duplicated.nodes)));
+    setExtraLinks(JSON.parse(JSON.stringify(duplicated.extraLinks)));
+    setLinkStyles(JSON.parse(JSON.stringify(duplicated.linkStyles)));
+    setColorOverrides(JSON.parse(JSON.stringify(duplicated.colorOverrides)));
+    setUrls(JSON.parse(JSON.stringify(duplicated.urls)));
+    setSelectionGroups(JSON.parse(JSON.stringify(duplicated.selectionGroups || [])));
+    setUndoStack([]);
+    setRedoStack([]);
+    setSelectedNode(null);
+    
+    // Load drawables if available
+    if (isSupabaseConfigured() && supabase) {
+      try {
+        const { figures: f, freeLines: fl } = await loadSitemapWithDrawables(newSitemapId);
+        setFigures(f);
+        setFreeLines(fl);
+      } catch (err) {
+        console.error('Failed to load drawables for duplicated sitemap:', err);
+        setFigures([]);
+        setFreeLines([]);
+      }
+    } else {
+      setFigures([]);
+      setFreeLines([]);
+    }
+    
+    try {
+      localStorage.setItem('activeSitemapId', newSitemapId);
+    } catch (e) {
+      console.warn('Failed to save activeSitemapId:', e);
+    }
+  }, [sitemaps, isSupabaseConfigured, requireAuth]);
 
   const createNewSitemap = useCallback(async () => {
     if (!requireAuth()) return;
@@ -821,6 +1330,7 @@ function App() {
           setFigures(prev.figures);
           setFreeLines(prev.freeLines);
           setSelectionGroups(prev.selectionGroups);
+          setComments(prev.comments);
         }
         return;
       }
@@ -838,6 +1348,7 @@ function App() {
           setFigures(next.figures);
           setFreeLines(next.freeLines);
           setSelectionGroups(next.selectionGroups);
+          setComments(next.comments);
         }
         return;
       }
@@ -845,7 +1356,7 @@ function App() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [nodes, extraLinks, linkStyles, colorOverrides, undoStack, redoStack, makeSnapshot]);
+  }, [nodes, extraLinks, linkStyles, colorOverrides, comments, undoStack, redoStack, makeSnapshot]);
 
   useEffect(() => {
     // Skip URL analysis if we're in the middle of a CSV upload
@@ -908,13 +1419,6 @@ function App() {
   }, [showExportMenu]);
 
 
-  const handleClearAll = () => {
-    setUrls([]);
-    setNodes([]);
-    setSelectedNode(null);
-    setCsvErrors([]);
-    setShowCsvErrors(false);
-  };
 
   const handleCsvUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -1104,7 +1608,12 @@ function App() {
 
 
   const handleNodesUpdate = (updatedNodes: PageNode[]) => {
+    if (isViewerMode) return; // Disable editing in viewer mode
     if (!requireAuth()) return;
+    
+    // Check if current sitemap is editable
+    const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
+    if (!isSitemapEditable(currentSitemap || null)) return;
     
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
@@ -1135,7 +1644,14 @@ function App() {
   };
 
   const handleExtraLinkCreate = (sourceId: string, targetId: string) => {
+    if (isViewerMode) return; // Disable editing in viewer mode
     if (!requireAuth()) return;
+    
+    // Check if current sitemap is editable
+    const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
+    if (!isSitemapEditable(currentSitemap || null)) {
+      return; // Prevent editing view-only shared sitemaps
+    }
     
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
@@ -1173,7 +1689,14 @@ function App() {
   };
 
   const handleExtraLinkDelete = (sourceId: string, targetId: string) => {
+    if (isViewerMode) return; // Disable editing in viewer mode
     if (!requireAuth()) return;
+    
+    // Check if current sitemap is editable
+    const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
+    if (!isSitemapEditable(currentSitemap || null)) {
+      return; // Prevent editing view-only shared sitemaps
+    }
     
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
@@ -1240,7 +1763,14 @@ function App() {
   }, []);
 
   const handleNodeDelete = (nodeId: string) => {
+    if (isViewerMode) return; // Disable editing in viewer mode
     if (!requireAuth()) return;
+    
+    // Check if current sitemap is editable
+    const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
+    if (!isSitemapEditable(currentSitemap || null)) {
+      return; // Prevent editing view-only shared sitemaps
+    }
     
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
@@ -1289,7 +1819,15 @@ function App() {
   }
 
   function handleMoveNodesToGroup(nodeIds: string[], targetGroup: string, opts?: { includeSubtree?: boolean; relayout?: boolean }) {
+    if (isViewerMode) return; // Disable editing in viewer mode
     if (!requireAuth()) return;
+    
+    // Check if current sitemap is editable
+    const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
+    if (!isSitemapEditable(currentSitemap || null)) {
+      return; // Prevent editing view-only shared sitemaps
+    }
+    
     if (nodeIds.length === 0) return;
     const include = new Set<string>(nodeIds);
     if (opts?.includeSubtree) {
@@ -1316,14 +1854,28 @@ function App() {
   }
 
   function handleCreateGroupFromSelection(selectedIds: string[], newGroupName: string, opts?: { relayout?: boolean }) {
+    if (isViewerMode) return; // Disable editing in viewer mode
     if (!requireAuth()) return;
+    
+    // Check if current sitemap is editable
+    const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
+    if (!isSitemapEditable(currentSitemap || null)) {
+      return; // Prevent editing view-only shared sitemaps
+    }
     const name = (newGroupName || '').trim();
     if (!name) return;
     handleMoveNodesToGroup(selectedIds, name, { includeSubtree: false, relayout: !!opts?.relayout });
   }
 
   function handleDeleteGroup(groupName: string) {
+    if (isViewerMode) return; // Disable editing in viewer mode
     if (!requireAuth()) return;
+    
+    // Check if current sitemap is editable
+    const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
+    if (!isSitemapEditable(currentSitemap || null)) {
+      return; // Prevent editing view-only shared sitemaps
+    }
     // When deleting a group, reassign all nodes in that group to 'general'
     handleMoveNodesToGroup(
       nodes.filter(n => n.category === groupName).map(n => n.id),
@@ -1333,7 +1885,15 @@ function App() {
   }
 
   function handleRenameGroup(oldName: string, newName: string) {
+    if (isViewerMode) return; // Disable editing in viewer mode
     if (!requireAuth()) return;
+    
+    // Check if current sitemap is editable
+    const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
+    if (!isSitemapEditable(currentSitemap || null)) {
+      return; // Prevent editing view-only shared sitemaps
+    }
+    
     const name = (newName || '').trim();
     if (!name || name === oldName) return;
     const updated = nodes.map(n => n.category === oldName ? { ...n, category: name } : n);
@@ -1342,7 +1902,14 @@ function App() {
 
   // ===== Free-form selection groups (nodes + text figures) =====
   const createSelectionGroup = useCallback((memberNodeIds: string[], memberFigureIds: string[], name?: string) => {
+    if (isViewerMode) return; // Disable editing in viewer mode
     if (!requireAuth()) return;
+    
+    // Check if current sitemap is editable
+    const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
+    if (!isSitemapEditable(currentSitemap || null)) {
+      return; // Prevent editing view-only shared sitemaps
+    }
     // Add snapshot before making changes
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
@@ -1350,10 +1917,17 @@ function App() {
     const id = `sg-${Date.now()}`;
     const group: SelectionGroup = { id, name: name || `Group ${selectionGroups.length + 1}`, memberNodeIds, memberFigureIds };
     setSelectionGroups(prev => [...prev, group]);
-  }, [selectionGroups.length, makeSnapshot, requireAuth]);
+  }, [selectionGroups.length, makeSnapshot, requireAuth, isViewerMode, sitemaps, activeSitemapId, isSitemapEditable]);
 
   const ungroupSelection = useCallback((memberNodeIds: string[], memberFigureIds: string[]) => {
+    if (isViewerMode) return; // Disable editing in viewer mode
     if (!requireAuth()) return;
+    
+    // Check if current sitemap is editable
+    const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
+    if (!isSitemapEditable(currentSitemap || null)) {
+      return; // Prevent editing view-only shared sitemaps
+    }
     // Add snapshot before making changes
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
@@ -1363,7 +1937,7 @@ function App() {
       memberNodeIds: g.memberNodeIds.filter(id => !memberNodeIds.includes(id)),
       memberFigureIds: g.memberFigureIds.filter(id => !memberFigureIds.includes(id)),
     })).filter(g => g.memberNodeIds.length > 0 || g.memberFigureIds.length > 0));
-  }, [makeSnapshot, requireAuth]);
+  }, [makeSnapshot, requireAuth, isViewerMode, sitemaps, activeSitemapId, isSitemapEditable]);
 
   const [snapToGuides, setSnapToGuides] = useState<boolean>(() => {
     const v = localStorage.getItem('snapToGuides');
@@ -1372,7 +1946,14 @@ function App() {
   useEffect(() => { localStorage.setItem('snapToGuides', snapToGuides ? '1' : '0'); }, [snapToGuides]);
 
   const handleAddNode = (parentId: string | null = null) => {
+    if (isViewerMode) return; // Disable editing in viewer mode
     if (!requireAuth()) return;
+    
+    // Check if current sitemap is editable
+    const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
+    if (!isSitemapEditable(currentSitemap || null)) {
+      return; // Prevent editing view-only shared sitemaps
+    }
     
     const newNodeId = `node-${Date.now()}`;
     const parentNode = parentId ? nodes.find(n => n.id === parentId) : null;
@@ -1421,7 +2002,14 @@ function App() {
   };
 
   const handleConnectionCreate = (sourceId: string, targetId: string) => {
+    if (isViewerMode) return; // Disable editing in viewer mode
     if (!requireAuth()) return;
+    
+    // Check if current sitemap is editable
+    const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
+    if (!isSitemapEditable(currentSitemap || null)) {
+      return; // Prevent editing view-only shared sitemaps
+    }
     
     setNodes(prev => {
       const updated = prev.map(node => {
@@ -1468,63 +2056,112 @@ function App() {
   }, []);
 
   const handleLinkStyleChange = useCallback((linkKey: string, style: LinkStyle) => {
+    if (isViewerMode) return; // Disable editing in viewer mode
     if (!requireAuth()) return;
+    
+    // Check if current sitemap is editable
+    const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
+    if (!isSitemapEditable(currentSitemap || null)) {
+      return; // Prevent editing view-only shared sitemaps
+    }
     
     setLinkStyles(prev => ({
       ...prev,
       [linkKey]: { ...prev[linkKey], ...style }
     }));
-  }, [requireAuth]);
+  }, [requireAuth, isViewerMode, sitemaps, activeSitemapId, isSitemapEditable]);
 
   // Figure handlers
   const handleCreateFigure = useCallback((figure: Figure) => {
+    if (isViewerMode) return; // Disable editing in viewer mode
     if (!requireAuth()) return;
+    
+    // Check if current sitemap is editable
+    const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
+    if (!isSitemapEditable(currentSitemap || null)) {
+      return; // Prevent editing view-only shared sitemaps
+    }
     
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
     setFigures(prev => [...prev, figure]);
-  }, [makeSnapshot, requireAuth]);
+  }, [makeSnapshot, requireAuth, isViewerMode, sitemaps, activeSitemapId, isSitemapEditable]);
 
   const handleUpdateFigure = useCallback((id: string, updates: Partial<Figure>) => {
+    if (isViewerMode) return; // Disable editing in viewer mode
     if (!requireAuth()) return;
+    
+    // Check if current sitemap is editable
+    const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
+    if (!isSitemapEditable(currentSitemap || null)) {
+      return; // Prevent editing view-only shared sitemaps
+    }
     
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
     setFigures(prev => prev.map(f => f.id === id ? { ...f, ...updates } : f));
-  }, [makeSnapshot, requireAuth]);
+  }, [makeSnapshot, requireAuth, isViewerMode, sitemaps, activeSitemapId, isSitemapEditable]);
 
   const handleDeleteFigure = useCallback((id: string) => {
+    if (isViewerMode) return; // Disable editing in viewer mode
     if (!requireAuth()) return;
+    
+    // Check if current sitemap is editable
+    const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
+    if (!isSitemapEditable(currentSitemap || null)) {
+      return; // Prevent editing view-only shared sitemaps
+    }
     
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
     setFigures(prev => prev.filter(f => f.id !== id));
-  }, [makeSnapshot, requireAuth]);
+  }, [makeSnapshot, requireAuth, isViewerMode, sitemaps, activeSitemapId, isSitemapEditable]);
 
   // FreeLine handlers
   const handleCreateFreeLine = useCallback((line: FreeLine) => {
+    if (isViewerMode) return; // Disable editing in viewer mode
     if (!requireAuth()) return;
+    
+    // Check if current sitemap is editable
+    const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
+    if (!isSitemapEditable(currentSitemap || null)) {
+      return; // Prevent editing view-only shared sitemaps
+    }
     
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
     setFreeLines(prev => [...prev, line]);
-  }, [makeSnapshot, requireAuth]);
+  }, [makeSnapshot, requireAuth, isViewerMode, sitemaps, activeSitemapId, isSitemapEditable]);
 
   const handleUpdateFreeLine = useCallback((id: string, updates: Partial<FreeLine>) => {
+    if (isViewerMode) return; // Disable editing in viewer mode
     if (!requireAuth()) return;
+    
+    // Check if current sitemap is editable
+    const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
+    if (!isSitemapEditable(currentSitemap || null)) {
+      return; // Prevent editing view-only shared sitemaps
+    }
     
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
     setFreeLines(prev => prev.map(l => l.id === id ? { ...l, ...updates } : l));
-  }, [makeSnapshot, requireAuth]);
+  }, [makeSnapshot, requireAuth, isViewerMode, sitemaps, activeSitemapId, isSitemapEditable]);
 
   const handleDeleteFreeLine = useCallback((id: string) => {
+    if (isViewerMode) return; // Disable editing in viewer mode
     if (!requireAuth()) return;
+    
+    // Check if current sitemap is editable
+    const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
+    if (!isSitemapEditable(currentSitemap || null)) {
+      return; // Prevent editing view-only shared sitemaps
+    }
     
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
     setFreeLines(prev => prev.filter(l => l.id !== id));
-  }, [makeSnapshot, requireAuth]);
+  }, [makeSnapshot, requireAuth, isViewerMode, sitemaps, activeSitemapId, isSitemapEditable]);
 
   const handleFocusNode = useCallback((node: PageNode) => {
     // Set the focused node for visual highlighting FIRST using flushSync
@@ -1539,6 +2176,15 @@ function App() {
   }, []);
 
   const handleExport = async (format: 'png' | 'png-white' | 'csv' | 'xml') => {
+    if (format === 'xml') {
+      // Check for nodes without URLs
+      const nodesWithoutUrls = nodes.filter(node => !node.url || !node.url.trim());
+      if (nodesWithoutUrls.length > 0) {
+        setShowXmlExportWarning(true);
+        return;
+      }
+    }
+    
     switch (format) {
       case 'png':
         await exportToPNG(
@@ -1567,6 +2213,12 @@ function App() {
         exportToXMLSitemap(nodes, false);
         break;
     }
+  };
+
+  const handleConfirmXmlExport = () => {
+    setShowXmlExportWarning(false);
+    setShowExportMenu(false);
+    exportToXMLSitemap(nodes, false);
   };
 
   const categoryGroups = groupByCategory(nodes);
@@ -1669,6 +2321,21 @@ function App() {
                   Search URL
                 </button>
               )}
+              {nodes.length > 0 && activeSitemapId && (
+                <button
+                  onClick={async () => {
+                    // Load current share token
+                    const token = await getShareToken(activeSitemapId);
+                    setShareToken(token);
+                    setShowShareModal(true);
+                  }}
+                  className="px-4 py-2 text-sm font-medium bg-white border rounded-lg border-gray-300 hover:border-gray-400 transition-colors flex items-center gap-2"
+                  title="Share sitemap"
+                >
+                  <Share2 className="w-4 h-4" strokeWidth={1.5} />
+                  Share
+                </button>
+              )}
               {nodes.length > 0 && (
                 <div className="relative export-menu-container">
                   <button
@@ -1707,13 +2374,13 @@ function App() {
                         <Layers className="w-4 h-4 text-gray-600" strokeWidth={1.5} />
                         PNG (Transparent)
                       </button>
-                      <button onClick={() => { setShowExportMenu(false); handleExport('xml'); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm flex items-center gap-2">
-                        <FileText className="w-4 h-4 text-gray-600" strokeWidth={1.5} />
-                        XML (Sitemap)
-                      </button>
                       <button onClick={() => { setShowExportMenu(false); handleExport('csv'); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm flex items-center gap-2 rounded-b-lg">
                         <FileText className="w-4 h-4 text-gray-600" strokeWidth={1.5} />
                         CSV
+                      </button>
+                      <button onClick={() => { setShowExportMenu(false); handleExport('xml'); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm flex items-center gap-2">
+                        <FileText className="w-4 h-4 text-gray-600" strokeWidth={1.5} />
+                        XML (Sitemap)
                       </button>
                     </div>,
                     document.body
@@ -1731,19 +2398,35 @@ function App() {
                 Groups
               </button>
               {/* AI organize button removed per request */}
-              <button
-                onClick={() => setShowHelp(true)}
-                className="px-3 py-2 text-sm font-medium bg-white border rounded-lg border-gray-300 hover:border-gray-400 transition-colors flex items-center gap-2"
-                title="Help"
-              >
-                <HelpCircle className="w-4 h-4" strokeWidth={1.5} />
-                Help
-              </button>
+              {!isViewerMode && (
+                <button
+                  onClick={() => setShowHelp(true)}
+                  className="px-3 py-2 text-sm font-medium bg-white border rounded-lg border-gray-300 hover:border-gray-400 transition-colors flex items-center gap-2"
+                  title="Help"
+                >
+                  <HelpCircle className="w-4 h-4" strokeWidth={1.5} />
+                  Help
+                </button>
+              )}
+              {isViewerMode && (
+                <button
+                  onClick={handleExitViewerMode}
+                  className="px-4 py-2 text-sm font-medium rounded-lg border transition-colors flex items-center gap-2 text-white"
+                  style={{
+                    backgroundColor: '#CB6015',
+                    borderColor: '#CB6015',
+                  }}
+                  title="Exit viewer mode"
+                >
+                  <X className="w-4 h-4" strokeWidth={1.5} />
+                  Exit viewer mode
+                </button>
+              )}
               
               {/* Auth Section */}
-              {isSupabaseConfigured() && (
+              {(isSupabaseConfigured() || isLocalhost()) && (
                 <div className="flex items-center gap-2 ml-2 pl-2 border-l border-gray-300">
-                  {user ? (
+                  {user || (isLocalhost() && !isSupabaseConfigured()) ? (
                     <div 
                       className="relative"
                       onMouseEnter={() => {
@@ -1799,24 +2482,40 @@ function App() {
                         >
                           <div className="px-4 py-3 border-b border-gray-200">
                             <p className="text-sm font-medium text-gray-900">Signed in as</p>
-                            <p className="text-sm text-gray-600 truncate mt-1">{user.email}</p>
+                            <p className="text-sm text-gray-600 truncate mt-1">
+                              {isLocalhost() && !isSupabaseConfigured() ? 'Local User' : (user?.email || '')}
+                            </p>
                           </div>
-                          <div className="py-1">
-                            <button
-                              onClick={handleSignOut}
-                              className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2 transition-colors"
-                            >
-                              <LogOut className="w-4 h-4" strokeWidth={1.5} />
-                              Sign Out
-                            </button>
-                          </div>
+                          {isSupabaseConfigured() && (
+                            <div className="py-1">
+                              <button
+                                onClick={handleSignOut}
+                                className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2 transition-colors"
+                              >
+                                <LogOut className="w-4 h-4" strokeWidth={1.5} />
+                                Sign Out
+                              </button>
+                            </div>
+                          )}
+                          {isLocalhost() && !isSupabaseConfigured() && (
+                            <div className="px-4 py-2 text-xs text-gray-500 border-t border-gray-200">
+                              Local development mode
+                            </div>
+                          )}
                         </div>,
                         document.body
                       )}
                     </div>
                   ) : (
                     <button
-                      onClick={() => setShowAuthModal(true)}
+                      onClick={() => {
+                        if (isLocalhost() && !isSupabaseConfigured()) {
+                          // On localhost without Supabase, just show a message
+                          alert('Authentication is not required in local development mode.');
+                          return;
+                        }
+                        setShowAuthModal(true);
+                      }}
                       className="px-4 py-2 text-sm font-medium bg-white border rounded-lg border-gray-300 hover:border-gray-400 text-gray-700 transition-colors flex items-center gap-2"
                       title="Sign In / Sign Up"
                     >
@@ -1832,13 +2531,13 @@ function App() {
       </header>
 
       <div className="flex-1 flex h-0 min-h-0">
-        <aside className={`${sidebarCollapsed ? 'w-16' : 'w-64 sm:w-72 lg:w-80'} border-r border-gray-200 bg-white flex flex-col overflow-y-auto h-full transition-all duration-300 z-50 relative`}>
+        <aside className={`${sidebarCollapsed ? 'w-16' : 'w-64 sm:w-72 lg:w-80'} border-r border-gray-200 flex flex-col overflow-y-auto h-full transition-all duration-300 z-50 relative`} style={{ backgroundColor: '#FFFEFB'}}>
           {/* Collapse/Expand Button */}
           <div className={`${sidebarCollapsed ? 'p-2' : 'p-6'} border-b border-gray-200`}>
             <div className={`flex ${sidebarCollapsed ? 'justify-center' : 'justify-between'} items-center`}>
               {sidebarCollapsed ? null : (
                 <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-900">
-                  Workspace
+                  {sidebarTab === 'sitemap' ? 'Sitemap' : 'Comments'}
                 </h2>
               )}
               <button
@@ -1851,17 +2550,48 @@ function App() {
             </div>
           </div>
 
-          {/* PRIMARY: Upload CSV Section */}
+          {/* Tab Navigation */}
           {!sidebarCollapsed && (
+            <div className="flex border-b border-gray-200">
+              <button
+                onClick={() => setSidebarTab('sitemap')}
+                className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${
+                  sidebarTab === 'sitemap'
+                    ? 'text-gray-900 border-b-2 border-gray-900 bg-white-100'
+                    : 'text-gray-500 hover:text-gray-700 hover:bg-white-100'
+                }`}
+              >
+                Sitemap
+              </button>
+              <button
+                onClick={() => setSidebarTab('comments')}
+                className={`flex-1 px-4 py-3 text-sm font-medium transition-colors relative ${
+                  sidebarTab === 'comments'
+                    ? 'text-gray-900 border-b-2 border-gray-900 bg-white-100'
+                    : 'text-gray-500 hover:text-gray-700 hover:bg-white-100'
+                }`}
+              >
+                Comments
+                {comments.filter(c => !c.resolved).length > 0 && (
+                  <span className="absolute top-2 right-4 px-1.5 py-0.5 bg-orange-500 text-white text-xs rounded-full">
+                    {comments.filter(c => !c.resolved).length}
+                  </span>
+                )}
+              </button>
+            </div>
+          )}
+
+          {/* PRIMARY: Upload CSV Section */}
+          {!sidebarCollapsed && sidebarTab === 'sitemap' && !isViewerMode && (
             <div className="p-6 border-b border-gray-200">
               <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-900 mb-3">
-                Upload CSV
+                Upload
               </h2>
               {/* CSV Upload Button - Primary CTA */}
               <div className="mb-2">
-                <label className="flex-1 px-4 py-3 bg-[#CB6015] border border-[#B54407] shadow-sm hover:shadow-md hover:bg-[#CC5500] text-white text-sm font-medium rounded-lg cursor-pointer flex items-center justify-center gap-2 transition-colors">
+                <label className="flex-1 px-4 py-3 bg-[#CB6015] border border-[#B54407] shadow-md hover:shadow-md hover:bg-[#CC5500] text-white text-sm font-medium rounded-lg cursor-pointer flex items-center justify-center gap-2 transition-colors">
                   <img width="18" height="18" src="https://img.icons8.com/fluency-systems-regular/50/upload--v1.png" alt="upload csv file" style={{filter: 'brightness(0) invert(1)'}}/>
-                  Upload CSV File
+                  Upload CSV file
                   <input
                     type="file"
                     accept=".csv"
@@ -1898,21 +2628,47 @@ function App() {
           )}
 
           {/* SECONDARY: Sitemap Switcher Section */}
-          {!sidebarCollapsed && (
+          {!sidebarCollapsed && sidebarTab === 'sitemap' && !isViewerMode && (
             <div className={`${sidebarCollapsed ? 'p-2' : 'p-6'} border-b border-gray-200`}>
               <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-600 mb-3">
                 Sitemaps
               </h2>
               
-              {/* Create New Sitemap Button */}
-              <button
-                type="button"
-                onClick={createNewSitemap}
-                className="w-full mb-3 px-3 py-2 bg-gray-100 shadow-sm border border-gray-200 hover:shadow-md hover:bg-gray-150 text-gray-700 text-sm font-medium rounded transition-colors flex items-center justify-center gap-2"
-              >
-                <img width="16" height="16" src="https://img.icons8.com/puffy/32/add.png" alt="add"/>
-                Create New Sitemap
-              </button>
+              {/* Tabs for My Sitemaps vs Shared with Me */}
+              <div className="flex gap-1 mb-3 bg-gray-100 rounded-lg p-1">
+                <button
+                  onClick={() => setSitemapViewTab('my')}
+                  className={`flex-1 px-3 py-1.5 text-xs font-medium rounded transition-colors ${
+                    sitemapViewTab === 'my'
+                      ? 'bg-white text-gray-900 shadow-sm'
+                      : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                >
+                  My Sitemaps
+                </button>
+                <button
+                  onClick={() => setSitemapViewTab('shared')}
+                  className={`flex-1 px-3 py-1.5 text-xs font-medium rounded transition-colors ${
+                    sitemapViewTab === 'shared'
+                      ? 'bg-white text-gray-900 shadow-sm'
+                      : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                >
+                  Shared with Me
+                </button>
+              </div>
+              
+              {/* Create New Sitemap Button - only show in "My Sitemaps" tab */}
+              {sitemapViewTab === 'my' && (
+                <button
+                  type="button"
+                  onClick={createNewSitemap}
+                  className="w-full mb-3 px-3 py-2 bg-white shadow-sm border border-gray-200 hover:shadow-md hover:bg-gray-150 text-gray-700 text-sm font-medium rounded transition-colors flex items-center justify-center gap-2"
+                >
+                  <img width="16" height="16" src="https://img.icons8.com/puffy/32/add.png" alt="add"/>
+                  Create New Sitemap
+                </button>
+              )}
               
               {/* Dropdown Button */}
               <div className="relative">
@@ -1922,183 +2678,339 @@ function App() {
                 >
                   <div className="flex items-center gap-2 flex-1 min-w-0">
                     <span className="font-medium truncate">
-                      {sitemaps.find(s => s.id === activeSitemapId)?.name || 'No Sitemap'}
+                      {(() => {
+                        const activeSitemap = sitemaps.find(s => s.id === activeSitemapId);
+                        // Check if active sitemap matches current tab filter
+                        if (activeSitemap) {
+                          const matchesTab = sitemapViewTab === 'my' 
+                            ? activeSitemap.isShared !== true 
+                            : activeSitemap.isShared === true;
+                          if (matchesTab) {
+                            return activeSitemap.name;
+                          }
+                        }
+                        // If active sitemap doesn't match tab, show first item from filtered list or "No Sitemap"
+                        const filteredSitemaps = sitemaps.filter(sitemap => {
+                          if (sitemapViewTab === 'my') {
+                            return sitemap.isShared !== true;
+                          } else {
+                            return sitemap.isShared === true;
+                          }
+                        });
+                        return filteredSitemaps[0]?.name || 'No Sitemap';
+                      })()}
                     </span>
                   </div>
                   <ChevronDown className={`w-4 h-4 text-gray-500 flex-shrink-0 transition-transform ${showSitemapDropdown ? 'rotate-180' : ''}`} />
                 </button>
                 
                 {/* Dropdown Menu */}
-                {showSitemapDropdown && sitemaps.length > 0 && (
-                  <>
+                {showSitemapDropdown && (() => {
+                  // Filter sitemaps based on active tab
+                  const filteredSitemaps = sitemaps.filter(sitemap => {
+                    if (sitemapViewTab === 'my') {
+                      // Show owned sitemaps (not shared)
+                      return sitemap.isShared !== true;
+                    } else {
+                      // Show shared sitemaps
+                      return sitemap.isShared === true;
+                    }
+                  });
+                  
+                  return filteredSitemaps.length > 0 ? (
+                    <>
+                      <div 
+                        className="fixed inset-0 z-10" 
+                        onClick={() => setShowSitemapDropdown(false)}
+                      />
+                      <div 
+                        className="absolute left-0 right-0 mt-1 bg-white border border-gray-300 rounded shadow-lg z-20 max-h-64 overflow-y-auto"
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {/* Sitemap List */}
+                        <div className="py-1">
+                          {filteredSitemaps.map(sitemap => {
+                            const isShared = sitemap.isShared === true;
+                            
+                            return (
+                              <div
+                                key={sitemap.id}
+                                className={`group px-2 py-2 hover:bg-gray-50 flex items-center justify-between ${
+                                  activeSitemapId === sitemap.id ? 'bg-blue-50' : ''
+                                } ${isShared ? 'border-l-2 border-orange-400' : ''}`}
+                              >
+                                <button
+                                  className="flex items-center gap-2 flex-1 min-w-0 text-left cursor-pointer"
+                                  onClick={() => {
+                                    switchToSitemap(sitemap.id);
+                                    setShowSitemapDropdown(false);
+                                  }}
+                                >
+                                  {/* Icon */}
+                                  <div className="flex-shrink-0">
+                                    {isShared ? (
+                                      <Lock className="w-4 h-4 text-gray-600" strokeWidth={1.5} />
+                                    ) : (
+                                      <FileText className="w-4 h-4 text-gray-600" strokeWidth={1.5} />
+                                    )}
+                                  </div>
+                                  <div className="flex-1 min-w-0">
+                                    <div className="flex items-center gap-2">
+                                      <div className="font-medium text-sm truncate">{sitemap.name}</div>
+                                      {/* Badge for shared sitemaps */}
+                                      {isShared && sitemap.sharePermission && (
+                                        <span
+                                          className={`px-1.5 py-0.5 text-xs font-medium rounded ${
+                                            sitemap.sharePermission === 'view'
+                                              ? 'bg-orange-100 text-orange-600'
+                                              : 'bg-blue-100 text-blue-600'
+                                          }`}
+                                        >
+                                          {sitemap.sharePermission === 'view' ? 'View' : 'Edit'}
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="text-xs text-gray-500">{sitemap.nodes.length} pages</div>
+                                  </div>
+                                </button>
+                                <div 
+                                  className="flex items-center gap-1 opacity-0 group-hover:opacity-100 pl-2"
+                                >
+                                  {/* Conditional actions based on ownership */}
+                                  {!isShared ? (
+                                    <>
+                                      {/* Owned sitemaps: Rename, Share, Delete */}
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setShowSitemapDropdown(false);
+                                          setEditingSitemapId(sitemap.id);
+                                          setEditingSitemapName(sitemap.name);
+                                        }}
+                                        className="p-1.5 hover:bg-gray-200 rounded transition-colors"
+                                        title="Rename"
+                                        type="button"
+                                      >
+                                        <Edit2 className="w-4 h-4 text-gray-600" strokeWidth={1.5} />
+                                      </button>
+                                      <button
+                                        onClick={async (e) => {
+                                          e.stopPropagation();
+                                          setShowSitemapDropdown(false);
+                                          // Load current share token and permission
+                                          const { token, permission } = await getShareTokenWithPermission(sitemap.id);
+                                          setShareToken(token);
+                                          setSharePermission(permission);
+                                          setShowShareModal(true);
+                                        }}
+                                        className="p-1.5 hover:bg-blue-100 rounded transition-colors"
+                                        title="Share"
+                                        type="button"
+                                      >
+                                        <Share2 className="w-4 h-4 text-blue-600" strokeWidth={1.5} />
+                                      </button>
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setShowSitemapDropdown(false);
+                                          setSitemapToDelete(sitemap.id);
+                                        }}
+                                        className="p-1.5 hover:bg-red-100 rounded transition-colors"
+                                        title="Delete"
+                                        type="button"
+                                      >
+                                        <Trash2 className="w-4 h-4 text-red-600" strokeWidth={1.5} />
+                                      </button>
+                                    </>
+                                  ) : (
+                                    <>
+                                      {/* Shared sitemaps: Duplicate only */}
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setShowSitemapDropdown(false);
+                                          duplicateSitemap(sitemap.id);
+                                        }}
+                                        className="p-1.5 hover:bg-blue-100 rounded transition-colors"
+                                        title="Duplicate to edit"
+                                        type="button"
+                                      >
+                                        <Copy className="w-4 h-4 text-blue-600" strokeWidth={1.5} />
+                                      </button>
+                                    </>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </>
+                  ) : (
                     <div 
-                      className="fixed inset-0 z-10" 
-                      onClick={() => setShowSitemapDropdown(false)}
-                    />
-                    <div 
-                      className="absolute left-0 right-0 mt-1 bg-white border border-gray-300 rounded shadow-lg z-20 max-h-64 overflow-y-auto"
+                      className="absolute left-0 right-0 mt-1 bg-white border border-gray-300 rounded shadow-lg z-20 p-4"
                       onMouseDown={(e) => e.stopPropagation()}
                       onClick={(e) => e.stopPropagation()}
                     >
-                      {/* Sitemap List */}
-                      <div className="py-1">
-                        {sitemaps.map(sitemap => (
-                          <div
-                            key={sitemap.id}
-                            className={`group px-2 py-2 hover:bg-gray-50 flex items-center justify-between ${
-                              activeSitemapId === sitemap.id ? 'bg-blue-50' : ''
-                            }`}
-                          >
-                            <button
-                              className="flex items-center gap-2 flex-1 min-w-0 text-left cursor-pointer"
-                              onClick={() => {
-                                switchToSitemap(sitemap.id);
-                                setShowSitemapDropdown(false);
-                              }}
-                            >
-                              <div className="flex-1 min-w-0">
-                                <div className="font-medium text-sm truncate">{sitemap.name}</div>
-                                <div className="text-xs text-gray-500">{sitemap.nodes.length} pages</div>
-                              </div>
-                            </button>
-                            <div 
-                              className="flex items-center gap-1 opacity-0 group-hover:opacity-100 pl-2"
-                            >
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setShowSitemapDropdown(false);
-                                  setEditingSitemapId(sitemap.id);
-                                  setEditingSitemapName(sitemap.name);
-                                }}
-                                className="p-1.5 hover:bg-gray-200 rounded transition-colors"
-                                title="Rename"
-                                type="button"
-                              >
-                                <Edit2 className="w-4 h-4 text-gray-600" strokeWidth={1.5} />
-                              </button>
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setShowSitemapDropdown(false);
-                                  setSitemapToDelete(sitemap.id);
-                                }}
-                                className="p-1.5 hover:bg-red-100 rounded transition-colors"
-                                title="Delete"
-                                type="button"
-                              >
-                                <Trash2 className="w-4 h-4 text-red-600" strokeWidth={1.5} />
-                              </button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
+                      <p className="text-sm text-gray-500 text-center">
+                        {sitemapViewTab === 'my' ? 'No owned sitemaps' : 'No shared sitemaps'}
+                      </p>
                     </div>
-                  </>
-                )}
+                  );
+                })()}
               </div>
             </div>
           )}
-          {/* URLs Section */}
-          {!sidebarCollapsed && (
-          <div className="p-6 border-b border-gray-200">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-900">
-                URLs ({urls.length})
-              </h2>
-              {urls.length > 0 && (
-                <button
-                  onClick={handleClearAll}
-                  className="text-sm text-gray-500 hover:text-gray-900 flex items-center gap-1"
-                >
-                  <Trash2 className="w-3.5 h-3.5" strokeWidth={1.5} />
-                  Clear
-                </button>
-              )}
-            </div>
-              <div className={`overflow-y-auto space-y-1 transition-all duration-300 ${showAllUrls ? 'max-h-48' : 'max-h-32'}`}>
-              {urls.length === 0 ? (
-                <p className="text-sm text-gray-400">No URLs added yet</p>
-              ) : (
-                urls.map((url, index) => (
-                  <div key={index} className="text-xs font-mono text-gray-600 truncate">
-                    {url}
+          {(() => {
+            // Check if active sitemap matches current tab filter
+            const activeSitemap = activeSitemapId ? sitemaps.find(s => s.id === activeSitemapId) : null;
+            const matchesCurrentTab = activeSitemap && (
+              (sitemapViewTab === 'my' && activeSitemap.isShared !== true) ||
+              (sitemapViewTab === 'shared' && activeSitemap.isShared === true)
+            );
+            const shouldShowStats = nodes.length > 0 && matchesCurrentTab && !sidebarCollapsed && sidebarTab === 'sitemap';
+            
+            return shouldShowStats ? (
+              <>
+                <div className="p-6 border-b border-gray-200">
+                  <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-900 mb-4">
+                    Statistics
+                  </h2>
+                  <div className="space-y-2">
+                    <div className="flex justify-between text-sm">
+                      <span className="text-gray-600">Total Pages</span>
+                      <span className="font-medium">{stats.total}</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-gray-600">Groups</span>
+                      <span className="font-medium">{stats.categories}</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-gray-600">Max Depth</span>
+                      <span className="font-medium">{stats.maxDepth}</span>
+                    </div>
                   </div>
-                ))
-              )}
+                </div>
+                <div className="p-6 border-b border-gray-200">
+                  <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-900 mb-3">Groups</h2>
+                  <div className="space-y-1">
+                    {Array.from(groupByCategory(nodes).keys()).map(group => (
+                      <div
+                        key={group}
+                        className="flex items-center justify-between text-sm px-2 py-1 rounded hover:bg-gray-50 border border-transparent hover:border-gray-200"
+                        title="Click to move current selection; drop selected nodes to move"
+                        onClick={() => {
+                          const ids: string[] = sitemapCanvasRef.current?.getSelectedNodeIds?.() || [];
+                          if (ids.length) handleMoveNodesToGroup(ids, group);
+                        }}
+                        onDragOver={(e) => e.preventDefault()}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          const ids: string[] = sitemapCanvasRef.current?.getSelectedNodeIds?.() || [];
+                          if (ids.length) handleMoveNodesToGroup(ids, group);
+                        }}
+                      >
+                        <span className="capitalize">{group}</span>
+                        <span className="text-gray-500">{nodes.filter(n => n.category === group).length}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </>
+            ) : null;
+          })()}
+
+          {/* Comments Panel */}
+          {!sidebarCollapsed && sidebarTab === 'comments' && activeSitemapId && (
+            <div className="flex-1 flex flex-col overflow-hidden min-h-0">
+              <CommentsPanel
+                comments={comments}
+                filter={commentFilter}
+                onFilterChange={setCommentFilter}
+                onCommentClick={() => {
+                  // Inline editing is handled by CommentBubble component
+                  // This callback is kept for compatibility but doesn't need to do anything
+                }}
+                onResolve={async (commentId, resolved) => {
+                  // Create snapshot before comment operation
+                  setUndoStack(stack => [...stack, makeSnapshot()]);
+                  setRedoStack([]);
+                  
+                  try {
+                    const isLocal = isLocalhost();
+                    if (isLocal && !isSupabaseConfigured()) {
+                      // Update in localStorage
+                      const storageKey = `comments_${activeSitemapId}`;
+                      const comments = JSON.parse(localStorage.getItem(storageKey) || '[]');
+                      const updated = comments.map((c: Comment) => 
+                        c.id === commentId ? { ...c, resolved, updatedAt: new Date().toISOString() } : c
+                      );
+                      localStorage.setItem(storageKey, JSON.stringify(updated));
+                      setComments(updated);
+                      return;
+                    }
+                    await resolveComment(commentId, resolved);
+                    // Real-time update will handle state update
+                  } catch (err) {
+                    console.error('Failed to resolve comment:', err);
+                  }
+                }}
+                onDelete={async (commentId) => {
+                  // Create snapshot before comment operation
+                  setUndoStack(stack => [...stack, makeSnapshot()]);
+                  setRedoStack([]);
+                  
+                  // 1. INSTANT UI update (optimistic) - same as nodes/text deletion
+                  setComments(prev => prev.filter(c => c.id !== commentId));
+                  
+                  // 2. Save in background (non-blocking)
+                  try {
+                    const isLocal = isLocalhost();
+                    if (isLocal && !isSupabaseConfigured()) {
+                      // localStorage - update storage to match UI
+                      const storageKey = `comments_${activeSitemapId}`;
+                      const comments = JSON.parse(localStorage.getItem(storageKey) || '[]');
+                      const filtered = comments.filter((c: Comment) => c.id !== commentId);
+                      localStorage.setItem(storageKey, JSON.stringify(filtered));
+                      return;
+                    }
+                    
+                    // Supabase - fire and forget (real-time will confirm)
+                    deleteComment(commentId, activeSitemapId || undefined).catch(err => {
+                      console.error('Failed to delete comment:', err);
+                      // Rollback: reload comments if delete failed
+                      if (activeSitemapId) {
+                        getComments(activeSitemapId).then(setComments).catch(console.error);
+                      }
+                    });
+                  } catch (err) {
+                    console.error('Failed to delete comment:', err);
+                    // Rollback on error
+                    if (activeSitemapId) {
+                      getComments(activeSitemapId).then(setComments).catch(console.error);
+                    }
+                  }
+                }}
+                currentUserId={isLocalhost() && !isSupabaseConfigured() ? 'localhost-user' : (user?.id)}
+                isOwner={shareMode === 'owner' || !isViewerMode}
+              />
             </div>
-              {urls.length > 6 && (
-                <button
-                  onClick={() => setShowAllUrls(!showAllUrls)}
-                  className="mt-2 flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 transition-colors"
-                >
-                  {showAllUrls ? (
-                    <>
-                      <ChevronUp className="w-3 h-3" strokeWidth={1.5} />
-                      Show Less
-                    </>
-                  ) : (
-                    <>
-                      <ChevronDown className="w-3 h-3" strokeWidth={1.5} />
-                      Show More
-                    </>
-                  )}
-                </button>
-              )}
-          </div>
           )}
 
-          {nodes.length > 0 && !sidebarCollapsed && (
-            <>
-              <div className="p-6 border-b border-gray-200">
-                <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-900 mb-4">
-                  Statistics
-                </h2>
-                <div className="space-y-2">
-                  <div className="flex justify-between text-sm">
-                    <span className="text-gray-600">Total Pages</span>
-                    <span className="font-medium">{stats.total}</span>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-gray-600">Groups</span>
-                    <span className="font-medium">{stats.categories}</span>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-gray-600">Max Depth</span>
-                    <span className="font-medium">{stats.maxDepth}</span>
-                  </div>
-                </div>
+          {/* Comments empty state */}
+          {!sidebarCollapsed && sidebarTab === 'comments' && !activeSitemapId && (
+            <div className="flex-1 flex items-center justify-center p-6">
+              <div className="text-center">
+                <MessageSquare className="w-12 h-12 text-gray-300 mx-auto mb-3" strokeWidth={1.5} />
+                <p className="text-sm text-gray-500">No sitemap selected</p>
+                <p className="text-xs text-gray-400 mt-1">Select or create a sitemap to view comments</p>
               </div>
-              <div className="p-6 border-b border-gray-200">
-                <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-900 mb-3">Groups</h2>
-                <div className="space-y-1">
-                  {Array.from(groupByCategory(nodes).keys()).map(group => (
-                    <div
-                      key={group}
-                      className="flex items-center justify-between text-sm px-2 py-1 rounded hover:bg-gray-50 border border-transparent hover:border-gray-200"
-                      title="Click to move current selection; drop selected nodes to move"
-                      onClick={() => {
-                        const ids: string[] = sitemapCanvasRef.current?.getSelectedNodeIds?.() || [];
-                        if (ids.length) handleMoveNodesToGroup(ids, group);
-                      }}
-                      onDragOver={(e) => e.preventDefault()}
-                      onDrop={(e) => {
-                        e.preventDefault();
-                        const ids: string[] = sitemapCanvasRef.current?.getSelectedNodeIds?.() || [];
-                        if (ids.length) handleMoveNodesToGroup(ids, group);
-                      }}
-                    >
-                      <span className="capitalize">{group}</span>
-                      <span className="text-gray-500">{nodes.filter(n => n.category === group).length}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </>
+            </div>
           )}
         </aside>
 
-        <main className="flex-1 bg-gray-50 flex flex-col h-full overflow-hidden">
+        <main className="flex-1 flex flex-col h-full overflow-hidden" style={{ backgroundColor: '#FFFEFB' }}>
           {nodes.length === 0 ? (
             <div className="flex-1 flex items-center justify-center">
               <div className="text-center max-w-lg">
@@ -2150,6 +3062,7 @@ function App() {
                     setFigures(prev.figures);
                     setFreeLines(prev.freeLines);
                     setSelectionGroups(prev.selectionGroups);
+                    setComments(prev.comments);
                   }
                 }}
                 onRedo={() => {
@@ -2164,6 +3077,7 @@ function App() {
                     setFigures(next.figures);
                     setFreeLines(next.freeLines);
                     setSelectionGroups(next.selectionGroups);
+                    setComments(next.comments);
                   }
                 }}
                 searchResults={searchResults}
@@ -2180,6 +3094,175 @@ function App() {
                 onCreateFreeLine={handleCreateFreeLine}
                 onUpdateFreeLine={handleUpdateFreeLine}
                 onDeleteFreeLine={handleDeleteFreeLine}
+                comments={comments}
+                onCommentClick={() => {
+                  // Inline editing is handled by CommentBubble component
+                  // This callback is kept for compatibility but doesn't need to do anything
+                }}
+                onCommentUpdate={async (commentId, text) => {
+                  // Create snapshot before comment operation
+                  setUndoStack(stack => [...stack, makeSnapshot()]);
+                  setRedoStack([]);
+                  
+                  try {
+                    const isLocal = isLocalhost();
+                    if (isLocal && !isSupabaseConfigured()) {
+                      // Update in localStorage
+                      const storageKey = `comments_${activeSitemapId}`;
+                      const comments = JSON.parse(localStorage.getItem(storageKey) || '[]');
+                      const updated = comments.map((c: Comment) => 
+                        c.id === commentId ? { ...c, text, updatedAt: new Date().toISOString() } : c
+                      );
+                      localStorage.setItem(storageKey, JSON.stringify(updated));
+                      setComments(updated);
+                      return;
+                    }
+                    await updateComment(commentId, text);
+                    // Real-time update will handle state update
+                  } catch (err) {
+                    console.error('Failed to update comment:', err);
+                  }
+                }}
+                onCommentMove={async (commentId, x, y) => {
+                  // Create snapshot before comment operation
+                  setUndoStack(stack => [...stack, makeSnapshot()]);
+                  setRedoStack([]);
+                  
+                  try {
+                    const isLocal = isLocalhost();
+                    if (isLocal && !isSupabaseConfigured()) {
+                      // Update in localStorage
+                      const storageKey = `comments_${activeSitemapId}`;
+                      const comments = JSON.parse(localStorage.getItem(storageKey) || '[]');
+                      const updated = comments.map((c: Comment) => 
+                        c.id === commentId ? { ...c, x, y, updatedAt: new Date().toISOString() } : c
+                      );
+                      localStorage.setItem(storageKey, JSON.stringify(updated));
+                      setComments(updated);
+                      return;
+                    }
+                    await updateCommentPosition(commentId, x, y);
+                    // Real-time update will handle state update
+                  } catch (err) {
+                    console.error('Failed to move comment:', err);
+                  }
+                }}
+                onCommentDelete={async (commentId) => {
+                  // Create snapshot before comment operation
+                  setUndoStack(stack => [...stack, makeSnapshot()]);
+                  setRedoStack([]);
+                  
+                  // 1. INSTANT UI update (optimistic) - same as nodes/text deletion
+                  setComments(prev => prev.filter(c => c.id !== commentId));
+                  
+                  // 2. Save in background (non-blocking)
+                  try {
+                    const isLocal = isLocalhost();
+                    if (isLocal && !isSupabaseConfigured()) {
+                      // localStorage - update storage to match UI
+                      const storageKey = `comments_${activeSitemapId}`;
+                      const comments = JSON.parse(localStorage.getItem(storageKey) || '[]');
+                      const filtered = comments.filter((c: Comment) => c.id !== commentId);
+                      localStorage.setItem(storageKey, JSON.stringify(filtered));
+                      return;
+                    }
+                    
+                    // Supabase - fire and forget (real-time will confirm)
+                    deleteComment(commentId, activeSitemapId || undefined).catch(err => {
+                      console.error('Failed to delete comment:', err);
+                      // Rollback: reload comments if delete failed
+                      if (activeSitemapId) {
+                        getComments(activeSitemapId).then(setComments).catch(console.error);
+                      }
+                    });
+                  } catch (err) {
+                    console.error('Failed to delete comment:', err);
+                    // Rollback on error
+                    if (activeSitemapId) {
+                      getComments(activeSitemapId).then(setComments).catch(console.error);
+                    }
+                  }
+                }}
+                onCommentPlace={async (x, y) => {
+                  // Allow comments on localhost without authentication
+                  const isLocal = isLocalhost();
+                  const allowWithoutAuth = isLocal && !isSupabaseConfigured();
+                  
+                  if (!activeSitemapId) {
+                    return;
+                  }
+                  
+                  if (!user && !allowWithoutAuth) {
+                    if (isSupabaseConfigured()) {
+                      setShowAuthModal(true);
+                    }
+                    return;
+                  }
+                  
+                  // Create snapshot before comment operation
+                  setUndoStack(stack => [...stack, makeSnapshot()]);
+                  setRedoStack([]);
+                  
+                  try {
+                    // For localhost without Supabase, create comment in localStorage
+                    if (allowWithoutAuth) {
+                      const commentId = crypto.randomUUID();
+                      const mockUser = {
+                        id: 'localhost-user',
+                        email: 'localhost@local.dev',
+                        user_metadata: { name: 'Local User' }
+                      };
+                      
+                      const newComment: Comment = {
+                        id: commentId,
+                        sitemapId: activeSitemapId,
+                        userId: mockUser.id,
+                        userName: mockUser.user_metadata.name || 'Local User',
+                        userEmail: mockUser.email,
+                        x,
+                        y,
+                        text: '',
+                        resolved: false,
+                        createdAt: new Date().toISOString(),
+                        updatedAt: new Date().toISOString(),
+                      };
+                      
+                      // Store in localStorage
+                      const storageKey = `comments_${activeSitemapId}`;
+                      const existingComments = JSON.parse(localStorage.getItem(storageKey) || '[]');
+                      existingComments.push(newComment);
+                      localStorage.setItem(storageKey, JSON.stringify(existingComments));
+                      
+                      // Optimistically add comment to state immediately
+                      setComments(prev => {
+                        if (prev.some(c => c.id === newComment.id)) {
+                          return prev;
+                        }
+                        return [newComment, ...prev];
+                      });
+                      return;
+                    }
+                    
+                    // Normal Supabase flow
+                    const newComment = await createComment(activeSitemapId, x, y, '');
+                    // Optimistically add comment to state immediately
+                    setComments(prev => {
+                      // Check if comment already exists (from real-time update)
+                      if (prev.some(c => c.id === newComment.id)) {
+                        return prev;
+                      }
+                      return [newComment, ...prev];
+                    });
+                  } catch (err) {
+                    console.error('Failed to create comment:', err);
+                    if (isSupabaseConfigured() && !user && !isLocal) {
+                      setShowAuthModal(true);
+                    }
+                  }
+                }}
+                isViewerMode={isViewerMode}
+                currentUserId={isLocalhost() && !isSupabaseConfigured() ? 'localhost-user' : (user?.id)}
+                isOwner={shareMode === 'owner' || !isViewerMode}
               />
             </div>
           )}
@@ -2243,7 +3326,7 @@ function App() {
                 <div>
                   <h3 className="text-sm font-medium text-gray-900 mb-3 uppercase tracking-wide">Navigation</h3>
                   <div className="space-y-2">
-                    <ShortcutItem keys="Ctrl/Cmd + Drag" label="Move connected nodes" info="Drag selected node with its parent and children" />
+                    <ShortcutItem keys="Ctrl/Cmd + Drag" label="Move nodes" info="Drag selected node with its parent and children" />
                     <ShortcutItem keys="Ctrl/Cmd + Wheel" label="Zoom" />
                     <ShortcutItem keys="Ctrl/Cmd + F" label="Search" />
                   </div>
@@ -2434,6 +3517,321 @@ function App() {
           </div>
         </div>
       )}
+
+      {/* Share Modal */}
+      {showShareModal && activeSitemapId && (
+        <div 
+          className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+          onClick={() => {
+            setShowShareModal(false);
+            setInviteEmails([]);
+            setInviteEmailInput('');
+            setInviteEmailError('');
+            setInviteSuccessMessage('');
+            setShowCopySuccess(false);
+          }}
+        >
+          <div 
+            className="bg-white rounded-lg p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="mb-6">
+              <h2 className="text-lg font-semibold text-gray-900 mb-2">Invite team members</h2>
+              <p className="text-gray-600 text-sm">Invite your team and collaborate on your project.</p>
+            </div>
+
+            {/* Permission selector */}
+            <div className="mb-4">
+              {(() => {
+                // Check if current sitemap is a view-only shared sitemap
+                const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
+                const isViewOnlyShared = currentSitemap?.isShared === true && currentSitemap?.sharePermission === 'view';
+                const isViewerSession = shareMode === 'viewer';
+                const editDisabled = isViewOnlyShared || isViewerSession;
+                const disableMessage = isViewerSession
+                  ? 'Only the sitemap owner can change access level.'
+                  : 'You can only share with view-only permission since this sitemap was shared with you as view-only';
+                return (
+                  <div className="inline-flex bg-gray-100 rounded-full p-0.5 gap-0.5">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        if (activeSitemapId && !isViewerSession && sharePermission !== 'view') {
+                          const previousPermission = sharePermission;
+                          // Mark that we're manually updating permission BEFORE any state updates
+                          permissionManuallyUpdatedRef.current = true;
+                          // Update permission immediately in UI
+                          setSharePermission('view');
+                          // Update permission in database/storage (keep same token)
+                          try {
+                            await updateSharePermission(activeSitemapId, 'view');
+                            // Keep the ref true to prevent useEffect from overwriting
+                          } catch (err) {
+                            console.error('Failed to update permission:', err);
+                            // Revert UI state on error
+                            setSharePermission(previousPermission);
+                            permissionManuallyUpdatedRef.current = false;
+                          }
+                        }
+                      }}
+                      disabled={isViewerSession}
+                      className={`px-3 py-1.5 text-xs font-medium rounded-full transform ${
+                        sharePermission === 'view'
+                          ? 'bg-[#8b3503] text-white shadow-sm scale-105'
+                          : 'text-gray-400 bg-transparent hover:text-gray-500 scale-100'
+                      } ${isViewerSession ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
+                      title={isViewerSession ? 'Access level can only be changed by the owner.' : undefined}
+                    >
+                      View only
+                    </button>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        if (activeSitemapId && !editDisabled && sharePermission !== 'edit') {
+                          const previousPermission = sharePermission;
+                          // Mark that we're manually updating permission BEFORE any state updates
+                          permissionManuallyUpdatedRef.current = true;
+                          // Update permission immediately in UI
+                          setSharePermission('edit');
+                          // Update permission in database/storage (keep same token)
+                          try {
+                            await updateSharePermission(activeSitemapId, 'edit');
+                            // Keep the ref true to prevent useEffect from overwriting
+                          } catch (err) {
+                            console.error('Failed to update permission:', err);
+                            // Revert UI state on error
+                            setSharePermission(previousPermission);
+                            permissionManuallyUpdatedRef.current = false;
+                          }
+                        }
+                      }}
+                      disabled={editDisabled}
+                      className={`px-3 py-1.5 text-xs font-medium rounded-full transform ${
+                        sharePermission === 'edit'
+                          ? 'bg-[#8b3503] text-white shadow-sm scale-105'
+                          : 'text-gray-400 bg-transparent hover:text-gray-500 scale-100'
+                      } ${editDisabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}
+                      title={editDisabled ? disableMessage : undefined}
+                    >
+                      Can edit
+                    </button>
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* Invite member section */}
+            <div className="mb-3">
+              <div className="flex flex-col gap-2">
+                {/* Email input with pills inside */}
+                <div className="flex gap-2 items-start">
+                  <div className="flex-1">
+                    <div
+                      className={`flex flex-wrap items-center gap-1 px-2 py-2 border rounded text-sm min-h-[42px] ${
+                        inviteEmailError ? 'border-red-500' : 'border-gray-300'
+                      }`}
+                      onClick={(e) => {
+                        // Only focus if clicking directly on the container (empty space), not on children
+                        if (e.target === e.currentTarget) {
+                          const input = document.getElementById('email-input') as HTMLInputElement;
+                          if (input) {
+                            input.focus();
+                          }
+                        }
+                      }}
+                    >
+                      {/* Email pills inside the input */}
+                      {inviteEmails.map((email, index) => (
+                        <div
+                          key={index}
+                          className="flex items-center gap-1 px-2 py-0.5 bg-gray-100 rounded-full text-sm"
+                        >
+                          <span className="text-gray-700 text-xs">{email}</span>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleRemoveEmail(email);
+                            }}
+                            className="text-gray-500 hover:text-gray-700 ml-0.5"
+                            title="Remove email"
+                          >
+                            <X className="w-3 h-3" strokeWidth={2} />
+                          </button>
+                        </div>
+                      ))}
+                      {/* Email input */}
+                      <input
+                        id="email-input"
+                        type="email"
+                        value={inviteEmailInput}
+                        onChange={(e) => {
+                          e.stopPropagation();
+                          setInviteEmailInput(e.target.value);
+                          // Clear error and success message when user starts typing
+                          if (inviteEmailError) {
+                            setInviteEmailError('');
+                          }
+                          if (inviteSuccessMessage) {
+                            setInviteSuccessMessage('');
+                          }
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                        placeholder={inviteEmails.length === 0 ? "Enter email address..." : ""}
+                        className="flex-1 min-w-[120px] outline-none bg-transparent text-sm"
+                        onKeyDown={(e) => {
+                          e.stopPropagation();
+                          if (e.key === 'Enter' && inviteEmailInput.trim()) {
+                            e.preventDefault();
+                            handleAddEmail(inviteEmailInput);
+                          } else if (e.key === ',' && inviteEmailInput.trim()) {
+                            e.preventDefault();
+                            handleAddEmail(inviteEmailInput);
+                          } else if (e.key === ' ' && inviteEmailInput.trim()) {
+                            e.preventDefault();
+                            handleAddEmail(inviteEmailInput);
+                          } else if (e.key === 'Backspace' && inviteEmailInput === '' && inviteEmails.length > 0) {
+                            // Remove last email when backspace is pressed on empty input
+                            e.preventDefault();
+                            handleRemoveEmail(inviteEmails[inviteEmails.length - 1]);
+                          }
+                        }}
+                      />
+                    </div>
+                    {inviteEmailError && (
+                      <p className="text-sm text-red-600 mt-1">{inviteEmailError}</p>
+                    )}
+                    {inviteSuccessMessage && (
+                      <p className="text-sm text-green-600 mt-1">{inviteSuccessMessage}</p>
+                    )}
+                  </div>
+                  <button
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      handleSendInvite(e);
+                    }}
+                    disabled={inviteEmails.length === 0}
+                    className="px-4 py-2 text-sm rounded-lg shadow-sm min-h-[42px] transition-colors disabled:cursor-not-allowed flex-shrink-0"
+                    style={{
+                      backgroundColor: inviteEmails.length === 0 ? '#f5f0e8' : '#CB6015',
+                      color: inviteEmails.length === 0 ? '#9ca3af' : '#ffffff',
+                    }}
+                    onMouseEnter={(e) => {
+                      if (inviteEmails.length > 0 && !e.currentTarget.disabled) {
+                        e.currentTarget.style.backgroundColor = '#CB6015';
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      if (inviteEmails.length > 0 && !e.currentTarget.disabled) {
+                        e.currentTarget.style.backgroundColor = '#CB6015';
+                      } else if (e.currentTarget.disabled) {
+                        e.currentTarget.style.backgroundColor = '#CB6015';
+                      }
+                    }}
+                  >
+                    Send Invite
+                  </button>
+                </div>
+              </div>
+            </div>
+            {/* Copy link button */}
+            <div className="mb-3 flex items-center gap-2">
+              <button
+                onClick={() => {
+                  if (shareToken) {
+                    const shareUrl = `${window.location.origin}${window.location.pathname}?share=${shareToken}`;
+                    navigator.clipboard.writeText(shareUrl);
+                    setShowCopySuccess(true);
+                    setTimeout(() => setShowCopySuccess(false), 2000);
+                  }
+                }}
+                className="px-3 py-1.5 border-2 border-gray-100 rounded-lg text-gray-700 hover:text-gray-900 hover:bg-gray-50 transition-all duration-200 flex items-center gap-2 text-sm"
+                disabled={!shareToken}
+                title="Copy share link"
+              >
+                <Link className="w-4 h-4" strokeWidth={1.5} />
+                <span>Copy link</span>
+              </button>
+              {showCopySuccess && (
+                <span className="px-2 text-sm text-green-600 transition-opacity duration-200 opacity-100">
+                  Copied!
+                </span>
+              )}
+            </div>
+            {/* Close button */}
+            <div className="flex justify-end">
+              <button
+                onClick={() => {
+                  setShowShareModal(false);
+                  setInviteEmails([]);
+                  setInviteEmailInput('');
+                  setInviteEmailError('');
+                  setInviteSuccessMessage('');
+                  setShowCopySuccess(false);
+                }}
+                className="px-6 py-2 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-800 transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Comment Thread Modal removed - inline editing is now handled by CommentBubble component */}
+
+
+      {/* XML Export Warning Modal */}
+      {showXmlExportWarning && (() => {
+        const nodesWithoutUrls = nodes.filter(n => !n.url || !n.url.trim());
+        const count = nodesWithoutUrls.length;
+        return (
+          <div 
+            className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+            onClick={() => setShowXmlExportWarning(false)}
+          >
+            <div 
+              className="bg-white rounded-lg p-6 max-w-md w-full"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 className="text-lg font-semibold mb-4">Missing URLs Detected</h3>
+              {nodesWithoutUrls.length > 0 && (
+                <div className="mb-4 max-h-48 overflow-y-auto border border-gray-200 rounded p-3 bg-gray-50">
+                  <p className="text-sm font-medium text-gray-700 mb-2">
+                    {count === 1 ? '1 node is missing URL' : `${count} nodes are missing URLs`}:
+                  </p>
+                  <ul className="space-y-1">
+                    {nodesWithoutUrls.map(node => (
+                      <li key={node.id} className="text-sm text-gray-600">
+                        • {node.title || 'Untitled Node'}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              <p className="text-xs text-gray-500 mb-4">
+                Only nodes with valid URLs will be included in the exported sitemap.
+              </p>
+              <div className="flex gap-2 justify-end">
+                <button
+                  onClick={() => setShowXmlExportWarning(false)}
+                  className="px-4 py-2 border border-gray-800 shadow-sm rounded-lg hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleConfirmXmlExport}
+                  className="px-4 py-2 bg-black text-white text-sm font-medium rounded-lg hover:bg-gray-800 transition-colors"
+                >
+                  Confirm Export
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
       </div>
     </>
   );

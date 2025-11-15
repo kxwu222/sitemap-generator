@@ -20,6 +20,7 @@ interface SelectionToolbarProps {
   onGroupSelection?: () => void;
   onUngroupSelection?: () => void;
   isGrouped?: boolean;
+  isViewerMode?: boolean;
 }
 
 export function SelectionToolbar({
@@ -40,6 +41,7 @@ export function SelectionToolbar({
   onGroupSelection,
   onUngroupSelection,
   isGrouped,
+  isViewerMode = false,
 }: SelectionToolbarProps) {
   const isSingleSelection = selectedNodes.length === 1;
   const isMultiSelection = selectedNodes.length > 1;
@@ -55,6 +57,11 @@ export function SelectionToolbar({
       onDelete(nodeIds);
     }
   };
+
+  // In viewer mode, hide the selection toolbar completely
+  if (isViewerMode) {
+    return null;
+  }
 
   return (
     <div

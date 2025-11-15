@@ -3,6 +3,8 @@ import { PageNode } from '../utils/urlAnalyzer';
 import { LinkStyle, LineDash, LinkPath, ArrowType } from '../types/linkStyle';
 import { Figure, FreeLine } from '../types/drawables';
 import { SelectionGroup } from '../types/sitemap';
+import { Comment } from '../types/comments';
+import { CommentBubble } from './CommentBubble';
 import { HoverToolbar } from './HoverToolbar';
 import { SelectionToolbar } from './SelectionToolbar';
 import { LinkEditorPopover } from './LinkEditorPopover';
@@ -47,6 +49,16 @@ interface SitemapCanvasProps {
   onCreateFreeLine?: (line: FreeLine) => void;
   onUpdateFreeLine?: (id: string, updates: Partial<FreeLine>) => void;
   onDeleteFreeLine?: (id: string) => void;
+  // Comment-related props
+  comments?: Comment[];
+  onCommentClick?: (comment: Comment) => void;
+  onCommentPlace?: (x: number, y: number) => void;
+  onCommentUpdate?: (commentId: string, text: string) => void;
+  onCommentMove?: (commentId: string, x: number, y: number) => void;
+  onCommentDelete?: (commentId: string) => void;
+  isViewerMode?: boolean;
+  currentUserId?: string;
+  isOwner?: boolean;
 }
 
 
@@ -121,9 +133,18 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
     onCreateFigure,
     onUpdateFigure,
     onDeleteFigure,
-    
+    onCreateFreeLine,
     onUpdateFreeLine,
     onDeleteFreeLine,
+    comments = [],
+    onCommentClick,
+    onCommentPlace,
+    onCommentUpdate,
+    onCommentMove,
+    onCommentDelete,
+    isViewerMode = false,
+    currentUserId,
+    isOwner = false,
   } = props;
 
   
@@ -306,6 +327,29 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
   // Track initial positions of selected text figures when node drag starts (for live move)
   const [selectedFiguresStartPositions, setSelectedFiguresStartPositions] = useState<Record<string, { x: number; y: number }>>({});
   const [didLiveFigureDrag, setDidLiveFigureDrag] = useState(false);
+  const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
+  const previousCommentsRef = useRef<Comment[]>([]);
+  
+  // Auto-enter edit mode for newly created comments (empty text)
+  useEffect(() => {
+    if (!comments || comments.length === 0) {
+      previousCommentsRef.current = [];
+      return;
+    }
+    
+    // Find newly created comments (empty text that weren't in previous comments)
+    const previousCommentIds = new Set(previousCommentsRef.current.map(c => c.id));
+    const newEmptyComments = comments.filter(
+      c => !c.text?.trim() && !previousCommentIds.has(c.id)
+    );
+    
+    // If there's a new empty comment and no comment is currently being edited, enter edit mode
+    if (newEmptyComments.length > 0 && !editingCommentId) {
+      setEditingCommentId(newEmptyComments[0].id);
+    }
+    
+    previousCommentsRef.current = comments;
+  }, [comments, editingCommentId]);
   
   // Helper function to get connection anchor position (needs props and state, so defined after destructuring and state)
   const getConnectionAnchor = (sourceId: string, targetId: string) => {
@@ -330,7 +374,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
   };
   
   // Unified draw tool state
-  const [activeTool, setActiveTool] = useState<'select' | 'text' | 'draw'>('select');
+  const [activeTool, setActiveTool] = useState<'select' | 'text' | 'draw' | 'comment'>('select');
   const [drawKind, setDrawKind] = useState<'rect' | 'square' | 'ellipse' | 'circle' | 'line' | null>(null);
   const [newLinePath, setNewLinePath] = useState<'straight' | 'elbow'>('straight');
   const [isDrafting, setIsDrafting] = useState(false);
@@ -864,6 +908,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
     drawFreeLines(ctx, freeLines || []);
     drawFigures(ctx, figures || []);
     drawNodes(ctx, effectiveNodes, hoveredNode);
+    // Comments are now rendered as DOM elements (CommentBubble components)
     // Faint selection bounding box for mixed selections (nodes + texts)
     // Only show when not marquee-selecting and not editing text
     const selectionCount = selectedIds.size + selectedFigureIds.size;
@@ -1571,6 +1616,8 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
     ctx.setLineDash([]);
   };
 
+  // Comments are now rendered as DOM elements (CommentBubble components) instead of canvas drawing
+
 
   const getLinks = () => {
     const treeLinks = nodes.filter(n => n.parent).map(n => ({ sourceId: n.parent!, targetId: n.id }));
@@ -1836,6 +1883,8 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
              canvasY >= nodeTop && canvasY <= nodeBottom;
     }) || null;
   };
+
+  // Comment click detection is now handled by DOM elements (CommentBubble components)
 
   // history is managed by App; no-op retained for compatibility
   // removed unused saveToHistory
@@ -2176,6 +2225,52 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
       setHighlightedLink(null);
     }
     
+    // PRIORITY: When comment tool is active, place new comment
+    // (Comment clicks are handled by CommentBubble DOM elements)
+    if (activeTool === 'comment' && onCommentPlace) {
+      e.preventDefault();
+      e.stopPropagation();
+      const canvas = canvasRef.current;
+      if (canvas) {
+        const rect = canvas.getBoundingClientRect();
+        const cx = (e.clientX - rect.left - transform.x) / transform.scale;
+        const cy = (e.clientY - rect.top - transform.y) / transform.scale;
+        
+        // If a comment is currently being edited, finish editing it (collapse) instead of creating new one
+        if (editingCommentId && onCommentUpdate) {
+          const editingComment = comments?.find(c => c.id === editingCommentId);
+          if (editingComment) {
+            // Finish editing: update with current text and collapse
+            onCommentUpdate(editingCommentId, editingComment.text || '');
+            setEditingCommentId(null);
+            return;
+          }
+        }
+        
+        // No comment being edited → create new comment
+        onCommentPlace(cx, cy);
+        return;
+      }
+    }
+    
+    // Detect node early for use in other checks
+    const node = getNodeAtPosition(e.clientX, e.clientY);
+    
+    // Check for comment placement (in viewer mode)
+    // (Comment clicks are handled by CommentBubble DOM elements)
+    if (isViewerMode && activeTool === 'comment' && onCommentPlace && !node) {
+      // In viewer mode, clicking on empty canvas places a comment (only when comment tool is active)
+      const canvas = canvasRef.current;
+      if (canvas) {
+        const rect = canvas.getBoundingClientRect();
+        const cx = (e.clientX - rect.left - transform.x) / transform.scale;
+        const cy = (e.clientY - rect.top - transform.y) / transform.scale;
+        // Place new comment
+        onCommentPlace(cx, cy);
+        return;
+      }
+    }
+
     // Detect link first; clicking a connection opens the connection style popover and stops further handling
     const tolPxMd = 14; const tolCanvasMd = tolPxMd / transform.scale;
     if (!isInsideNodeBox(e.clientX, e.clientY)) {
@@ -2188,8 +2283,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
       }
     }
 
-    // Detect node first and prefer node interactions over links
-    const node = getNodeAtPosition(e.clientX, e.clientY);
+    // Node already detected above, use it here
     // If clicking on a node/figure that is in a selection group, auto-select the whole group for easier dragging
     if (node) {
       const group = selectionGroups.find(g => g.memberNodeIds.includes(node.id));
@@ -3014,7 +3108,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
         Math.pow(e.clientX - dragStart.x, 2) + Math.pow(e.clientY - dragStart.y, 2)
       );
       
-      if (dragDelta && dragSelectionIds && onNodesUpdate) {
+      if (dragDelta && dragSelectionIds) {
         const updatedNodes = nodes.map(n => {
           if (!dragSelectionIds.includes(n.id)) return n;
           const start = dragStartPositions[n.id];
@@ -3023,7 +3117,12 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
           const ny = start.y + dragDelta.dy;
           return { ...n, x: nx, y: ny, fx: nx, fy: ny };
         });
-        onNodesUpdate(updatedNodes);
+        // In viewer mode, use preview for visual-only updates (no persistence)
+        if (isViewerMode && onNodesPreview) {
+          onNodesPreview(updatedNodes);
+        } else if (!isViewerMode && onNodesUpdate) {
+          onNodesUpdate(updatedNodes);
+        }
         // Move selected text figures by the same delta only if we didn't live move already
         if (!didLiveFigureDrag && selectedFigureIds.size > 0 && onUpdateFigure) {
           const dx = dragDelta.dx;
@@ -3106,6 +3205,47 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
       // Handle click when no node was being dragged and no canvas panning
     const dragDistance = Math.hypot(e.clientX - dragStart.x, e.clientY - dragStart.y);
     if (dragDistance < dragThreshold) {
+      // PRIORITY: When comment tool is active, handle comment placement logic
+      // Flow: 1st click → create & edit, 2nd click → finish editing (collapse), 3rd click → create new
+      if (activeTool === 'comment' && onCommentPlace) {
+        const canvas = canvasRef.current;
+        if (canvas) {
+          const rect = canvas.getBoundingClientRect();
+          const cx = (e.clientX - rect.left - transform.x) / transform.scale;
+          const cy = (e.clientY - rect.top - transform.y) / transform.scale;
+          
+          // If a comment is currently being edited, finish editing it (collapse) instead of creating new one
+          if (editingCommentId && onCommentUpdate) {
+            const editingComment = comments?.find(c => c.id === editingCommentId);
+            if (editingComment) {
+              // Finish editing: update with current text and collapse
+              onCommentUpdate(editingCommentId, editingComment.text || '');
+              setEditingCommentId(null);
+              return;
+            }
+          }
+          
+          // No comment being edited → create new comment
+          onCommentPlace(cx, cy);
+          return;
+        }
+      }
+
+      // In viewer mode, allow comment placement on empty canvas (only when comment tool is active)
+      if (isViewerMode && activeTool === 'comment' && onCommentPlace) {
+        const clickedNode = getNodeAtPosition(e.clientX, e.clientY);
+        if (!clickedNode) {
+          const canvas = canvasRef.current;
+          if (canvas) {
+            const rect = canvas.getBoundingClientRect();
+            const cx = (e.clientX - rect.left - transform.x) / transform.scale;
+            const cy = (e.clientY - rect.top - transform.y) / transform.scale;
+            onCommentPlace(cx, cy);
+            return;
+          }
+        }
+      }
+
       // 1) Try link first, but ignore clicks inside node boxes to avoid edge misclicks
       const tolPxUp = 14; const tolCanvasUp = tolPxUp / transform.scale;
       if (!isInsideNodeBox(e.clientX, e.clientY)) {
@@ -3180,8 +3320,8 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
         }
       }
 
-      // 2) Fallback to node click
-      const clickedNode = getNodeAtPosition(e.clientX, e.clientY);
+      // 2) Fallback to node click (only if not in comment tool mode)
+      const clickedNode = activeTool !== 'comment' ? getNodeAtPosition(e.clientX, e.clientY) : null;
       if (clickedNode && onNodeClick) {
         onNodeClick(clickedNode);
         const newSelectedIds = new Set([clickedNode.id]);
@@ -3554,28 +3694,30 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
   return (
     <div
       ref={containerRef}
-      className={`relative w-full h-full bg-white select-none outline-none focus:outline-none focus-visible:outline-none focus-within:outline-none`}
+      className={`relative w-full h-full select-none outline-none focus:outline-none focus-visible:outline-none focus-within:outline-none`}
       style={{
         cursor:
           activeTool === 'text' ? 'text' :
           (activeTool === 'draw' ? 'crosshair' :
-          (isSpacePressed ? 'grab' : ((draggedNode || isDragging) ? 'grabbing' : (marqueeSelection?.isActive ? 'crosshair' : 'default')))),
+          (activeTool === 'comment' ? 'crosshair' :
+          (isSpacePressed ? 'grab' : ((draggedNode || isDragging) ? 'grabbing' : (marqueeSelection?.isActive ? 'crosshair' : 'default'))))),
         WebkitTapHighlightColor: 'transparent'
       }}
     >
       {/* {showLineHint && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[260] px-3 py-1.5 rounded bg-gray-900 text-white text-xs shadow-lg">
-          Drag from one node to another. Lines aren’t saved unless both ends snap to nodes.
+          Drag from one node to another. Lines aren't saved unless both ends snap to nodes.
         </div>
       )} */}
       <canvas
         ref={canvasRef}
-        style={{
-          cursor:
-            activeTool === 'text' ? 'text' :
-            (activeTool === 'draw' ? 'crosshair' :
-            (isSpacePressed ? 'grab' : ((draggedNode || isDragging) ? 'grabbing' : (marqueeSelection?.isActive ? 'crosshair' : 'default'))))
-        }}
+          style={{
+            cursor:
+              activeTool === 'text' ? 'text' :
+              (activeTool === 'draw' ? 'crosshair' :
+              (activeTool === 'comment' ? 'crosshair' :
+              (isSpacePressed ? 'grab' : ((draggedNode || isDragging) ? 'grabbing' : (marqueeSelection?.isActive ? 'crosshair' : 'default')))))
+          }}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
@@ -3748,6 +3890,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
       
       {/* Center Toolbar */}
       <div className="fixed bottom-8 left-1/2 transform -translate-x-1/2 flex items-center gap-1 bg-white border border-gray-300 rounded-lg shadow-lg px-2 py-1 z-50">
+        {/* Select - always visible, even in viewer mode */}
         <button
           onClick={() => { setActiveTool('select'); setDrawKind(null); }}
           className={`w-8 h-8 flex items-center justify-center rounded transition-colors group relative ${
@@ -3764,130 +3907,168 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
           </span>
         </button>
         
-        <button
-          onClick={() => {
-            if (selectedIds.size === 1 && onAddChild) {
-              const id = Array.from(selectedIds)[0];
-              onAddChild(id);
-            } else if (onAddNode) {
-              onAddNode();
-            }
-          }}
-          className="w-8 h-8 flex items-center justify-center rounded transition-colors group relative bg-gray-100 hover:bg-gray-200 text-gray-600"
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M12 5v14M5 12h14" />
-          </svg>
-          <span className="absolute -top-10 left-1/2 -translate-x-1/2 px-2 py-1 bg-gray-900 text-white text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
-            Add Node (A)
-          </span>
-        </button>
+        {!isViewerMode && (
+          <>
+            <button
+              onClick={() => {
+                if (selectedIds.size === 1 && onAddChild) {
+                  const id = Array.from(selectedIds)[0];
+                  onAddChild(id);
+                } else if (onAddNode) {
+                  onAddNode();
+                }
+              }}
+              className="w-8 h-8 flex items-center justify-center rounded transition-colors group relative bg-gray-100 hover:bg-gray-200 text-gray-600"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+              <span className="absolute -top-10 left-1/2 -translate-x-1/2 px-2 py-1 bg-gray-900 text-white text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+                Add Node (A)
+              </span>
+            </button>
+            
+            {/* Text (T) */}
+            <button
+              onClick={() => {
+                if (!onCreateFigure || !canvasRef.current) return;
+                const canvas = canvasRef.current;
+                const rect = canvas.getBoundingClientRect();
+                const centerX = rect.width / 2;
+                const centerY = rect.height / 2;
+
+                // Screen center to canvas coords
+                const cx = (centerX - transform.x) / transform.scale;
+                const cy = (centerY - transform.y) / transform.scale;
+
+                const figure: Figure = {
+                  id: `fig-${Date.now()}`,
+                  type: 'text',
+                  x: cx,
+                  y: cy,
+                  text: 'Text',
+                  textColor: '#000000',
+                  fontSize: 18, // Initialize with default font size
+                };
+                onCreateFigure(figure);
+
+                // Open editor at screen center
+                setEditingTextFigureId(figure.id);
+            setTextEditorPosition({ x: rect.left + centerX, y: rect.top + centerY });
+                setTextEditorText('Text');
+              }}
+              className={"w-8 h-8 flex items-center justify-center rounded transition-colors group relative bg-gray-100 hover:bg-gray-200 text-gray-600"}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M4 7h16M12 7v10"/>
+              </svg>
+              <span className="absolute -top-10 left-1/2 -translate-x-1/2 px-2 py-1 bg-gray-900 text-white text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+                Text
+              </span>
+            </button>
+
+            {/* Shapes (S) - hidden per request
+            <div className="relative">
+              ... Shapes UI commented out ...
+            </div>
+            */}
+
+            {/* Line (L) */}
+            <div className="relative">
+              <button
+                onClick={() => {
+              // Default to straight; immediately enter draw mode
+              setNewLinePath('straight');
+              setActiveTool('draw');
+              setDrawKind('line');
+                  setIsSpacePressed(false);
+                  setIsDragging(false);
+                  setDraggedNode(null);
+                  backgroundDownRef.current = null;
+                  setTimeout(() => { try { canvasRef.current?.focus(); } catch {} }, 0);
+                }}
+                aria-pressed={activeTool === 'draw' && drawKind === 'line'}
+                className={`w-8 h-8 flex items-center justify-center rounded transition-colors group relative ${
+                  activeTool === 'draw' && drawKind === 'line'
+                    ? 'bg-orange-100 text-orange-600 border border-orange-200 ring-orange-400 ring-offset-1'
+                    : 'bg-gray-100 hover:bg-gray-200 text-gray-600 focus-visible: focus-visible:ring-blue-500'
+                }`}
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M4 18L18 4"/>
+                </svg>
+                <span className="absolute -top-10 left-1/2 -translate-x-1/2 px-2 py-1 bg-gray-900 text-white text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+                  Connection line (L) - drag from node to node
+                </span>
+              </button>
+              {/* Line popover removed - clicking Line switches to draw immediately */}
+            </div>
+          </>
+        )}
+
+        {/* Comment - always visible, even in viewer mode */}
+        {onCommentPlace && (
+          <>
+            <div className="w-px h-6 bg-gray-300 mx-1"></div>
+            <button
+              onClick={() => {
+                setActiveTool(activeTool === 'comment' ? 'select' : 'comment');
+                setDrawKind(null);
+                setIsSpacePressed(false);
+                setIsDragging(false);
+                setDraggedNode(null);
+                backgroundDownRef.current = null;
+              }}
+              className={`w-8 h-8 flex items-center justify-center rounded transition-colors group relative ${
+                activeTool === 'comment'
+                  ? 'bg-orange-100 text-orange-600 border border-orange-200 shadow-sm'
+                  : 'bg-gray-100 hover:bg-gray-200 text-gray-600 border border-transparent'
+              }`}
+              title="Add comment - Click on canvas to place"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+              </svg>
+              <span className="absolute -top-10 left-1/2 -translate-x-1/2 px-2 py-1 bg-gray-900 text-white text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50">
+                Comment - Click on canvas to add
+              </span>
+            </button>
+          </>
+        )}
         
-        {/* Text (T) */}
-        <button
-          onClick={() => {
-            if (!onCreateFigure || !canvasRef.current) return;
-            const canvas = canvasRef.current;
-            const rect = canvas.getBoundingClientRect();
-            const centerX = rect.width / 2;
-            const centerY = rect.height / 2;
-
-            // Screen center to canvas coords
-            const cx = (centerX - transform.x) / transform.scale;
-            const cy = (centerY - transform.y) / transform.scale;
-
-            const figure: Figure = {
-              id: `fig-${Date.now()}`,
-              type: 'text',
-              x: cx,
-              y: cy,
-              text: 'Text',
-              textColor: '#000000',
-              fontSize: 18, // Initialize with default font size
-            };
-            onCreateFigure(figure);
-
-            // Open editor at screen center
-            setEditingTextFigureId(figure.id);
-        setTextEditorPosition({ x: rect.left + centerX, y: rect.top + centerY });
-            setTextEditorText('Text');
-          }}
-          className={"w-8 h-8 flex items-center justify-center rounded transition-colors group relative bg-gray-100 hover:bg-gray-200 text-gray-600"}
-        >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M4 7h16M12 7v10"/>
-          </svg>
-          <span className="absolute -top-10 left-1/2 -translate-x-1/2 px-2 py-1 bg-gray-900 text-white text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
-            Text
-          </span>
-        </button>
-
-        {/* Shapes (S) - hidden per request
-        <div className="relative">
-          ... Shapes UI commented out ...
-        </div>
-        */}
-
-        {/* Line (L) */}
-        <div className="relative">
-          <button
-            onClick={() => {
-          // Default to straight; immediately enter draw mode
-          setNewLinePath('straight');
-          setActiveTool('draw');
-          setDrawKind('line');
-              setIsSpacePressed(false);
-              setIsDragging(false);
-              setDraggedNode(null);
-              backgroundDownRef.current = null;
-              setTimeout(() => { try { canvasRef.current?.focus(); } catch {} }, 0);
-            }}
-            aria-pressed={activeTool === 'draw' && drawKind === 'line'}
-            className={`w-8 h-8 flex items-center justify-center rounded transition-colors group relative ${
-              activeTool === 'draw' && drawKind === 'line'
-                ? 'bg-orange-100 text-orange-600 border border-orange-200 ring-orange-400 ring-offset-1'
-                : 'bg-gray-100 hover:bg-gray-200 text-gray-600 focus-visible: focus-visible:ring-blue-500'
-            }`}
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M4 18L18 4"/>
-            </svg>
-            <span className="absolute -top-10 left-1/2 -translate-x-1/2 px-2 py-1 bg-gray-900 text-white text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
-              Connection line (L) - drag from node to node
-            </span>
-          </button>
-          {/* Line popover removed - clicking Line switches to draw immediately */}
-        </div>
-        
-        <div className="w-px h-6 bg-gray-300 mx-1"></div>
-        
-        <button
-          onClick={() => { if (onUndo) onUndo(); }}
-          disabled={!onUndo}
-          className="w-8 h-8 flex items-center justify-center bg-gray-100 hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed rounded transition-colors group relative"
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M3 7v6h6"/>
-            <path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/>
-          </svg>
-          <span className="absolute -top-10 left-1/2 -translate-x-1/2 px-2 py-1 bg-gray-900 text-white text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
-            Undo (Ctrl+Z)
-          </span>
-        </button>
-        
-        <button
-          onClick={() => { if (onRedo) onRedo(); }}
-          disabled={!onRedo}
-          className="w-8 h-8 flex items-center justify-center bg-gray-100 hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed rounded transition-colors group relative"
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M21 7v6h-6"/>
-            <path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3L21 13"/>
-          </svg>
-          <span className="absolute -top-10 left-1/2 -translate-x-1/2 px-2 py-1 bg-gray-900 text-white text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
-            Redo (Ctrl+Y)
-          </span>
-        </button>
+        {!isViewerMode && (
+          <>
+            <div className="w-px h-6 bg-gray-300 mx-1"></div>
+            
+            <button
+              onClick={() => { if (onUndo) onUndo(); }}
+              disabled={!onUndo}
+              className="w-8 h-8 flex items-center justify-center bg-gray-100 hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed rounded transition-colors group relative"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 7v6h6"/>
+                <path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/>
+              </svg>
+              <span className="absolute -top-10 left-1/2 -translate-x-1/2 px-2 py-1 bg-gray-900 text-white text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+                Undo (Ctrl+Z)
+              </span>
+            </button>
+            
+            <button
+              onClick={() => { if (onRedo) onRedo(); }}
+              disabled={!onRedo}
+              className="w-8 h-8 flex items-center justify-center bg-gray-100 hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed rounded transition-colors group relative"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 7v6h-6"/>
+                <path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3L21 13"/>
+              </svg>
+              <span className="absolute -top-10 left-1/2 -translate-x-1/2 px-2 py-1 bg-gray-900 text-white text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+                Redo (Ctrl+Y)
+              </span>
+            </button>
+          </>
+        )}
       </div>
       <div className="fixed bottom-4 right-4 flex items-center gap-2 bg-white border border-gray-300 rounded-lg shadow-lg px-3 py-2 z-50">
         <button
@@ -3945,8 +4126,8 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
         {/* Fit removed per request; use dropdown presets instead */}
       </div>
 
-      {/* Hover Toolbar - appears when hovering over a node */}
-      {hoverToolbarNode && selectedIds.size === 0 && !draggedNode && (
+      {/* Hover Toolbar - appears when hovering over a node (hidden in viewer mode) */}
+      {!isViewerMode && hoverToolbarNode && selectedIds.size === 0 && !draggedNode && (
         <HoverToolbar
           node={hoverToolbarNode}
           position={hoverToolbarPosition}
@@ -4001,6 +4182,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
             onGroupSelection={() => onCreateSelectionGroup?.(Array.from(selectedIds), Array.from(selectedFigureIds))}
             onUngroupSelection={() => onUngroupSelection?.(Array.from(selectedIds), Array.from(selectedFigureIds))}
             isGrouped={isGrouped}
+            isViewerMode={isViewerMode}
             onDelete={(nodeIds) => {
               if (!onNodesUpdate) return;
               const idsToDelete = new Set(nodeIds);
@@ -4499,6 +4681,51 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
           </div>
         );
       })()}
+
+      {/* Comment Bubbles - rendered as DOM overlays */}
+      {comments && comments.length > 0 && (
+        <div className="absolute inset-0 z-30" style={{ pointerEvents: 'none' }}>
+          {comments.map(comment => (
+            <CommentBubble
+              key={comment.id}
+              comment={comment}
+              transform={transform}
+              isEditing={editingCommentId === comment.id}
+              onStartEdit={() => {
+                setEditingCommentId(comment.id);
+                if (onCommentClick) {
+                  onCommentClick(comment);
+                }
+              }}
+              onFinishEdit={(text) => {
+                if (onCommentUpdate) {
+                  onCommentUpdate(comment.id, text);
+                }
+                setEditingCommentId(null);
+              }}
+              onMove={(x, y) => {
+                if (onCommentMove) {
+                  onCommentMove(comment.id, x, y);
+                }
+              }}
+              onDelete={() => {
+                if (onCommentDelete) {
+                  // Call delete (it handles its own state updates)
+                  try {
+                    onCommentDelete(comment.id);
+                  } catch (err) {
+                    console.error('Error in onCommentDelete:', err);
+                  }
+                }
+                // Collapse immediately for better UX
+                setEditingCommentId(null);
+              }}
+              currentUserId={currentUserId}
+              isOwner={isOwner}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 });

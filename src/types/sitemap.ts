@@ -12,6 +12,9 @@ export interface SitemapData {
   selectionGroups?: SelectionGroup[];
   lastModified: number;
   createdAt: number;
+  isShared?: boolean; // Marks if sitemap was received via share
+  sharePermission?: 'view' | 'edit'; // Permission level for shared sitemaps
+  originalSitemapId?: string; // Track which sitemap it was shared from
 }
 
 export interface SitemapState {

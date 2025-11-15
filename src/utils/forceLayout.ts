@@ -326,85 +326,165 @@ export function applyGroupedFlowLayout(
   config: Partial<ForceLayoutConfig> = {}
 ): PageNode[] {
   const cfg = { ...DEFAULT_CONFIG, ...config };
+
+  // --- Group nodes by category ---
   const byGroup = new Map<string, PageNode[]>();
   nodes.forEach(n => {
-    if (!byGroup.has(n.category)) byGroup.set(n.category, []);
-    byGroup.get(n.category)!.push(n);
+    const key = n.category || 'general';
+    if (!byGroup.has(key)) byGroup.set(key, []);
+    byGroup.get(key)!.push(n);
   });
 
   const groupKeys = Array.from(byGroup.keys());
-  // Arrange all groups vertically (stacked on top of each other)
-  const groupBlockWidth = 1800; // Increased significantly to provide much more width for nodes across groups
-  const groupBlockHeight = 600; // Reduced to make groups more compact vertically
-  const groupMargin = 400; // Vertical margin between groups
-  
-  // Place all groups vertically (stacked)
-  const totalHeight = groupKeys.length * (groupBlockHeight + groupMargin) - groupMargin;
-  const startX = Math.max(100, (cfg.width - groupBlockWidth) / 2); // Center each group horizontally
-  const startY = Math.max(80, (cfg.height - totalHeight) / 2); // Start from top with some margin
+  if (groupKeys.length === 0) {
+    return nodes;
+  }
 
+  // --- Horizontal group columns with global depth alignment ---
+
+  // Column configuration – tuned for clear separation between groups
+  const outerMarginX = 180;
+  const betweenGroups = 280;
+  const groupCount = groupKeys.length;
+
+  const availableWidth = Math.max(
+    400,
+    cfg.width - 2 * outerMarginX - (groupCount - 1) * betweenGroups
+  );
+  const groupColumnWidth = Math.max(300, availableWidth / groupCount);
+  const totalUsedWidth =
+    groupCount * groupColumnWidth + (groupCount - 1) * betweenGroups;
+  const firstColumnX = Math.max(
+    outerMarginX,
+    (cfg.width - totalUsedWidth) / 2
+  );
+
+  // Global vertical parameters – use global depth for alignment across all groups
+  const startY = 160;
+  const levelSpacing = 220;
+  const columnInnerPadding = 100;
+
+  // Build global depth map to understand depth distribution
+  const globalDepthMap = buildGlobalDepthMap(nodes);
+  const allDepths = Array.from(globalDepthMap.keys()).sort((a, b) => a - b);
+
+  // Track per-node horizontal bounds so we can keep groups distinct after relaxOverlaps
+  const columnBoundsById = new Map<
+    string,
+    { left: number; right: number }
+  >();
+
+  // Create a node map for quick lookups
+  const nodeMap = new Map<string, PageNode>();
+  nodes.forEach(n => nodeMap.set(n.id, n));
+
+  // For each group, arrange nodes using global depth for Y positioning
   groupKeys.forEach((g, idx) => {
-    // Place all groups vertically (stacked)
-    const gx = startX;
-    const gy = startY + idx * (groupBlockHeight + groupMargin);
+    const groupNodes = byGroup.get(g)!;
     
-    // Define group boundaries to keep nodes within their allocated space
-    const groupLeftBound = gx;
-    const groupRightBound = gx + groupBlockWidth;
-    const groupTopBound = gy;
-    const groupBottomBound = gy + groupBlockHeight;
-    
-    const gnodes = byGroup.get(g)!;
-    const gMap = new Map(gnodes.map(n => [n.id, n]));
-    const levelMap = buildGroupLevelMap(gnodes, gMap);
-    const levels = Array.from(levelMap.keys()).sort((a, b) => a - b);
-    
-    // Group-specific spacing with better padding to ensure nodes stay within margins
-    const levelSpacing = 80; // Reduced from 100 to make groups more compact vertically
-    const nodeSpacing = 350;  // Increased from 300 to take advantage of wider group width and prevent overlaps
-    const blockPadding = 100; // Increased from 80 to provide more margin space for nodes
-    const subRowSpacing = 50; // Reduced from 70 to make groups more compact
-    
-    levels.forEach((lvl, li) => {
-      const band = levelMap.get(lvl)!;
-      const y = gy + blockPadding + (li * levelSpacing);
-      
-      // Ensure y position doesn't exceed group bottom boundary
-      if (y > groupBottomBound - blockPadding) {
-        // Skip if level would overflow the group boundary
-        return;
+    const columnLeft = firstColumnX + idx * (groupColumnWidth + betweenGroups);
+    const columnRight = columnLeft + groupColumnWidth;
+    const innerLeft = columnLeft + columnInnerPadding;
+    const innerRight = columnRight - columnInnerPadding;
+    const usableWidth = Math.max(innerRight - innerLeft, 1);
+
+    // Group nodes by their global depth within this group
+    const nodesByDepth = new Map<number, PageNode[]>();
+    groupNodes.forEach(n => {
+      const depth = n.depth ?? 0;
+      if (!nodesByDepth.has(depth)) {
+        nodesByDepth.set(depth, []);
       }
-      
-      // Place all nodes at the same level in a single horizontal row
-      const totalWidth = (Math.max(0, band.length - 1)) * nodeSpacing;
-      const startX = gx + (groupBlockWidth - totalWidth) / 2;
-      
-      band.forEach((n, i) => {
-        if (n.x === undefined) {
-          const nodeX = startX + (i * nodeSpacing);
-          // Ensure node stays within group boundaries
-          n.x = Math.max(groupLeftBound + blockPadding, Math.min(groupRightBound - blockPadding, nodeX));
-        }
-        if (n.y === undefined) {
-          // Ensure node stays within group boundaries
-          n.y = Math.max(groupTopBound + blockPadding, Math.min(groupBottomBound - blockPadding, y));
-        }
-      });
+      nodesByDepth.get(depth)!.push(n);
     });
+
+    // Build parent-child relationship map for this group
+    const parentToChildren = new Map<string, PageNode[]>();
+    const rootNodes: PageNode[] = [];
     
-    // Ensure all nodes in this group stay within boundaries after placement
-    gnodes.forEach(n => {
-      if (n.x !== undefined) {
-        n.x = Math.max(groupLeftBound + blockPadding, Math.min(groupRightBound - blockPadding, n.x));
+    groupNodes.forEach(n => {
+      if (n.parent && nodeMap.has(n.parent) && groupNodes.some(gn => gn.id === n.parent)) {
+        // Parent is in the same group
+        if (!parentToChildren.has(n.parent)) {
+          parentToChildren.set(n.parent, []);
+        }
+        parentToChildren.get(n.parent)!.push(n);
+      } else {
+        // Root node (no parent or parent is in different group)
+        rootNodes.push(n);
       }
-      if (n.y !== undefined) {
-        n.y = Math.max(groupTopBound + blockPadding, Math.min(groupBottomBound - blockPadding, n.y));
+    });
+
+    // Helper function to arrange nodes respecting parent-child relationships
+    const arrangeNodesAtDepth = (depth: number, nodesAtDepth: PageNode[]) => {
+      if (nodesAtDepth.length === 0) return;
+
+      const y = startY + depth * levelSpacing;
+
+      // Sort nodes to maintain parent-child visual order
+      // Group siblings (nodes with same parent) together
+      nodesAtDepth.sort((a, b) => {
+        // First, sort by parent (siblings should be together)
+        if (a.parent && b.parent) {
+          if (a.parent !== b.parent) {
+            return a.parent.localeCompare(b.parent);
+          }
+        } else if (a.parent) return 1;
+        else if (b.parent) return -1;
+        // Then by title for consistent ordering
+        return (a.title || '').localeCompare(b.title || '');
+      });
+
+      if (nodesAtDepth.length === 1) {
+        const n = nodesAtDepth[0];
+        const x = innerLeft + usableWidth / 2;
+        if (n.x === undefined) n.x = x;
+        if (n.y === undefined) n.y = y;
+        columnBoundsById.set(n.id, { left: innerLeft, right: innerRight });
+      } else {
+        // Spread nodes evenly across the column width
+        const step = usableWidth / (nodesAtDepth.length - 1);
+        nodesAtDepth.forEach((n, i) => {
+          const x = innerLeft + step * i;
+          if (n.x === undefined) n.x = x;
+          if (n.y === undefined) n.y = y;
+          columnBoundsById.set(n.id, { left: innerLeft, right: innerRight });
+        });
       }
+    };
+
+    // For each depth level, arrange nodes horizontally within the group column
+    allDepths.forEach(depth => {
+      const nodesAtDepth = nodesByDepth.get(depth) || [];
+      arrangeNodesAtDepth(depth, nodesAtDepth);
     });
   });
 
-  // Use a more conservative relaxOverlaps that respects group boundaries
-  return relaxOverlaps(nodes, { padding: 100, iterations: 5, strength: 0.7 });
+  // Gently resolve remaining overlaps while keeping groups distinct
+  const relaxed = relaxOverlaps(nodes, {
+    padding: 80,
+    iterations: 4,
+    strength: 0.6,
+  });
+
+  // Clamp nodes back into their original column bounds to prevent group drift
+  // Also ensure Y positions respect global depth alignment
+  relaxed.forEach(n => {
+    const bounds = columnBoundsById.get(n.id);
+    if (!bounds || n.x === undefined) return;
+    n.x = Math.max(bounds.left, Math.min(bounds.right, n.x));
+    
+    // Ensure Y position aligns with global depth
+    const depth = n.depth ?? 0;
+    const expectedY = startY + depth * levelSpacing;
+    if (n.y !== undefined) {
+      // Allow slight Y adjustment for parent-child visual flow, but keep close to depth-aligned Y
+      const maxYOffset = levelSpacing * 0.3; // Allow up to 30% of level spacing for adjustment
+      n.y = Math.max(expectedY - maxYOffset, Math.min(expectedY + maxYOffset, n.y));
+    }
+  });
+
+  return relaxed;
 }
 
 function applyFlowchartForceAdjustment(nodes: PageNode[], cfg: ForceLayoutConfig): PageNode[] {
@@ -646,4 +726,21 @@ function buildGroupLevelMap(groupNodes: PageNode[], groupMap: Map<string, PageNo
   }
   
   return levelMap;
+}
+
+/**
+ * Build a global depth map using node.depth property.
+ * Groups all nodes by their global depth (0, 1, 2, etc.) regardless of category.
+ * This ensures depth-0 nodes align at the top across all groups.
+ */
+function buildGlobalDepthMap(nodes: PageNode[]): Map<number, PageNode[]> {
+  const depthMap = new Map<number, PageNode[]>();
+  nodes.forEach(node => {
+    const depth = node.depth ?? 0;
+    if (!depthMap.has(depth)) {
+      depthMap.set(depth, []);
+    }
+    depthMap.get(depth)!.push(node);
+  });
+  return depthMap;
 }

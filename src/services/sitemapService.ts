@@ -20,6 +20,8 @@ interface SitemapRow {
   last_modified: number;
   created_at: number;
   user_id?: string;
+  share_token?: string;
+  share_permission?: string;
 }
 
 // Convert SitemapData to database format
@@ -55,6 +57,7 @@ function rowToSitemap(row: SitemapRow): SitemapData {
     selectionGroups: row.data.selectionGroups || [],
     lastModified: row.last_modified,
     createdAt: row.created_at,
+    sharePermission: row.share_permission === 'edit' ? 'edit' : (row.share_permission === 'view' ? 'view' : undefined),
   };
 }
 
@@ -84,6 +87,7 @@ export async function saveSitemap(
   const rowWithUserId: SitemapRow = {
     ...row,
     user_id: userId || undefined,
+    share_permission: sitemap.sharePermission || undefined,
   };
   
   const { error } = await supabase

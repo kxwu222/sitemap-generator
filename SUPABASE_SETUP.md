@@ -22,6 +22,8 @@ CREATE TABLE IF NOT EXISTS sitemaps (
   last_modified BIGINT NOT NULL,
   created_at BIGINT NOT NULL,
   user_id TEXT,
+  share_token TEXT UNIQUE,
+  share_permission TEXT,  -- 'view' or 'edit' permission for shared sitemaps
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
@@ -30,6 +32,12 @@ CREATE INDEX IF NOT EXISTS idx_sitemaps_created_at ON sitemaps(created_at DESC);
 
 -- Create index on user_id if you plan to add authentication later
 CREATE INDEX IF NOT EXISTS idx_sitemaps_user_id ON sitemaps(user_id);
+
+-- Create index on share_token for fast lookups
+CREATE INDEX IF NOT EXISTS idx_sitemaps_share_token ON sitemaps(share_token);
+
+-- Migration: Add share_permission column if it doesn't exist
+ALTER TABLE sitemaps ADD COLUMN IF NOT EXISTS share_permission TEXT;
 
 -- Enable Row Level Security (RLS)
 ALTER TABLE sitemaps ENABLE ROW LEVEL SECURITY;
@@ -40,6 +48,73 @@ CREATE POLICY "Allow all operations on sitemaps" ON sitemaps
   FOR ALL
   USING (true)
   WITH CHECK (true);
+
+-- Policy to allow read access via share_token (for shared sitemaps)
+CREATE POLICY "Allow read access via share_token" ON sitemaps
+  FOR SELECT
+  USING (share_token IS NOT NULL);
+```
+
+## Step 1b: Create Comments Table
+
+Run the following SQL to create the `comments` table:
+
+```sql
+-- Create comments table
+CREATE TABLE IF NOT EXISTS comments (
+  id TEXT PRIMARY KEY,
+  sitemap_id TEXT NOT NULL REFERENCES sitemaps(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES auth.users(id),
+  user_name TEXT,  -- Store user name for display
+  user_email TEXT,  -- Store user email for display
+  x REAL NOT NULL,  -- Canvas X coordinate
+  y REAL NOT NULL,  -- Canvas Y coordinate
+  text TEXT NOT NULL,
+  resolved BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Create indexes for faster queries
+CREATE INDEX IF NOT EXISTS idx_comments_sitemap_id ON comments(sitemap_id);
+CREATE INDEX IF NOT EXISTS idx_comments_created_at ON comments(created_at DESC);
+
+-- Enable Row Level Security (RLS)
+ALTER TABLE comments ENABLE ROW LEVEL SECURITY;
+
+-- Policy: Users can read all comments for shared sitemaps
+CREATE POLICY "Users can read comments for shared sitemaps" ON comments
+  FOR SELECT
+  USING (
+    EXISTS (
+      SELECT 1 FROM sitemaps 
+      WHERE sitemaps.id = comments.sitemap_id 
+      AND sitemaps.share_token IS NOT NULL
+    )
+  );
+
+-- Policy: Users can create their own comments
+CREATE POLICY "Users can create their own comments" ON comments
+  FOR INSERT
+  WITH CHECK (auth.uid()::text = user_id);
+
+-- Policy: Users can update their own comments
+CREATE POLICY "Users can update their own comments" ON comments
+  FOR UPDATE
+  USING (auth.uid()::text = user_id)
+  WITH CHECK (auth.uid()::text = user_id);
+
+-- Policy: Users can delete their own comments, or sitemap owners can delete any comment
+CREATE POLICY "Users can delete their own comments or owners can delete any" ON comments
+  FOR DELETE
+  USING (
+    auth.uid()::text = user_id OR
+    EXISTS (
+      SELECT 1 FROM sitemaps 
+      WHERE sitemaps.id = comments.sitemap_id 
+      AND sitemaps.user_id = auth.uid()::text
+    )
+  );
 ```
 
 ## Step 2: Get Your Supabase Credentials
