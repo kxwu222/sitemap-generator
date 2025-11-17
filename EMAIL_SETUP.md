@@ -243,12 +243,38 @@ The email template can be customized in **Settings → Auth → Email Templates 
 
 ## Production Considerations
 
-1. **Redirect URL Whitelisting**: **CRITICAL** - Ensure all production domains are whitelisted in Supabase Auth settings
-2. **Customize Email Template**: Make sure the invite template matches your brand and uses `{{ .ConfirmationURL }}`
-3. **SMTP Configuration**: For production, consider configuring custom SMTP for better deliverability
-4. **Error Handling**: Monitor function logs for delivery failures and redirect URL issues
-5. **User Experience**: The invite creates a user account, so users will need to set a password
-6. **Testing**: Test the complete flow: invite → email → account creation → redirect → sitemap load
+1. **Supabase Configuration**: **REQUIRED** - Ensure production environment has:
+   - `VITE_SUPABASE_URL` environment variable set to your Supabase project URL
+   - `VITE_SUPABASE_ANON_KEY` environment variable set to your Supabase anon/public key
+   - Database schema includes `share_token` and `share_permission` columns in the `sitemaps` table (see `SUPABASE_SETUP.md`)
+
+2. **Redirect URL Whitelisting**: **CRITICAL** - Ensure all production domains are whitelisted in Supabase Auth settings:
+   - Go to **Settings → Auth → URL Configuration → Redirect URLs**
+   - Add `https://yourdomain.com/**` (with wildcard for query parameters)
+   - Add `http://localhost:5173/**` for local development
+
+3. **Edge Function Deployment**: **REQUIRED** - The `send-invite` Edge Function must be deployed:
+   - Deploy using: `supabase functions deploy send-invite`
+   - Ensure `SUPABASE_SERVICE_ROLE_KEY` is set as a secret
+   - Verify function is accessible at `https://[PROJECT_REF].supabase.co/functions/v1/send-invite`
+
+4. **Customize Email Template**: Make sure the invite template matches your brand and uses `{{ .ConfirmationURL }}`
+
+5. **SMTP Configuration**: For production, consider configuring custom SMTP for better deliverability
+
+6. **Error Handling**: Monitor function logs for delivery failures and redirect URL issues:
+   - Check Supabase function logs: `supabase functions logs send-invite`
+   - Monitor browser console for client-side errors
+   - Check Network tab for failed API calls
+
+7. **User Experience**: The invite creates a user account, so users will need to set a password
+
+8. **Testing**: Test the complete flow: invite → email → account creation → redirect → sitemap load
+
+9. **Troubleshooting Common Issues**:
+   - **"Generating..." never stops**: Check browser console for errors, verify Supabase connection, check if `share_token` column exists
+   - **"Send Invite" doesn't work**: Check authentication status, verify Edge Function is deployed, check Network tab for errors
+   - **Share links don't work**: Verify redirect URLs are whitelisted, check token exists in database
 
 ## Support
 

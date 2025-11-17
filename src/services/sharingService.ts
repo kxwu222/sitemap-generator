@@ -13,26 +13,41 @@ export async function generateShareToken(sitemapId: string, permission: SharePer
 
   if (supabase) {
     // Try Supabase first
-    const { error } = await supabase
-      .from('sitemaps')
-      .update({ share_token: token, share_permission: permission })
-      .eq('id', sitemapId);
+    try {
+      const { error } = await supabase
+        .from('sitemaps')
+        .update({ share_token: token, share_permission: permission })
+        .eq('id', sitemapId);
 
-    if (error) {
-      console.error('Error generating share token:', error);
-      // Fall through to localStorage fallback
-    } else {
-      // Also store in localStorage as backup
-      try {
-        const storageKey = `share_token_${sitemapId}`;
-        const permissionKey = `share_token_${sitemapId}_permission`;
-        localStorage.setItem(storageKey, token);
-        localStorage.setItem(permissionKey, permission);
-      } catch (e) {
-        // Ignore localStorage errors
+      if (error) {
+        console.error('Error generating share token in Supabase:', {
+          message: error.message,
+          code: error.code,
+          details: error.details,
+          hint: error.hint,
+          sitemapId,
+        });
+        // Fall through to localStorage fallback
+      } else {
+        // Successfully saved to Supabase
+        console.log('Share token generated successfully in Supabase:', { sitemapId, token, permission });
+        // Also store in localStorage as backup
+        try {
+          const storageKey = `share_token_${sitemapId}`;
+          const permissionKey = `share_token_${sitemapId}_permission`;
+          localStorage.setItem(storageKey, token);
+          localStorage.setItem(permissionKey, permission);
+        } catch (e) {
+          console.warn('Failed to save token to localStorage backup:', e);
+        }
+        return token;
       }
-      return token;
+    } catch (supabaseError) {
+      console.error('Unexpected error in Supabase token generation:', supabaseError);
+      // Fall through to localStorage fallback
     }
+  } else {
+    console.warn('Supabase not initialized, using localStorage fallback for share token');
   }
 
   // Fallback to localStorage
@@ -41,6 +56,7 @@ export async function generateShareToken(sitemapId: string, permission: SharePer
     const permissionKey = `share_token_${sitemapId}_permission`;
     localStorage.setItem(storageKey, token);
     localStorage.setItem(permissionKey, permission);
+    console.log('Share token generated successfully in localStorage:', { sitemapId, token, permission });
     return token;
   } catch (error) {
     console.error('Error saving share token to localStorage:', error);
@@ -209,12 +225,30 @@ export async function getShareTokenWithPermission(sitemapId: string): Promise<{ 
 
         if (!error && data?.share_token) {
           const permission: SharePermission = (data.share_permission === 'edit' ? 'edit' : 'view');
+          console.log('Retrieved share token from Supabase:', { sitemapId, token: data.share_token, permission });
           return { token: data.share_token, permission };
+        } else if (error) {
+          console.warn('Supabase query failed for getShareTokenWithPermission:', {
+            message: error.message,
+            code: error.code,
+            details: error.details,
+            hint: error.hint,
+            sitemapId,
+          });
+          // Fall through to localStorage
+        } else {
+          // No token found in Supabase
+          console.log('No share token found in Supabase for sitemap:', sitemapId);
         }
       } catch (supabaseError) {
         // Supabase query failed, fall through to localStorage
-        console.warn('Supabase query failed, falling back to localStorage:', supabaseError);
+        console.warn('Supabase query exception, falling back to localStorage:', {
+          error: supabaseError,
+          sitemapId,
+        });
       }
+    } else {
+      console.warn('Supabase not initialized, using localStorage for getShareTokenWithPermission');
     }
 
     // Fallback to localStorage
@@ -223,6 +257,11 @@ export async function getShareTokenWithPermission(sitemapId: string): Promise<{ 
       const permissionKey = `share_token_${sitemapId}_permission`;
       const token = localStorage.getItem(storageKey);
       const permission: SharePermission = (localStorage.getItem(permissionKey) === 'edit' ? 'edit' : 'view');
+      if (token) {
+        console.log('Retrieved share token from localStorage:', { sitemapId, token, permission });
+      } else {
+        console.log('No share token found in localStorage for sitemap:', sitemapId);
+      }
       return { token, permission };
     } catch (localStorageError) {
       console.error('Error getting share token from localStorage:', localStorageError);
@@ -272,16 +311,29 @@ export async function updateSharePermission(sitemapId: string, permission: Share
 // Send invite to a user by email using Supabase's built-in email templates
 export async function sendInvite(sitemapId: string, email: string, shareUrl: string, sitemapName?: string): Promise<void> {
   if (!supabase) {
-    throw new Error('Email sending requires Supabase configuration. Please set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.');
+    const errorMsg = 'Email sending requires Supabase configuration. Please set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.';
+    console.error('sendInvite failed:', errorMsg);
+    throw new Error(errorMsg);
   }
 
   try {
     // Get the current user's session for authentication
     const { data: { session }, error: sessionError } = await supabase.auth.getSession();
     
-    if (sessionError || !session) {
-      throw new Error('User must be authenticated to send invites');
+    if (sessionError) {
+      console.error('Session error when sending invite:', {
+        error: sessionError.message,
+        code: sessionError.status,
+      });
+      throw new Error('Authentication error. Please sign in and try again.');
     }
+    
+    if (!session) {
+      console.error('No session found when sending invite');
+      throw new Error('User must be authenticated to send invites. Please sign in and try again.');
+    }
+
+    console.log('Calling send-invite Edge Function:', { email, sitemapId, shareUrl, sitemapName });
 
     // Call the Supabase Edge Function which uses Supabase's email templates
     const { data, error } = await supabase.functions.invoke('send-invite', {
@@ -294,17 +346,40 @@ export async function sendInvite(sitemapId: string, email: string, shareUrl: str
     });
 
     if (error) {
-      console.error('Error calling send-invite function:', error);
-      throw new Error(error.message || 'Failed to send invite email');
+      console.error('Error calling send-invite function:', {
+        message: error.message,
+        context: error.context,
+        status: error.status,
+        email,
+        sitemapId,
+      });
+      // Provide more specific error messages
+      if (error.message?.includes('Network') || error.message?.includes('fetch')) {
+        throw new Error('Network error. Please check your connection and try again.');
+      } else if (error.status === 401 || error.message?.includes('Unauthorized')) {
+        throw new Error('Authentication failed. Please sign in and try again.');
+      } else if (error.status === 404) {
+        throw new Error('Invite function not found. Please contact support.');
+      } else {
+        throw new Error(error.message || 'Failed to send invite email. Please try again.');
+      }
     }
 
     if (!data || !data.success) {
-      throw new Error(data?.error || 'Failed to send invite email');
+      const errorMsg = data?.error || 'Failed to send invite email';
+      console.error('send-invite function returned error:', { data, email, sitemapId });
+      throw new Error(errorMsg);
     }
 
-    console.log('Invite email sent successfully:', data);
+    console.log('Invite email sent successfully:', { data, email, sitemapId });
   } catch (error) {
-    console.error('Error sending invite:', error);
+    console.error('Error sending invite:', {
+      error,
+      email,
+      sitemapId,
+      shareUrl,
+      errorType: error instanceof Error ? error.constructor.name : typeof error,
+    });
     // Re-throw with a user-friendly message
     if (error instanceof Error) {
       throw error;
