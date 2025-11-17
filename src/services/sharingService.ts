@@ -269,10 +269,47 @@ export async function updateSharePermission(sitemapId: string, permission: Share
   }
 }
 
-// Send invite to a user by email
-export async function sendInvite(_sitemapId: string, _email: string): Promise<void> {
-  // Placeholder function - can be implemented later with actual invite functionality
-  // For now, just show a success message
-  return Promise.resolve();
+// Send invite to a user by email using Supabase's built-in email templates
+export async function sendInvite(sitemapId: string, email: string, shareUrl: string, sitemapName?: string): Promise<void> {
+  if (!supabase) {
+    throw new Error('Email sending requires Supabase configuration. Please set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.');
+  }
+
+  try {
+    // Get the current user's session for authentication
+    const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+    
+    if (sessionError || !session) {
+      throw new Error('User must be authenticated to send invites');
+    }
+
+    // Call the Supabase Edge Function which uses Supabase's email templates
+    const { data, error } = await supabase.functions.invoke('send-invite', {
+      body: {
+        email,
+        shareUrl,
+        sitemapId,
+        sitemapName,
+      },
+    });
+
+    if (error) {
+      console.error('Error calling send-invite function:', error);
+      throw new Error(error.message || 'Failed to send invite email');
+    }
+
+    if (!data || !data.success) {
+      throw new Error(data?.error || 'Failed to send invite email');
+    }
+
+    console.log('Invite email sent successfully:', data);
+  } catch (error) {
+    console.error('Error sending invite:', error);
+    // Re-throw with a user-friendly message
+    if (error instanceof Error) {
+      throw error;
+    }
+    throw new Error('Failed to send invite email. Please try again.');
+  }
 }
 

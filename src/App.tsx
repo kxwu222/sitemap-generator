@@ -164,6 +164,8 @@ function App() {
   const [inviteEmailError, setInviteEmailError] = useState('');
   const [inviteSuccessMessage, setInviteSuccessMessage] = useState('');
   const [showCopySuccess, setShowCopySuccess] = useState(false);
+  const [isUpdatingPermission, setIsUpdatingPermission] = useState(false); // Track if permission is being updated
+  const [isGeneratingToken, setIsGeneratingToken] = useState(false); // Track if token is being generated
   const [isViewerMode, setIsViewerMode] = useState(false);
   const [comments, setComments] = useState<Comment[]>([]);
   const [commentChannel, setCommentChannel] = useState<RealtimeChannel | null>(null);
@@ -483,6 +485,7 @@ function App() {
       }
       
       // Load existing token and permission if available
+      setIsGeneratingToken(true);
       getShareTokenWithPermission(activeSitemapId)
         .then(({ token, permission }) => {
           // Check ref again at the time the promise resolves (in case it was set during the async operation)
@@ -491,12 +494,14 @@ function App() {
             if (token) {
               setShareToken(token);
             }
+            setIsGeneratingToken(false);
             return;
           }
           
           if (token) {
             setShareToken(token);
             setSharePermission(permission);
+            setIsGeneratingToken(false);
           } else {
             // Generate new token with default 'view' permission
             generateShareToken(activeSitemapId, 'view')
@@ -507,6 +512,7 @@ function App() {
                   if (newToken) {
                     setShareToken(newToken);
                   }
+                  setIsGeneratingToken(false);
                   return;
                 }
                 
@@ -514,6 +520,7 @@ function App() {
                   setShareToken(newToken);
                   setSharePermission('view');
                 }
+                setIsGeneratingToken(false);
               })
               .catch(error => {
                 // Silently handle errors - token generation will work with localStorage fallback
@@ -521,11 +528,13 @@ function App() {
                 if (error.message !== 'Failed to generate share token') {
                   console.error('Failed to auto-generate share token:', error);
                 }
+                setIsGeneratingToken(false);
               });
           }
         })
         .catch(error => {
           console.error('Failed to get share token:', error);
+          setIsGeneratingToken(false);
         });
     } else if (!showShareModal) {
       // Reset the loaded ref when modal closes
@@ -660,9 +669,22 @@ function App() {
     setInviteSuccessMessage('');
     
     try {
+      // Get or generate share token first
+      let token = shareToken;
+      if (!token) {
+        token = await generateShareToken(activeSitemapId, sharePermission);
+        setShareToken(token);
+      }
+      
+      const shareUrl = `${window.location.origin}${window.location.pathname}?share=${token}`;
+      
+      // Get sitemap name for the email
+      const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
+      const sitemapName = currentSitemap?.name;
+      
       // Send invites to all emails
       for (const email of inviteEmails) {
-        await sendInvite(activeSitemapId, email);
+        await sendInvite(activeSitemapId, email, shareUrl, sitemapName);
       }
       // Show success message and keep email pills
       setInviteSuccessMessage('Invite sent!');
@@ -671,7 +693,8 @@ function App() {
       setTimeout(() => setInviteSuccessMessage(''), 3000);
     } catch (error) {
       console.error('Failed to send invite:', error);
-      setInviteEmailError('Failed to send invites. Please try again.');
+      const errorMessage = error instanceof Error ? error.message : 'Failed to send invites. Please try again.';
+      setInviteEmailError(errorMessage);
     }
   };
 
@@ -3587,17 +3610,20 @@ function App() {
                           const previousPermission = sharePermission;
                           // Mark that we're manually updating permission BEFORE any state updates
                           permissionManuallyUpdatedRef.current = true;
+                          setIsUpdatingPermission(true);
                           // Update permission immediately in UI
                           setSharePermission('view');
                           // Update permission in database/storage (keep same token)
                           try {
                             await updateSharePermission(activeSitemapId, 'view');
                             // Keep the ref true to prevent useEffect from overwriting
+                            setIsUpdatingPermission(false);
                           } catch (err) {
                             console.error('Failed to update permission:', err);
                             // Revert UI state on error
                             setSharePermission(previousPermission);
                             permissionManuallyUpdatedRef.current = false;
+                            setIsUpdatingPermission(false);
                           }
                         }
                       }}
@@ -3618,17 +3644,20 @@ function App() {
                           const previousPermission = sharePermission;
                           // Mark that we're manually updating permission BEFORE any state updates
                           permissionManuallyUpdatedRef.current = true;
+                          setIsUpdatingPermission(true);
                           // Update permission immediately in UI
                           setSharePermission('edit');
                           // Update permission in database/storage (keep same token)
                           try {
                             await updateSharePermission(activeSitemapId, 'edit');
                             // Keep the ref true to prevent useEffect from overwriting
+                            setIsUpdatingPermission(false);
                           } catch (err) {
                             console.error('Failed to update permission:', err);
                             // Revert UI state on error
                             setSharePermission(previousPermission);
                             permissionManuallyUpdatedRef.current = false;
+                            setIsUpdatingPermission(false);
                           }
                         }
                       }}
@@ -3765,20 +3794,110 @@ function App() {
             {/* Copy link button */}
             <div className="mb-3 flex items-center gap-2">
               <button
-                onClick={() => {
-                  if (shareToken) {
-                    const shareUrl = `${window.location.origin}${window.location.pathname}?share=${shareToken}`;
-                    navigator.clipboard.writeText(shareUrl);
-                    setShowCopySuccess(true);
-                    setTimeout(() => setShowCopySuccess(false), 2000);
+                onClick={async () => {
+                  // Safety checks before copying
+                  if (!shareToken) {
+                    console.warn('Cannot copy: share token not available');
+                    alert('Share link is not ready yet. Please wait a moment and try again.');
+                    return;
+                  }
+                  
+                  if (!activeSitemapId) {
+                    console.warn('Cannot copy: no active sitemap');
+                    alert('No sitemap selected. Please select a sitemap first.');
+                    return;
+                  }
+                  
+                  // Wait for permission update to complete if in progress
+                  if (isUpdatingPermission) {
+                    // Wait up to 2 seconds for permission update to complete
+                    let waited = 0;
+                    while (isUpdatingPermission && waited < 2000) {
+                      await new Promise(resolve => setTimeout(resolve, 100));
+                      waited += 100;
+                    }
+                    if (isUpdatingPermission) {
+                      console.warn('Permission update still in progress, proceeding anyway');
+                    }
+                  }
+                  
+                  // Verify token and permission are synced (optional verification)
+                  try {
+                    const { token, permission } = await getShareTokenWithPermission(activeSitemapId);
+                    if (token !== shareToken) {
+                      console.warn('Token mismatch detected, updating state');
+                      setShareToken(token);
+                    }
+                    if (permission !== sharePermission) {
+                      console.warn('Permission mismatch detected, updating state');
+                      setSharePermission(permission);
+                    }
+                  } catch (err) {
+                    // If verification fails, proceed anyway (might be localStorage only)
+                    console.warn('Could not verify token/permission, proceeding with current state:', err);
+                  }
+                  
+                  const shareUrl = `${window.location.origin}${window.location.pathname}?share=${shareToken}`;
+                  
+                  try {
+                    // Try modern clipboard API first
+                    if (navigator.clipboard && navigator.clipboard.writeText) {
+                      await navigator.clipboard.writeText(shareUrl);
+                      setShowCopySuccess(true);
+                      setTimeout(() => setShowCopySuccess(false), 2000);
+                    } else {
+                      // Fallback for older browsers or non-HTTPS
+                      const textArea = document.createElement('textarea');
+                      textArea.value = shareUrl;
+                      textArea.style.position = 'fixed';
+                      textArea.style.left = '-999999px';
+                      textArea.style.top = '-999999px';
+                      document.body.appendChild(textArea);
+                      textArea.focus();
+                      textArea.select();
+                      
+                      try {
+                        const successful = document.execCommand('copy');
+                        if (successful) {
+                          setShowCopySuccess(true);
+                          setTimeout(() => setShowCopySuccess(false), 2000);
+                        } else {
+                          throw new Error('execCommand failed');
+                        }
+                      } finally {
+                        document.body.removeChild(textArea);
+                      }
+                    }
+                  } catch (error) {
+                    console.error('Failed to copy link:', error);
+                    // Fallback: show the URL in an alert so user can manually copy
+                    alert(`Please copy this link manually:\n\n${shareUrl}\n\nAccess Level: ${sharePermission === 'edit' ? 'Can edit' : 'View only'}`);
                   }
                 }}
-                className="px-3 py-1.5 border-2 border-gray-100 rounded-lg text-gray-700 hover:text-gray-900 hover:bg-gray-50 transition-all duration-200 flex items-center gap-2 text-sm"
-                disabled={!shareToken}
-                title="Copy share link"
+                className="px-3 py-1.5 border-2 border-gray-100 rounded-lg text-gray-700 hover:text-gray-900 hover:bg-gray-50 transition-all duration-200 flex items-center gap-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={!shareToken || isGeneratingToken || isUpdatingPermission}
+                title={
+                  !shareToken 
+                    ? 'Generating share link...' 
+                    : isUpdatingPermission 
+                    ? 'Updating permission...' 
+                    : 'Copy share link'
+                }
               >
-                <Link className="w-4 h-4" strokeWidth={1.5} />
-                <span>Copy link</span>
+                {isGeneratingToken || isUpdatingPermission ? (
+                  <>
+                    <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    <span>{isGeneratingToken ? 'Generating...' : 'Updating...'}</span>
+                  </>
+                ) : (
+                  <>
+                    <Link className="w-4 h-4" strokeWidth={1.5} />
+                    <span>Copy link</span>
+                  </>
+                )}
               </button>
               {showCopySuccess && (
                 <span className="px-2 text-sm text-green-600 transition-opacity duration-200 opacity-100">
