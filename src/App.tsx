@@ -447,7 +447,7 @@ function App() {
       .then(setComments)
       .catch(err => console.error('Failed to load comments:', err));
     
-    // Subscribe to real-time updates
+    // Subscribe to real-time updates (Supabase)
     if (supabase) {
       const channel = subscribeToComments(activeSitemapId, (comment, eventType) => {
         if (eventType === 'INSERT') {
@@ -476,6 +476,52 @@ function App() {
       }
     };
   }, [activeSitemapId, isSupabaseConfigured, isLocalhost]);
+
+  // Poll JSONBin.io for comment updates (for shared sitemaps)
+  useEffect(() => {
+    if (!activeSitemapId || !shareToken) return;
+    
+    // Only poll if JSONBin.io is configured and we have a share token
+    import('./services/jsonbinService').then(({ isJsonBinConfigured, getSharedBin }) => {
+      if (!isJsonBinConfigured()) return;
+      
+      const pollInterval = setInterval(async () => {
+        try {
+          const sharedData = await getSharedBin(shareToken);
+          if (sharedData && sharedData.comments) {
+            // Only update if comments have changed
+            setComments(prev => {
+              const prevIds = new Set(prev.map(c => c.id));
+              const newIds = new Set(sharedData.comments.map(c => c.id));
+              const idsChanged = prevIds.size !== newIds.size || 
+                [...prevIds].some(id => !newIds.has(id)) ||
+                [...newIds].some(id => !prevIds.has(id));
+              
+              // Also check if any comment text/position/resolved changed
+              const contentChanged = prev.some(pc => {
+                const nc = sharedData.comments.find(c => c.id === pc.id);
+                return !nc || nc.text !== pc.text || nc.x !== pc.x || nc.y !== pc.y || nc.resolved !== pc.resolved;
+              });
+              
+              if (idsChanged || contentChanged) {
+                return sharedData.comments;
+              }
+              return prev;
+            });
+          }
+        } catch (err) {
+          // Silently fail - polling is non-critical
+          console.warn('Polling JSONBin.io for comments failed:', err);
+        }
+      }, 3000); // Poll every 3 seconds
+      
+      return () => clearInterval(pollInterval);
+    }).catch(err => {
+      console.warn('Failed to initialize JSONBin.io polling:', err);
+    });
+    
+    return () => {};
+  }, [activeSitemapId, shareToken]);
 
   // Auto-generate share token when modal opens if it doesn't exist
   useEffect(() => {
@@ -525,7 +571,10 @@ function App() {
             setTokenGenerationError(null);
           } else {
             // Generate new token with default 'view' permission
-            generateShareToken(activeSitemapId, 'view')
+            // Get current sitemap data for JSONBin.io
+            const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
+            const currentComments = comments.filter(c => c.sitemapId === activeSitemapId);
+            generateShareToken(activeSitemapId, 'view', currentSitemap, currentComments)
               .then(newToken => {
                 clearTimeout(timeoutId);
                 // Check ref again at the time this promise resolves
@@ -703,7 +752,10 @@ function App() {
       let token = shareToken;
       if (!token) {
         try {
-          token = await generateShareToken(activeSitemapId, sharePermission);
+          // Get current sitemap data for JSONBin.io
+          const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
+          const currentComments = comments.filter(c => c.sitemapId === activeSitemapId);
+          token = await generateShareToken(activeSitemapId, sharePermission, currentSitemap, currentComments);
           setShareToken(token);
         } catch (tokenError) {
           console.error('Failed to generate token for invite:', tokenError);
@@ -2535,14 +2587,14 @@ function App() {
               </button>
               {/* AI organize button removed per request */}
               {!isViewerMode && (
-                <button
-                  onClick={() => setShowHelp(true)}
-                  className="px-3 py-2 text-sm font-medium bg-white border rounded-lg border-gray-300 hover:border-gray-400 transition-colors flex items-center gap-2"
-                  title="Help"
-                >
-                  <HelpCircle className="w-4 h-4" strokeWidth={1.5} />
-                  Help
-                </button>
+              <button
+                onClick={() => setShowHelp(true)}
+                className="px-3 py-2 text-sm font-medium bg-white border rounded-lg border-gray-300 hover:border-gray-400 transition-colors flex items-center gap-2"
+                title="Help"
+              >
+                <HelpCircle className="w-4 h-4" strokeWidth={1.5} />
+                Help
+              </button>
               )}
               {isViewerMode && (
                 <button
@@ -2623,15 +2675,15 @@ function App() {
                             </p>
                           </div>
                           {isSupabaseConfigured() && (
-                            <div className="py-1">
-                              <button
-                                onClick={handleSignOut}
-                                className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2 transition-colors"
-                              >
-                                <LogOut className="w-4 h-4" strokeWidth={1.5} />
-                                Sign Out
-                              </button>
-                            </div>
+                          <div className="py-1">
+                            <button
+                              onClick={handleSignOut}
+                              className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2 transition-colors"
+                            >
+                              <LogOut className="w-4 h-4" strokeWidth={1.5} />
+                              Sign Out
+                            </button>
+                          </div>
                           )}
                           {isLocalhost() && !isSupabaseConfigured() && (
                             <div className="px-4 py-2 text-xs text-gray-500 border-t border-gray-200">
@@ -2796,14 +2848,14 @@ function App() {
               
               {/* Create New Sitemap Button - only show in "My Sitemaps" tab */}
               {sitemapViewTab === 'my' && (
-                <button
-                  type="button"
-                  onClick={createNewSitemap}
+              <button
+                type="button"
+                onClick={createNewSitemap}
                   className="w-full mb-3 px-3 py-2 bg-white shadow-sm border border-gray-200 hover:shadow-md hover:bg-gray-150 text-gray-700 text-sm font-medium rounded transition-colors flex items-center justify-center gap-2"
-                >
-                  <img width="16" height="16" src="https://img.icons8.com/puffy/32/add.png" alt="add"/>
-                  Create New Sitemap
-                </button>
+              >
+                <img width="16" height="16" src="https://img.icons8.com/puffy/32/add.png" alt="add"/>
+                Create New Sitemap
+              </button>
               )}
               
               {/* Dropdown Button */}
@@ -2854,35 +2906,35 @@ function App() {
                   });
                   
                   return filteredSitemaps.length > 0 ? (
-                    <>
-                      <div 
-                        className="fixed inset-0 z-10" 
-                        onClick={() => setShowSitemapDropdown(false)}
-                      />
-                      <div 
-                        className="absolute left-0 right-0 mt-1 bg-white border border-gray-300 rounded shadow-lg z-20 max-h-64 overflow-y-auto"
-                        onMouseDown={(e) => e.stopPropagation()}
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        {/* Sitemap List */}
-                        <div className="py-1">
+                  <>
+                    <div 
+                      className="fixed inset-0 z-10" 
+                      onClick={() => setShowSitemapDropdown(false)}
+                    />
+                    <div 
+                      className="absolute left-0 right-0 mt-1 bg-white border border-gray-300 rounded shadow-lg z-20 max-h-64 overflow-y-auto"
+                      onMouseDown={(e) => e.stopPropagation()}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {/* Sitemap List */}
+                      <div className="py-1">
                           {filteredSitemaps.map(sitemap => {
                             const isShared = sitemap.isShared === true;
                             
                             return (
-                              <div
-                                key={sitemap.id}
-                                className={`group px-2 py-2 hover:bg-gray-50 flex items-center justify-between ${
-                                  activeSitemapId === sitemap.id ? 'bg-blue-50' : ''
+                          <div
+                            key={sitemap.id}
+                            className={`group px-2 py-2 hover:bg-gray-50 flex items-center justify-between ${
+                              activeSitemapId === sitemap.id ? 'bg-blue-50' : ''
                                 } ${isShared ? 'border-l-2 border-orange-400' : ''}`}
-                              >
-                                <button
-                                  className="flex items-center gap-2 flex-1 min-w-0 text-left cursor-pointer"
-                                  onClick={() => {
-                                    switchToSitemap(sitemap.id);
-                                    setShowSitemapDropdown(false);
-                                  }}
-                                >
+                          >
+                            <button
+                              className="flex items-center gap-2 flex-1 min-w-0 text-left cursor-pointer"
+                              onClick={() => {
+                                switchToSitemap(sitemap.id);
+                                setShowSitemapDropdown(false);
+                              }}
+                            >
                                   {/* Icon */}
                                   <div className="flex-shrink-0">
                                     {isShared ? (
@@ -2891,9 +2943,9 @@ function App() {
                                       <FileText className="w-4 h-4 text-gray-600" strokeWidth={1.5} />
                                     )}
                                   </div>
-                                  <div className="flex-1 min-w-0">
+                              <div className="flex-1 min-w-0">
                                     <div className="flex items-center gap-2">
-                                      <div className="font-medium text-sm truncate">{sitemap.name}</div>
+                                <div className="font-medium text-sm truncate">{sitemap.name}</div>
                                       {/* Badge for shared sitemaps */}
                                       {isShared && sitemap.sharePermission && (
                                         <span
@@ -2907,29 +2959,29 @@ function App() {
                                         </span>
                                       )}
                                     </div>
-                                    <div className="text-xs text-gray-500">{sitemap.nodes.length} pages</div>
-                                  </div>
-                                </button>
-                                <div 
-                                  className="flex items-center gap-1 opacity-0 group-hover:opacity-100 pl-2"
-                                >
+                                <div className="text-xs text-gray-500">{sitemap.nodes.length} pages</div>
+                              </div>
+                            </button>
+                            <div 
+                              className="flex items-center gap-1 opacity-0 group-hover:opacity-100 pl-2"
+                            >
                                   {/* Conditional actions based on ownership */}
                                   {!isShared ? (
                                     <>
                                       {/* Owned sitemaps: Rename, Share, Delete */}
-                                      <button
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          setShowSitemapDropdown(false);
-                                          setEditingSitemapId(sitemap.id);
-                                          setEditingSitemapName(sitemap.name);
-                                        }}
-                                        className="p-1.5 hover:bg-gray-200 rounded transition-colors"
-                                        title="Rename"
-                                        type="button"
-                                      >
-                                        <Edit2 className="w-4 h-4 text-gray-600" strokeWidth={1.5} />
-                                      </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setShowSitemapDropdown(false);
+                                  setEditingSitemapId(sitemap.id);
+                                  setEditingSitemapName(sitemap.name);
+                                }}
+                                className="p-1.5 hover:bg-gray-200 rounded transition-colors"
+                                title="Rename"
+                                type="button"
+                              >
+                                <Edit2 className="w-4 h-4 text-gray-600" strokeWidth={1.5} />
+                              </button>
                                       <button
                                         onClick={async (e) => {
                                           e.stopPropagation();
@@ -2959,23 +3011,23 @@ function App() {
                                       >
                                         <Share2 className="w-4 h-4 text-blue-600" strokeWidth={1.5} />
                                       </button>
-                                      <button
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          setShowSitemapDropdown(false);
-                                          setSitemapToDelete(sitemap.id);
-                                        }}
-                                        className="p-1.5 hover:bg-red-100 rounded transition-colors"
-                                        title="Delete"
-                                        type="button"
-                                      >
-                                        <Trash2 className="w-4 h-4 text-red-600" strokeWidth={1.5} />
-                                      </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setShowSitemapDropdown(false);
+                                  setSitemapToDelete(sitemap.id);
+                                }}
+                                className="p-1.5 hover:bg-red-100 rounded transition-colors"
+                                title="Delete"
+                                type="button"
+                              >
+                                <Trash2 className="w-4 h-4 text-red-600" strokeWidth={1.5} />
+                              </button>
                                     </>
                                   ) : (
                                     <>
                                       {/* Shared sitemaps: Duplicate only */}
-                                      <button
+                <button
                                         onClick={(e) => {
                                           e.stopPropagation();
                                           setShowSitemapDropdown(false);
@@ -2986,14 +3038,14 @@ function App() {
                                         type="button"
                                       >
                                         <Copy className="w-4 h-4 text-blue-600" strokeWidth={1.5} />
-                                      </button>
+                </button>
                                     </>
-                                  )}
-                                </div>
-                              </div>
+              )}
+            </div>
+                  </div>
                             );
                           })}
-                        </div>
+            </div>
                       </div>
                     </>
                   ) : (
@@ -3009,7 +3061,7 @@ function App() {
                   );
                 })()}
               </div>
-            </div>
+          </div>
           )}
           {(() => {
             // Check if active sitemap matches current tab filter
@@ -3021,52 +3073,52 @@ function App() {
             const shouldShowStats = nodes.length > 0 && matchesCurrentTab && !sidebarCollapsed && sidebarTab === 'sitemap';
             
             return shouldShowStats ? (
-              <>
-                <div className="p-6 border-b border-gray-200">
-                  <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-900 mb-4">
-                    Statistics
-                  </h2>
-                  <div className="space-y-2">
-                    <div className="flex justify-between text-sm">
-                      <span className="text-gray-600">Total Pages</span>
-                      <span className="font-medium">{stats.total}</span>
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span className="text-gray-600">Groups</span>
-                      <span className="font-medium">{stats.categories}</span>
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span className="text-gray-600">Max Depth</span>
-                      <span className="font-medium">{stats.maxDepth}</span>
-                    </div>
+            <>
+              <div className="p-6 border-b border-gray-200">
+                <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-900 mb-4">
+                  Statistics
+                </h2>
+                <div className="space-y-2">
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-600">Total Pages</span>
+                    <span className="font-medium">{stats.total}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-600">Groups</span>
+                    <span className="font-medium">{stats.categories}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-600">Max Depth</span>
+                    <span className="font-medium">{stats.maxDepth}</span>
                   </div>
                 </div>
-                <div className="p-6 border-b border-gray-200">
-                  <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-900 mb-3">Groups</h2>
-                  <div className="space-y-1">
-                    {Array.from(groupByCategory(nodes).keys()).map(group => (
-                      <div
-                        key={group}
-                        className="flex items-center justify-between text-sm px-2 py-1 rounded hover:bg-gray-50 border border-transparent hover:border-gray-200"
-                        title="Click to move current selection; drop selected nodes to move"
-                        onClick={() => {
-                          const ids: string[] = sitemapCanvasRef.current?.getSelectedNodeIds?.() || [];
-                          if (ids.length) handleMoveNodesToGroup(ids, group);
-                        }}
-                        onDragOver={(e) => e.preventDefault()}
-                        onDrop={(e) => {
-                          e.preventDefault();
-                          const ids: string[] = sitemapCanvasRef.current?.getSelectedNodeIds?.() || [];
-                          if (ids.length) handleMoveNodesToGroup(ids, group);
-                        }}
-                      >
-                        <span className="capitalize">{group}</span>
-                        <span className="text-gray-500">{nodes.filter(n => n.category === group).length}</span>
-                      </div>
-                    ))}
-                  </div>
+              </div>
+              <div className="p-6 border-b border-gray-200">
+                <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-900 mb-3">Groups</h2>
+                <div className="space-y-1">
+                  {Array.from(groupByCategory(nodes).keys()).map(group => (
+                    <div
+                      key={group}
+                      className="flex items-center justify-between text-sm px-2 py-1 rounded hover:bg-gray-50 border border-transparent hover:border-gray-200"
+                      title="Click to move current selection; drop selected nodes to move"
+                      onClick={() => {
+                        const ids: string[] = sitemapCanvasRef.current?.getSelectedNodeIds?.() || [];
+                        if (ids.length) handleMoveNodesToGroup(ids, group);
+                      }}
+                      onDragOver={(e) => e.preventDefault()}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        const ids: string[] = sitemapCanvasRef.current?.getSelectedNodeIds?.() || [];
+                        if (ids.length) handleMoveNodesToGroup(ids, group);
+                      }}
+                    >
+                      <span className="capitalize">{group}</span>
+                      <span className="text-gray-500">{nodes.filter(n => n.category === group).length}</span>
+                    </div>
+                  ))}
                 </div>
-              </>
+              </div>
+            </>
             ) : null;
           })()}
 
@@ -3099,7 +3151,7 @@ function App() {
                       setComments(updated);
                       return;
                     }
-                    await resolveComment(commentId, resolved);
+                    await resolveComment(commentId, resolved, activeSitemapId || undefined);
                     // Real-time update will handle state update
                   } catch (err) {
                     console.error('Failed to resolve comment:', err);
@@ -3266,7 +3318,7 @@ function App() {
                       setComments(updated);
                       return;
                     }
-                    await updateComment(commentId, text);
+                    await updateComment(commentId, text, activeSitemapId || undefined);
                     // Real-time update will handle state update
                   } catch (err) {
                     console.error('Failed to update comment:', err);
@@ -3290,7 +3342,7 @@ function App() {
                       setComments(updated);
                       return;
                     }
-                    await updateCommentPosition(commentId, x, y);
+                    await updateCommentPosition(commentId, x, y, activeSitemapId || undefined);
                     // Real-time update will handle state update
                   } catch (err) {
                     console.error('Failed to move comment:', err);
@@ -3691,7 +3743,7 @@ function App() {
             <div className="mb-6">
               <h2 className="text-lg font-semibold text-gray-900 mb-2">Invite team members</h2>
               <p className="text-gray-600 text-sm">Invite your team and collaborate on your project.</p>
-            </div>
+      </div>
 
             {/* Permission selector */}
             <div className="mb-4">
@@ -3718,8 +3770,11 @@ function App() {
                           setSharePermission('view');
                           // Generate new token when permission changes (ensures different URLs)
                           try {
+                            // Get current sitemap data for JSONBin.io
+                            const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
+                            const currentComments = comments.filter(c => c.sitemapId === activeSitemapId);
                             // Add a safety timeout to ensure loading state clears
-                            const updatePromise = updateSharePermission(activeSitemapId, 'view');
+                            const updatePromise = updateSharePermission(activeSitemapId, 'view', currentSitemap, currentComments);
                             const timeoutPromise = new Promise((_, reject) =>
                               setTimeout(() => reject(new Error('Update timeout')), 6000)
                             );
@@ -3759,8 +3814,11 @@ function App() {
                           setSharePermission('edit');
                           // Generate new token when permission changes (ensures different URLs)
                           try {
+                            // Get current sitemap data for JSONBin.io
+                            const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
+                            const currentComments = comments.filter(c => c.sitemapId === activeSitemapId);
                             // Add a safety timeout to ensure loading state clears
-                            const updatePromise = updateSharePermission(activeSitemapId, 'edit');
+                            const updatePromise = updateSharePermission(activeSitemapId, 'edit', currentSitemap, currentComments);
                             const timeoutPromise = new Promise((_, reject) =>
                               setTimeout(() => reject(new Error('Update timeout')), 6000)
                             );

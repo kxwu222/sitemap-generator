@@ -1,6 +1,8 @@
 import { supabase } from '../lib/supabase';
 import { Comment } from '../types/comments';
 import { RealtimeChannel } from '@supabase/supabase-js';
+import { getSharedBin, updateBinComments, isJsonBinConfigured } from './jsonbinService';
+import { getShareToken } from './sharingService';
 
 // Database row type
 interface CommentRow {
@@ -37,10 +39,98 @@ function rowToComment(row: CommentRow): Comment {
   };
 }
 
+// Helper: Sync comments to JSONBin.io if sitemap is shared
+async function syncCommentsToJsonBin(sitemapId: string, comments: Comment[]): Promise<void> {
+  if (!isJsonBinConfigured()) return;
+  
+  try {
+    const shareToken = await getShareToken(sitemapId);
+    if (shareToken) {
+      await updateBinComments(shareToken, comments);
+      console.log('Synced comments to JSONBin.io:', { sitemapId, shareToken, commentCount: comments.length });
+    }
+  } catch (error) {
+    console.warn('Failed to sync comments to JSONBin.io:', error);
+    // Don't throw - this is a sync operation, not critical
+  }
+}
+
 // Create a new comment
 export async function createComment(sitemapId: string, x: number, y: number, text: string): Promise<Comment> {
+  // Try JSONBin.io first if sitemap is shared
+  if (isJsonBinConfigured()) {
+    try {
+      const shareToken = await getShareToken(sitemapId);
+      if (shareToken) {
+        // Get current comments from bin
+        const sharedData = await getSharedBin(shareToken);
+        if (sharedData) {
+          // Get user info (try Supabase, fallback to localStorage)
+          let userId = 'anonymous';
+          let userEmail = '';
+          let userName = 'Anonymous User';
+          
+          if (supabase) {
+            try {
+              const { data: { user } } = await supabase.auth.getUser();
+              if (user) {
+                userId = user.id;
+                userEmail = user.email || '';
+                userName = user.user_metadata?.name || user.email?.split('@')[0] || `User ${user.id.slice(0, 8)}`;
+              }
+            } catch (e) {
+              // Fallback to localStorage user
+              const localUser = localStorage.getItem('localUser');
+              if (localUser) {
+                const user = JSON.parse(localUser);
+                userId = user.id || 'local-user';
+                userEmail = user.email || '';
+                userName = user.name || 'Local User';
+              }
+            }
+          } else {
+            // Use localStorage user
+            const localUser = localStorage.getItem('localUser');
+            if (localUser) {
+              const user = JSON.parse(localUser);
+              userId = user.id || 'local-user';
+              userEmail = user.email || '';
+              userName = user.name || 'Local User';
+            }
+          }
+
+          const commentId = crypto.randomUUID();
+          const newComment: Comment = {
+            id: commentId,
+            sitemapId,
+            userId,
+            userName,
+            userEmail,
+            x,
+            y,
+            text: text.trim(),
+            resolved: false,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+
+          // Add to comments array and update bin
+          const updatedComments = [newComment, ...sharedData.comments];
+          await updateBinComments(shareToken, updatedComments);
+          
+          console.log('Created comment via JSONBin.io:', newComment);
+          return newComment;
+        }
+      }
+    } catch (jsonbinError) {
+      console.warn('JSONBin.io comment creation failed, falling back to Supabase:', jsonbinError);
+      // Fall through to Supabase
+    }
+  }
+
+  // Fallback to Supabase
   if (!supabase) {
-    throw new Error('Supabase client not initialized');
+    throw new Error('Supabase client not initialized and JSONBin.io not available');
   }
 
   const { data: { user } } = await supabase.auth.getUser();
@@ -73,13 +163,47 @@ export async function createComment(sitemapId: string, x: number, y: number, tex
     throw new Error(`Failed to create comment: ${error.message}`);
   }
 
-  return rowToComment(data);
+  const comment = rowToComment(data);
+  
+  // Sync to JSONBin.io if sitemap is shared
+  try {
+    const allComments = await getComments(sitemapId);
+    await syncCommentsToJsonBin(sitemapId, allComments);
+  } catch (e) {
+    // Non-critical
+  }
+
+  return comment;
 }
 
 // Get all comments for a sitemap
 export async function getComments(sitemapId: string): Promise<Comment[]> {
+  // Try JSONBin.io first if sitemap is shared
+  if (isJsonBinConfigured()) {
+    try {
+      const shareToken = await getShareToken(sitemapId);
+      if (shareToken) {
+        const sharedData = await getSharedBin(shareToken);
+        if (sharedData && sharedData.comments) {
+          console.log('Loaded comments from JSONBin.io:', { sitemapId, shareToken, count: sharedData.comments.length });
+          return sharedData.comments;
+        }
+      }
+    } catch (jsonbinError) {
+      console.warn('JSONBin.io comment loading failed, falling back to Supabase:', jsonbinError);
+      // Fall through to Supabase
+    }
+  }
+
+  // Fallback to Supabase
   if (!supabase) {
-    throw new Error('Supabase client not initialized');
+    // Try localStorage fallback
+    const storageKey = `comments_${sitemapId}`;
+    const stored = localStorage.getItem(storageKey);
+    if (stored) {
+      return JSON.parse(stored);
+    }
+    return [];
   }
 
   const { data, error } = await supabase
@@ -98,9 +222,35 @@ export async function getComments(sitemapId: string): Promise<Comment[]> {
 }
 
 // Update comment text
-export async function updateComment(commentId: string, text: string): Promise<Comment> {
+export async function updateComment(commentId: string, text: string, sitemapId?: string): Promise<Comment> {
+  // Try JSONBin.io first if sitemap is shared
+  if (isJsonBinConfigured() && sitemapId) {
+    try {
+      const shareToken = await getShareToken(sitemapId);
+      if (shareToken) {
+        const sharedData = await getSharedBin(shareToken);
+        if (sharedData) {
+          const updatedComments = sharedData.comments.map(c =>
+            c.id === commentId
+              ? { ...c, text: text.trim(), updatedAt: new Date().toISOString() }
+              : c
+          );
+          await updateBinComments(shareToken, updatedComments);
+          const updated = updatedComments.find(c => c.id === commentId);
+          if (updated) {
+            console.log('Updated comment via JSONBin.io:', updated);
+            return updated;
+          }
+        }
+      }
+    } catch (jsonbinError) {
+      console.warn('JSONBin.io comment update failed, falling back to Supabase:', jsonbinError);
+    }
+  }
+
+  // Fallback to Supabase
   if (!supabase) {
-    throw new Error('Supabase client not initialized');
+    throw new Error('Supabase client not initialized and JSONBin.io not available');
   }
 
   const { data, error } = await supabase
@@ -118,13 +268,51 @@ export async function updateComment(commentId: string, text: string): Promise<Co
     throw new Error(`Failed to update comment: ${error.message}`);
   }
 
-  return rowToComment(data);
+  const comment = rowToComment(data);
+  
+  // Sync to JSONBin.io if sitemap is shared
+  if (sitemapId) {
+    try {
+      const allComments = await getComments(sitemapId);
+      await syncCommentsToJsonBin(sitemapId, allComments);
+    } catch (e) {
+      // Non-critical
+    }
+  }
+
+  return comment;
 }
 
 // Update comment position
-export async function updateCommentPosition(commentId: string, x: number, y: number): Promise<Comment> {
+export async function updateCommentPosition(commentId: string, x: number, y: number, sitemapId?: string): Promise<Comment> {
+  // Try JSONBin.io first if sitemap is shared
+  if (isJsonBinConfigured() && sitemapId) {
+    try {
+      const shareToken = await getShareToken(sitemapId);
+      if (shareToken) {
+        const sharedData = await getSharedBin(shareToken);
+        if (sharedData) {
+          const updatedComments = sharedData.comments.map(c =>
+            c.id === commentId
+              ? { ...c, x, y, updatedAt: new Date().toISOString() }
+              : c
+          );
+          await updateBinComments(shareToken, updatedComments);
+          const updated = updatedComments.find(c => c.id === commentId);
+          if (updated) {
+            console.log('Updated comment position via JSONBin.io:', updated);
+            return updated;
+          }
+        }
+      }
+    } catch (jsonbinError) {
+      console.warn('JSONBin.io comment position update failed, falling back to Supabase:', jsonbinError);
+    }
+  }
+
+  // Fallback to Supabase
   if (!supabase) {
-    throw new Error('Supabase client not initialized');
+    throw new Error('Supabase client not initialized and JSONBin.io not available');
   }
 
   const { data, error } = await supabase
@@ -143,13 +331,51 @@ export async function updateCommentPosition(commentId: string, x: number, y: num
     throw new Error(`Failed to update comment position: ${error.message}`);
   }
 
-  return rowToComment(data);
+  const comment = rowToComment(data);
+  
+  // Sync to JSONBin.io if sitemap is shared
+  if (sitemapId) {
+    try {
+      const allComments = await getComments(sitemapId);
+      await syncCommentsToJsonBin(sitemapId, allComments);
+    } catch (e) {
+      // Non-critical
+    }
+  }
+
+  return comment;
 }
 
 // Resolve/unresolve a comment
-export async function resolveComment(commentId: string, resolved: boolean): Promise<Comment> {
+export async function resolveComment(commentId: string, resolved: boolean, sitemapId?: string): Promise<Comment> {
+  // Try JSONBin.io first if sitemap is shared
+  if (isJsonBinConfigured() && sitemapId) {
+    try {
+      const shareToken = await getShareToken(sitemapId);
+      if (shareToken) {
+        const sharedData = await getSharedBin(shareToken);
+        if (sharedData) {
+          const updatedComments = sharedData.comments.map(c =>
+            c.id === commentId
+              ? { ...c, resolved, updatedAt: new Date().toISOString() }
+              : c
+          );
+          await updateBinComments(shareToken, updatedComments);
+          const updated = updatedComments.find(c => c.id === commentId);
+          if (updated) {
+            console.log('Resolved comment via JSONBin.io:', updated);
+            return updated;
+          }
+        }
+      }
+    } catch (jsonbinError) {
+      console.warn('JSONBin.io comment resolve failed, falling back to Supabase:', jsonbinError);
+    }
+  }
+
+  // Fallback to Supabase
   if (!supabase) {
-    throw new Error('Supabase client not initialized');
+    throw new Error('Supabase client not initialized and JSONBin.io not available');
   }
 
   const { data, error } = await supabase
@@ -167,12 +393,42 @@ export async function resolveComment(commentId: string, resolved: boolean): Prom
     throw new Error(`Failed to resolve comment: ${error.message}`);
   }
 
-  return rowToComment(data);
+  const comment = rowToComment(data);
+  
+  // Sync to JSONBin.io if sitemap is shared
+  if (sitemapId) {
+    try {
+      const allComments = await getComments(sitemapId);
+      await syncCommentsToJsonBin(sitemapId, allComments);
+    } catch (e) {
+      // Non-critical
+    }
+  }
+
+  return comment;
 }
 
 // Delete a comment
 export async function deleteComment(commentId: string, sitemapId?: string): Promise<void> {
-  // If Supabase is available, use it
+  // Try JSONBin.io first if sitemap is shared
+  if (isJsonBinConfigured() && sitemapId) {
+    try {
+      const shareToken = await getShareToken(sitemapId);
+      if (shareToken) {
+        const sharedData = await getSharedBin(shareToken);
+        if (sharedData) {
+          const updatedComments = sharedData.comments.filter(c => c.id !== commentId);
+          await updateBinComments(shareToken, updatedComments);
+          console.log('Deleted comment via JSONBin.io:', { commentId, sitemapId });
+          return; // Success - exit early
+        }
+      }
+    } catch (jsonbinError) {
+      console.warn('JSONBin.io comment delete failed, falling back to Supabase:', jsonbinError);
+    }
+  }
+
+  // Fallback to Supabase
   if (supabase) {
     const { error } = await supabase
       .from('comments')
@@ -183,6 +439,17 @@ export async function deleteComment(commentId: string, sitemapId?: string): Prom
       console.error('Error deleting comment:', error);
       throw new Error(`Failed to delete comment: ${error.message}`);
     }
+    
+    // Sync to JSONBin.io if sitemap is shared
+    if (sitemapId) {
+      try {
+        const allComments = await getComments(sitemapId);
+        await syncCommentsToJsonBin(sitemapId, allComments);
+      } catch (e) {
+        // Non-critical
+      }
+    }
+    
     return; // Success - exit early
   }
 

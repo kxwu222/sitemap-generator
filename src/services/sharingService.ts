@@ -1,6 +1,7 @@
 import { supabase } from '../lib/supabase';
 import { SitemapData } from '../types/sitemap';
-import { SharePermission } from '../types/comments';
+import { SharePermission, Comment } from '../types/comments';
+import { createSharedBin, getSharedBin, updateSharedBin, isJsonBinConfigured } from './jsonbinService';
 
 // Generate a unique share token
 function generateToken(): string {
@@ -8,7 +9,39 @@ function generateToken(): string {
 }
 
 // Generate and save share token for a sitemap
-export async function generateShareToken(sitemapId: string, permission: SharePermission = 'view'): Promise<string> {
+export async function generateShareToken(
+  sitemapId: string, 
+  permission: SharePermission = 'view',
+  sitemap?: SitemapData,
+  comments: Comment[] = []
+): Promise<string> {
+  // Try JSONBin.io first if configured
+  if (isJsonBinConfigured() && sitemap) {
+    try {
+      console.log('[generateShareToken] Creating JSONBin.io bin...', { sitemapId, permission });
+      const binId = await createSharedBin(sitemap, permission, comments);
+      console.log('Share token (bin) generated successfully in JSONBin.io:', { sitemapId, binId, permission });
+      
+      // Also store in localStorage as backup
+      try {
+        const storageKey = `share_token_${sitemapId}`;
+        const permissionKey = `share_token_${sitemapId}_permission`;
+        localStorage.setItem(storageKey, binId);
+        localStorage.setItem(permissionKey, permission);
+      } catch (e) {
+        console.warn('Failed to save token to localStorage backup:', e);
+      }
+      
+      return binId;
+    } catch (jsonbinError: any) {
+      console.warn('JSONBin.io token generation failed, falling back to Supabase/localStorage:', {
+        error: jsonbinError?.message || jsonbinError,
+        sitemapId,
+      });
+      // Fall through to Supabase/localStorage
+    }
+  }
+
   const token = generateToken();
 
   if (supabase) {
@@ -91,6 +124,28 @@ export async function generateShareToken(sitemapId: string, permission: SharePer
 
 // Load sitemap by share token
 export async function getSitemapByShareToken(token: string): Promise<{ sitemap: SitemapData; permission: SharePermission } | null> {
+  // Try JSONBin.io first if configured
+  if (isJsonBinConfigured()) {
+    try {
+      console.log('[getSitemapByShareToken] Loading from JSONBin.io...', { token });
+      const sharedData = await getSharedBin(token);
+      
+      if (sharedData) {
+        console.log('Loaded sitemap from JSONBin.io:', { token, permission: sharedData.permission });
+        return {
+          sitemap: sharedData.sitemap,
+          permission: sharedData.permission,
+        };
+      }
+    } catch (jsonbinError: any) {
+      console.warn('JSONBin.io load failed, falling back to Supabase/localStorage:', {
+        error: jsonbinError?.message || jsonbinError,
+        token,
+      });
+      // Fall through to Supabase/localStorage
+    }
+  }
+
   // Try Supabase first if available
   if (supabase) {
     const { data, error } = await supabase
@@ -346,11 +401,16 @@ export async function getShareTokenWithPermission(sitemapId: string): Promise<{ 
 }
 
 // Update share permission by generating a new token (ensures different URLs for different permissions)
-export async function updateSharePermission(sitemapId: string, permission: SharePermission): Promise<string> {
+export async function updateSharePermission(
+  sitemapId: string, 
+  permission: SharePermission,
+  sitemap?: SitemapData,
+  comments: Comment[] = []
+): Promise<string> {
   // Generate a new token when permission changes
   // This ensures "view only" and "can edit" get different URLs
   console.log('[updateSharePermission] Generating new token for permission change:', { sitemapId, permission });
-  return await generateShareToken(sitemapId, permission);
+  return await generateShareToken(sitemapId, permission, sitemap, comments);
 }
 
 // Send invite to a user by email using Supabase's built-in email templates
