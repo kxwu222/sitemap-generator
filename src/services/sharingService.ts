@@ -27,6 +27,10 @@ type SharePayload = {
   comments: Comment[];
 };
 
+function generateToken(): string {
+  return crypto.randomUUID();
+}
+
 function cloneSitemapForShare(sitemap: SitemapData): SharePayload['sitemap'] {
   return {
     id: sitemap.id,
@@ -42,14 +46,6 @@ function cloneSitemapForShare(sitemap: SitemapData): SharePayload['sitemap'] {
   };
 }
 
-function cloneCommentsForShare(comments: Comment[]): Comment[] {
-  return JSON.parse(JSON.stringify(comments));
-}
-
-function cloneFigures(figures: Figure[]): Figure[] {
-  return JSON.parse(JSON.stringify(figures));
-}
-
 function toSharePayload(
   sitemap: SitemapData,
   comments: Comment[],
@@ -60,33 +56,120 @@ function toSharePayload(
     v: SHARE_PAYLOAD_VERSION,
     ts: Date.now(),
     sitemap: cloneSitemapForShare(sitemap),
-    figures: cloneFigures(figures),
+    figures: JSON.parse(JSON.stringify(figures)),
     freeLines: JSON.parse(JSON.stringify(freeLines)),
-    comments: cloneCommentsForShare(comments),
+    comments: JSON.parse(JSON.stringify(comments)),
   };
 }
 
-export function buildSharePayloadToken(
+// Store share payload in Supabase and return a short token
+export async function buildShareLink(
   sitemap: SitemapData,
   comments: Comment[],
+  options?: { origin?: string; path?: string },
   figures: Figure[] = [],
   freeLines: FreeLine[] = []
-): string {
+): Promise<string> {
   const payload = toSharePayload(sitemap, comments, figures, freeLines);
   const json = JSON.stringify(payload);
-  return compressToEncodedURIComponent(json);
+  const compressed = compressToEncodedURIComponent(json);
+  
+  const token = generateToken();
+  
+  // Try to store in Supabase first
+  if (supabase) {
+    try {
+      const { error } = await supabase
+        .from('sitemaps')
+        .upsert({
+          id: token,
+          name: `shared_${sitemap.name}`,
+          data: { payload: compressed },
+          share_token: token,
+          share_permission: 'view',
+          created_at: new Date().toISOString(),
+          last_modified: new Date().toISOString(),
+        }, {
+          onConflict: 'id'
+        });
+      
+      if (!error) {
+        const origin =
+          options?.origin ??
+          (typeof window !== 'undefined' ? window.location.origin : '');
+        const path =
+          options?.path ??
+          (typeof window !== 'undefined' ? window.location.pathname : '');
+        const base = `${origin}${path}`;
+        const separator = base.includes('?') ? '&' : '?';
+        return `${base}${separator}share=${token}`;
+      }
+    } catch (err) {
+      console.warn('Failed to store share payload in Supabase, falling back to localStorage:', err);
+    }
+  }
+  
+  // Fallback to localStorage
+  try {
+    localStorage.setItem(`share_payload_${token}`, compressed);
+    const origin =
+      options?.origin ??
+      (typeof window !== 'undefined' ? window.location.origin : '');
+    const path =
+      options?.path ??
+      (typeof window !== 'undefined' ? window.location.pathname : '');
+    const base = `${origin}${path}`;
+    const separator = base.includes('?') ? '&' : '?';
+    return `${base}${separator}share=${token}`;
+  } catch (err) {
+    console.error('Failed to store share payload in localStorage:', err);
+    throw new Error('Failed to generate share link');
+  }
 }
 
-export function decodeSharePayload(token: string): {
+// Retrieve share payload by token
+export async function decodeSharePayload(token: string): Promise<{
   sitemap: SitemapData;
   comments: Comment[];
   figures: Figure[];
   freeLines: FreeLine[];
   timestamp: number;
   version: number;
-} | null {
+} | null> {
+  let compressed: string | null = null;
+  
+  // Try Supabase first
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from('sitemaps')
+        .select('data')
+        .eq('share_token', token)
+        .single();
+      
+      if (!error && data?.data?.payload) {
+        compressed = data.data.payload;
+      }
+    } catch (err) {
+      console.warn('Failed to load share payload from Supabase, trying localStorage:', err);
+    }
+  }
+  
+  // Fallback to localStorage
+  if (!compressed) {
+    try {
+      compressed = localStorage.getItem(`share_payload_${token}`);
+    } catch (err) {
+      console.error('Failed to load share payload from localStorage:', err);
+    }
+  }
+  
+  if (!compressed) {
+    return null;
+  }
+  
   try {
-    const json = decompressFromEncodedURIComponent(token);
+    const json = decompressFromEncodedURIComponent(compressed);
     if (!json) return null;
     const payload = JSON.parse(json) as SharePayload;
     if (!payload?.sitemap) {
@@ -111,25 +194,6 @@ export function decodeSharePayload(token: string): {
     console.error('Failed to decode share payload:', error);
     return null;
   }
-}
-
-export function buildShareLink(
-  sitemap: SitemapData,
-  comments: Comment[],
-  options?: { origin?: string; path?: string },
-  figures: Figure[] = [],
-  freeLines: FreeLine[] = []
-): string {
-  const token = buildSharePayloadToken(sitemap, comments, figures, freeLines);
-  const origin =
-    options?.origin ??
-    (typeof window !== 'undefined' ? window.location.origin : '');
-  const path =
-    options?.path ??
-    (typeof window !== 'undefined' ? window.location.pathname : '');
-  const base = `${origin}${path}`;
-  const separator = base.includes('?') ? '&' : '?';
-  return `${base}${separator}share=${token}`;
 }
 
 // Send invite to a user by email using Supabase's built-in email templates

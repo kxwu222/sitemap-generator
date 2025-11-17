@@ -350,78 +350,84 @@ function App() {
       return;
     }
 
-    const decoded = decodeSharePayload(shareParam);
-    if (!decoded) {
-      alert('Invalid or expired share link.');
-      return;
-    }
+    decodeSharePayload(shareParam)
+      .then(decoded => {
+        if (!decoded) {
+          alert('Invalid or expired share link.');
+          return;
+        }
 
-    const {
-      sitemap: payloadSitemap,
-      comments: payloadComments,
-      figures: payloadFigures,
-      freeLines: payloadFreeLines,
-    } = decoded;
+        const {
+          sitemap: payloadSitemap,
+          comments: payloadComments,
+          figures: payloadFigures,
+          freeLines: payloadFreeLines,
+        } = decoded;
 
-    const sitemapId = payloadSitemap.id || `shared-${Date.now()}`;
-    const sharedSitemap: SitemapData = {
-      ...payloadSitemap,
-      id: sitemapId,
-      isShared: true,
-      sharePermission: 'view',
-    };
+        const sitemapId = payloadSitemap.id || `shared-${Date.now()}`;
+        const sharedSitemap: SitemapData = {
+          ...payloadSitemap,
+          id: sitemapId,
+          isShared: true,
+          sharePermission: 'view',
+        };
 
-    setShareMode('viewer');
-    setIsViewerMode(true);
-    setSharedSitemapName(sharedSitemap.name);
+        setShareMode('viewer');
+        setIsViewerMode(true);
+        setSharedSitemapName(sharedSitemap.name);
 
-    setSitemaps(prev => {
-      const existingIndex = prev.findIndex(s => s.id === sitemapId);
-      if (existingIndex >= 0) {
-        const updated = [...prev];
-        updated[existingIndex] = { ...updated[existingIndex], ...sharedSitemap };
-        return updated;
-      }
-      return [...prev, sharedSitemap];
-    });
-
-    try {
-      const sitemapsStr = localStorage.getItem('sitemaps');
-      const existingSitemaps: SitemapData[] = sitemapsStr ? JSON.parse(sitemapsStr) : [];
-      const existingIndex = existingSitemaps.findIndex(s => s.id === sitemapId);
-
-      if (existingIndex >= 0) {
-        existingSitemaps[existingIndex] = sharedSitemap;
-      } else {
-        existingSitemaps.push(sharedSitemap);
-      }
-
-      localStorage.setItem('sitemaps', JSON.stringify(existingSitemaps));
-
-      if (isSupabaseConfigured() && supabase) {
-        saveSitemap(sharedSitemap).catch(err => {
-          console.warn('Failed to save shared sitemap to Supabase:', err);
+        setSitemaps(prev => {
+          const existingIndex = prev.findIndex(s => s.id === sitemapId);
+          if (existingIndex >= 0) {
+            const updated = [...prev];
+            updated[existingIndex] = { ...updated[existingIndex], ...sharedSitemap };
+            return updated;
+          }
+          return [...prev, sharedSitemap];
         });
-      }
-    } catch (error) {
-      console.error('Failed to persist shared sitemap locally:', error);
-    }
 
-    setActiveSitemapId(sitemapId);
-    setNodes(JSON.parse(JSON.stringify(sharedSitemap.nodes)));
-    setExtraLinks(JSON.parse(JSON.stringify(sharedSitemap.extraLinks)));
-    setLinkStyles(JSON.parse(JSON.stringify(sharedSitemap.linkStyles)));
-    setColorOverrides(JSON.parse(JSON.stringify(sharedSitemap.colorOverrides)));
-    setUrls(JSON.parse(JSON.stringify(sharedSitemap.urls)));
-    setSelectionGroups(JSON.parse(JSON.stringify(sharedSitemap.selectionGroups || [])));
-    setFigures(JSON.parse(JSON.stringify(payloadFigures || [])));
-    setFreeLines(JSON.parse(JSON.stringify(payloadFreeLines || [])));
-    setComments(JSON.parse(JSON.stringify(payloadComments || [])));
+        try {
+          const sitemapsStr = localStorage.getItem('sitemaps');
+          const existingSitemaps: SitemapData[] = sitemapsStr ? JSON.parse(sitemapsStr) : [];
+          const existingIndex = existingSitemaps.findIndex(s => s.id === sitemapId);
 
-    getComments(sitemapId)
-      .then(setComments)
+          if (existingIndex >= 0) {
+            existingSitemaps[existingIndex] = sharedSitemap;
+          } else {
+            existingSitemaps.push(sharedSitemap);
+          }
+
+          localStorage.setItem('sitemaps', JSON.stringify(existingSitemaps));
+
+          if (isSupabaseConfigured() && supabase) {
+            saveSitemap(sharedSitemap).catch(err => {
+              console.warn('Failed to save shared sitemap to Supabase:', err);
+            });
+          }
+        } catch (error) {
+          console.error('Failed to persist shared sitemap locally:', error);
+        }
+
+        setActiveSitemapId(sitemapId);
+        setNodes(JSON.parse(JSON.stringify(sharedSitemap.nodes)));
+        setExtraLinks(JSON.parse(JSON.stringify(sharedSitemap.extraLinks)));
+        setLinkStyles(JSON.parse(JSON.stringify(sharedSitemap.linkStyles)));
+        setColorOverrides(JSON.parse(JSON.stringify(sharedSitemap.colorOverrides)));
+        setUrls(JSON.parse(JSON.stringify(sharedSitemap.urls)));
+        setSelectionGroups(JSON.parse(JSON.stringify(sharedSitemap.selectionGroups || [])));
+        setFigures(JSON.parse(JSON.stringify(payloadFigures || [])));
+        setFreeLines(JSON.parse(JSON.stringify(payloadFreeLines || [])));
+        setComments(JSON.parse(JSON.stringify(payloadComments || [])));
+
+        getComments(sitemapId)
+          .then(setComments)
+          .catch(err => {
+            console.error('Failed to load comments for shared sitemap:', err);
+          });
+      })
       .catch(err => {
-        console.error('Failed to load comments for shared sitemap:', err);
+        console.error('Failed to decode share payload:', err);
+        alert('Invalid or expired share link.');
       });
   }, []);
 
@@ -610,7 +616,7 @@ function App() {
     try {
       let link = shareLink;
       if (!link) {
-        link = rebuildShareLink();
+        link = await rebuildShareLink();
       }
 
       if (!link) {
@@ -704,7 +710,7 @@ function App() {
   };
 
   const handleCopyShareLink = async () => {
-    const link = shareLink || rebuildShareLink();
+    const link = shareLink || await rebuildShareLink();
     if (!link) {
       alert(shareLinkError || 'Unable to generate share link. Please try again.');
       return;
@@ -913,7 +919,7 @@ function App() {
     };
   }, [activeSitemapId, sitemaps, nodes, extraLinks, linkStyles, colorOverrides, urls, selectionGroups]);
 
-  const rebuildShareLink = useCallback((): string | null => {
+  const rebuildShareLink = useCallback(async (): Promise<string | null> => {
     const snapshot = buildShareableSitemapSnapshot();
     if (!snapshot) {
       setShareLink('');
@@ -923,7 +929,7 @@ function App() {
 
     setIsBuildingShareLink(true);
     try {
-      const link = buildShareLink(
+      const link = await buildShareLink(
         snapshot,
         comments,
         undefined,
@@ -945,7 +951,9 @@ function App() {
 
   useEffect(() => {
     if (showShareModal) {
-      rebuildShareLink();
+      rebuildShareLink().catch(err => {
+        console.error('Failed to rebuild share link:', err);
+      });
       setInviteSuccessMessage('');
       setShareLinkError(null);
     } else {
@@ -3708,127 +3716,11 @@ function App() {
                     <span className="text-sm text-green-600">Copied!</span>
                   )}
                 </div>
-                {shareLinkError ? (
+                {shareLinkError && (
                   <p className="text-sm text-red-600 mt-1">{shareLinkError}</p>
-                ) : (
-                  <p className="text-xs text-gray-500 mt-1">Link updates automatically with the latest canvas state.</p>
                 )}
               </div>
 
-              {/* Invite member section */}
-              <div className="mb-3">
-                <div className="flex flex-col gap-2">
-                  {/* Email input with pills inside */}
-                  <div className="flex gap-2 items-start">
-                    <div className="flex-1">
-                      <div
-                        className={`flex flex-wrap items-center gap-1 px-2 py-2 border rounded text-sm min-h-[42px] ${inviteEmailError ? 'border-red-500' : 'border-gray-300'}`}
-                        onClick={(e) => {
-                          if (e.target === e.currentTarget) {
-                            const input = document.getElementById('email-input') as HTMLInputElement;
-                            if (input) {
-                              input.focus();
-                            }
-                          }
-                        }}
-                      >
-                        {inviteEmails.map((email, index) => (
-                          <div
-                            key={index}
-                            className="flex items-center gap-1 px-2 py-0.5 bg-gray-100 rounded-full text-sm"
-                          >
-                            <span className="text-gray-700 text-xs">{email}</span>
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleRemoveEmail(email);
-                              }}
-                              className="text-gray-500 hover:text-gray-700 ml-0.5"
-                              title="Remove email"
-                            >
-                              <X className="w-3 h-3" strokeWidth={2} />
-                            </button>
-                          </div>
-                        ))}
-                        <input
-                          id="email-input"
-                          type="email"
-                          value={inviteEmailInput}
-                          onChange={(e) => {
-                            e.stopPropagation();
-                            setInviteEmailInput(e.target.value);
-                            if (inviteEmailError) setInviteEmailError('');
-                            if (inviteSuccessMessage) setInviteSuccessMessage('');
-                          }}
-                          onClick={(e) => e.stopPropagation()}
-                          placeholder={inviteEmails.length === 0 ? 'Enter email address...' : ''}
-                          className="flex-1 min-w-[120px] outline-none bg-transparent text-sm"
-                          onKeyDown={(e) => {
-                            e.stopPropagation();
-                            if (e.key === 'Enter' && inviteEmailInput.trim()) {
-                              e.preventDefault();
-                              handleAddEmail(inviteEmailInput);
-                            } else if (e.key === ',' && inviteEmailInput.trim()) {
-                              e.preventDefault();
-                              handleAddEmail(inviteEmailInput);
-                            } else if (e.key === ' ' && inviteEmailInput.trim()) {
-                              e.preventDefault();
-                              handleAddEmail(inviteEmailInput);
-                            } else if (e.key === 'Backspace' && inviteEmailInput === '' && inviteEmails.length > 0) {
-                              e.preventDefault();
-                              handleRemoveEmail(inviteEmails[inviteEmails.length - 1]);
-                            }
-                          }}
-                        />
-                      </div>
-                      {inviteEmailError && (
-                        <p className="text-sm text-red-600 mt-1">{inviteEmailError}</p>
-                      )}
-                      {inviteSuccessMessage && (
-                        <p className="text-sm text-green-600 mt-1">{inviteSuccessMessage}</p>
-                      )}
-                    </div>
-                    <button
-                      onClick={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        handleSendInvite(e);
-                      }}
-                      disabled={inviteEmails.length === 0 || isSendingInvite}
-                      className="px-4 py-2 text-sm rounded-lg shadow-sm min-h-[42px] transition-colors disabled:cursor-not-allowed flex-shrink-0 flex items-center gap-2"
-                      style={{
-                        backgroundColor: (inviteEmails.length === 0 || isSendingInvite) ? '#f5f0e8' : '#CB6015',
-                        color: (inviteEmails.length === 0 || isSendingInvite) ? '#9ca3af' : '#ffffff',
-                      }}
-                      onMouseEnter={(e) => {
-                        if (inviteEmails.length > 0 && !e.currentTarget.disabled && !isSendingInvite) {
-                          e.currentTarget.style.backgroundColor = '#CB6015';
-                        }
-                      }}
-                      onMouseLeave={(e) => {
-                        if (inviteEmails.length > 0 && !e.currentTarget.disabled && !isSendingInvite) {
-                          e.currentTarget.style.backgroundColor = '#CB6015';
-                        } else if (e.currentTarget.disabled || isSendingInvite) {
-                          e.currentTarget.style.backgroundColor = '#f5f0e8';
-                        }
-                      }}
-                    >
-                      {isSendingInvite ? (
-                        <>
-                          <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                          </svg>
-                          <span>Sending...</span>
-                        </>
-                      ) : (
-                        <span>Send Invite</span>
-                      )}
-                    </button>
-                  </div>
-                </div>
-              </div>
 
               <div className="flex justify-end">
                 <button
