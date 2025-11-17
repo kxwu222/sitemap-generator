@@ -160,55 +160,77 @@ export async function isSitemapShared(sitemapId: string): Promise<boolean> {
 
 // Get share token for a sitemap
 export async function getShareToken(sitemapId: string): Promise<string | null> {
-  if (supabase) {
-    // Try Supabase first
-    const { data, error } = await supabase
-      .from('sitemaps')
-      .select('share_token')
-      .eq('id', sitemapId)
-      .single();
-
-    if (!error && data?.share_token) {
-      return data.share_token;
-    }
-  }
-
-  // Fallback to localStorage
   try {
-    const storageKey = `share_token_${sitemapId}`;
-    const token = localStorage.getItem(storageKey);
-    return token;
+    if (supabase) {
+      // Try Supabase first
+      try {
+        const { data, error } = await supabase
+          .from('sitemaps')
+          .select('share_token')
+          .eq('id', sitemapId)
+          .single();
+
+        if (!error && data?.share_token) {
+          return data.share_token;
+        }
+      } catch (supabaseError) {
+        // Supabase query failed, fall through to localStorage
+        console.warn('Supabase query failed, falling back to localStorage:', supabaseError);
+      }
+    }
+
+    // Fallback to localStorage
+    try {
+      const storageKey = `share_token_${sitemapId}`;
+      const token = localStorage.getItem(storageKey);
+      return token;
+    } catch (localStorageError) {
+      console.error('Error getting share token from localStorage:', localStorageError);
+      return null;
+    }
   } catch (error) {
-    console.error('Error getting share token from localStorage:', error);
+    // Catch any unexpected errors
+    console.error('Unexpected error in getShareToken:', error);
     return null;
   }
 }
 
 // Get share token with permission for a sitemap
 export async function getShareTokenWithPermission(sitemapId: string): Promise<{ token: string | null; permission: SharePermission }> {
-  if (supabase) {
-    // Try Supabase first
-    const { data, error } = await supabase
-      .from('sitemaps')
-      .select('share_token, share_permission')
-      .eq('id', sitemapId)
-      .single();
-
-    if (!error && data?.share_token) {
-      const permission: SharePermission = (data.share_permission === 'edit' ? 'edit' : 'view');
-      return { token: data.share_token, permission };
-    }
-  }
-
-  // Fallback to localStorage
   try {
-    const storageKey = `share_token_${sitemapId}`;
-    const permissionKey = `share_token_${sitemapId}_permission`;
-    const token = localStorage.getItem(storageKey);
-    const permission: SharePermission = (localStorage.getItem(permissionKey) === 'edit' ? 'edit' : 'view');
-    return { token, permission };
+    if (supabase) {
+      // Try Supabase first
+      try {
+        const { data, error } = await supabase
+          .from('sitemaps')
+          .select('share_token, share_permission')
+          .eq('id', sitemapId)
+          .single();
+
+        if (!error && data?.share_token) {
+          const permission: SharePermission = (data.share_permission === 'edit' ? 'edit' : 'view');
+          return { token: data.share_token, permission };
+        }
+      } catch (supabaseError) {
+        // Supabase query failed, fall through to localStorage
+        console.warn('Supabase query failed, falling back to localStorage:', supabaseError);
+      }
+    }
+
+    // Fallback to localStorage
+    try {
+      const storageKey = `share_token_${sitemapId}`;
+      const permissionKey = `share_token_${sitemapId}_permission`;
+      const token = localStorage.getItem(storageKey);
+      const permission: SharePermission = (localStorage.getItem(permissionKey) === 'edit' ? 'edit' : 'view');
+      return { token, permission };
+    } catch (localStorageError) {
+      console.error('Error getting share token from localStorage:', localStorageError);
+      return { token: null, permission: 'view' };
+    }
   } catch (error) {
-    console.error('Error getting share token from localStorage:', error);
+    // Catch any unexpected errors
+    console.error('Unexpected error in getShareTokenWithPermission:', error);
     return { token: null, permission: 'view' };
   }
 }
