@@ -345,72 +345,12 @@ export async function getShareTokenWithPermission(sitemapId: string): Promise<{ 
   }
 }
 
-// Update share permission for existing token (without changing the token)
-export async function updateSharePermission(sitemapId: string, permission: SharePermission): Promise<void> {
-  if (supabase) {
-    // Try Supabase first with timeout protection
-    try {
-      console.log('[updateSharePermission] Starting Supabase update...', { sitemapId, permission });
-      
-      // Create timeout promise (1 second)
-      const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => {
-          console.warn('[updateSharePermission] Update timeout after 1 second');
-          reject(new Error('Permission update timeout after 1 second'));
-        }, 1000)
-      );
-      
-      // Create update promise
-      const updateResult = supabase
-        .from('sitemaps')
-        .update({ share_permission: permission })
-        .eq('id', sitemapId);
-      
-      // Convert to proper promise and race with timeout
-      const updatePromise = new Promise((resolve, reject) => {
-        if (updateResult && typeof (updateResult as any).then === 'function') {
-          (updateResult as any).then(resolve, reject);
-        } else {
-          Promise.resolve(updateResult).then(resolve, reject);
-        }
-      });
-      
-      const { error } = await Promise.race([updatePromise, timeoutPromise]) as any;
-
-      if (error) {
-        console.error('Error updating share permission in Supabase:', error);
-        // Fall through to localStorage fallback
-      } else {
-        console.log('[updateSharePermission] Successfully updated permission in Supabase:', { sitemapId, permission });
-        // Also update in localStorage as backup
-        try {
-          const permissionKey = `share_token_${sitemapId}_permission`;
-          localStorage.setItem(permissionKey, permission);
-        } catch (e) {
-          console.warn('Failed to save permission to localStorage backup:', e);
-        }
-        return;
-      }
-    } catch (supabaseError: any) {
-      console.warn('Supabase permission update exception or timeout, using localStorage fallback:', {
-        error: supabaseError?.message || supabaseError,
-        sitemapId,
-      });
-      // Fall through to localStorage fallback
-    }
-  } else {
-    console.warn('Supabase not initialized, using localStorage fallback for updateSharePermission');
-  }
-
-  // Fallback to localStorage
-  try {
-    const permissionKey = `share_token_${sitemapId}_permission`;
-    localStorage.setItem(permissionKey, permission);
-    console.log('[updateSharePermission] Successfully updated permission in localStorage:', { sitemapId, permission });
-  } catch (error) {
-    console.error('Error updating share permission in localStorage:', error);
-    throw new Error('Failed to update share permission');
-  }
+// Update share permission by generating a new token (ensures different URLs for different permissions)
+export async function updateSharePermission(sitemapId: string, permission: SharePermission): Promise<string> {
+  // Generate a new token when permission changes
+  // This ensures "view only" and "can edit" get different URLs
+  console.log('[updateSharePermission] Generating new token for permission change:', { sitemapId, permission });
+  return await generateShareToken(sitemapId, permission);
 }
 
 // Send invite to a user by email using Supabase's built-in email templates
@@ -440,8 +380,16 @@ export async function sendInvite(sitemapId: string, email: string, shareUrl: str
 
     console.log('Calling send-invite Edge Function:', { email, sitemapId, shareUrl, sitemapName });
 
-    // Call the Supabase Edge Function which uses Supabase's email templates
-    const { data, error } = await supabase.functions.invoke('send-invite', {
+    // Create timeout promise (5 seconds for Edge Function - longer than DB queries)
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => {
+        console.warn('[sendInvite] Edge Function timeout after 5 seconds');
+        reject(new Error('Invite request timeout. The Edge Function may not be deployed or is taking too long.'));
+      }, 5000)
+    );
+
+    // Call the Supabase Edge Function with timeout protection
+    const invokePromise = supabase.functions.invoke('send-invite', {
       body: {
         email,
         shareUrl,
@@ -449,6 +397,8 @@ export async function sendInvite(sitemapId: string, email: string, shareUrl: str
         sitemapName,
       },
     });
+
+    const { data, error } = await Promise.race([invokePromise, timeoutPromise]) as any;
 
     if (error) {
       console.error('Error calling send-invite function:', {
@@ -464,7 +414,9 @@ export async function sendInvite(sitemapId: string, email: string, shareUrl: str
       } else if (error.status === 401 || error.message?.includes('Unauthorized')) {
         throw new Error('Authentication failed. Please sign in and try again.');
       } else if (error.status === 404) {
-        throw new Error('Invite function not found. Please contact support.');
+        throw new Error('Invite function not found. The Edge Function may not be deployed. Please contact support.');
+      } else if (error.message?.includes('timeout')) {
+        throw new Error('Invite request timed out. The Edge Function may not be deployed or is taking too long.');
       } else {
         throw new Error(error.message || 'Failed to send invite email. Please try again.');
       }

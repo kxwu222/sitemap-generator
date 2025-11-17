@@ -3716,14 +3716,16 @@ function App() {
                           setIsUpdatingPermission(true);
                           // Update permission immediately in UI
                           setSharePermission('view');
-                          // Update permission in database/storage (keep same token)
+                          // Generate new token when permission changes (ensures different URLs)
                           try {
                             // Add a safety timeout to ensure loading state clears
                             const updatePromise = updateSharePermission(activeSitemapId, 'view');
                             const timeoutPromise = new Promise((_, reject) =>
                               setTimeout(() => reject(new Error('Update timeout')), 6000)
                             );
-                            await Promise.race([updatePromise, timeoutPromise]);
+                            const newToken = await Promise.race([updatePromise, timeoutPromise]) as string;
+                            // Update the token state with the new token
+                            setShareToken(newToken);
                             // Keep the ref true to prevent useEffect from overwriting
                             setIsUpdatingPermission(false);
                           } catch (err) {
@@ -3755,14 +3757,16 @@ function App() {
                           setIsUpdatingPermission(true);
                           // Update permission immediately in UI
                           setSharePermission('edit');
-                          // Update permission in database/storage (keep same token)
+                          // Generate new token when permission changes (ensures different URLs)
                           try {
                             // Add a safety timeout to ensure loading state clears
                             const updatePromise = updateSharePermission(activeSitemapId, 'edit');
                             const timeoutPromise = new Promise((_, reject) =>
                               setTimeout(() => reject(new Error('Update timeout')), 6000)
                             );
-                            await Promise.race([updatePromise, timeoutPromise]);
+                            const newToken = await Promise.race([updatePromise, timeoutPromise]) as string;
+                            // Update the token state with the new token
+                            setShareToken(newToken);
                             // Keep the ref true to prevent useEffect from overwriting
                             setIsUpdatingPermission(false);
                           } catch (err) {
