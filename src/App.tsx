@@ -164,6 +164,8 @@ function App() {
   const [inviteEmailError, setInviteEmailError] = useState('');
   const [inviteSuccessMessage, setInviteSuccessMessage] = useState('');
   const [showCopySuccess, setShowCopySuccess] = useState(false);
+  const [showCopyFallbackModal, setShowCopyFallbackModal] = useState(false);
+  const [copyFallbackUrl, setCopyFallbackUrl] = useState<string>('');
   const [isUpdatingPermission, setIsUpdatingPermission] = useState(false); // Track if permission is being updated
   const [isGeneratingToken, setIsGeneratingToken] = useState(false); // Track if token is being generated
   const [tokenGenerationError, setTokenGenerationError] = useState<string | null>(null); // Track token generation errors
@@ -737,6 +739,58 @@ function App() {
       const errorMessage = error instanceof Error ? error.message : 'Failed to send invites. Please try again.';
       setInviteEmailError(errorMessage);
       setIsSendingInvite(false);
+    }
+  };
+
+  // Helper function to ensure document has focus before clipboard operations
+  const ensureDocumentFocus = async (): Promise<void> => {
+    if (!document.hasFocus()) {
+      window.focus();
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+  };
+
+  // Handle copying from the fallback modal
+  const handleCopyFromModal = async () => {
+    if (!copyFallbackUrl) return;
+
+    try {
+      await ensureDocumentFocus();
+      
+      // Try modern clipboard API first
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(copyFallbackUrl);
+        setShowCopySuccess(true);
+        setTimeout(() => setShowCopySuccess(false), 2000);
+        setShowCopyFallbackModal(false);
+        return;
+      }
+      
+      // Fallback for older browsers or non-HTTPS
+      const textArea = document.createElement('textarea');
+      textArea.value = copyFallbackUrl;
+      textArea.style.position = 'fixed';
+      textArea.style.left = '-999999px';
+      textArea.style.top = '-999999px';
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+      
+      try {
+        const successful = document.execCommand('copy');
+        if (successful) {
+          setShowCopySuccess(true);
+          setTimeout(() => setShowCopySuccess(false), 2000);
+          setShowCopyFallbackModal(false);
+        } else {
+          throw new Error('execCommand failed');
+        }
+      } finally {
+        document.body.removeChild(textArea);
+      }
+    } catch (error) {
+      console.error('Failed to copy from modal:', error);
+      // If it still fails, at least the URL is visible in the modal for manual copying
     }
   };
 
@@ -3912,6 +3966,9 @@ function App() {
                     
                     const shareUrl = `${window.location.origin}${window.location.pathname}?share=${shareToken}`;
                     
+                    // Ensure document has focus before attempting clipboard operations
+                    await ensureDocumentFocus();
+                    
                     try {
                       // Try modern clipboard API first
                       if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -3943,19 +4000,18 @@ function App() {
                       }
                     } catch (error) {
                       console.error('Failed to copy link:', error);
-                      // Fallback: show the URL in an alert so user can manually copy
-                      alert(`Please copy this link manually:\n\n${shareUrl}\n\nAccess Level: ${sharePermission === 'edit' ? 'Can edit' : 'View only'}`);
+                      // Fallback: show custom modal with the URL so user can manually copy
+                      setCopyFallbackUrl(shareUrl);
+                      setShowCopyFallbackModal(true);
                     }
                   }}
                   className="px-3 py-1.5 border-2 border-gray-100 rounded-lg text-gray-700 hover:text-gray-900 hover:bg-gray-50 transition-all duration-200 flex items-center gap-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
-                  disabled={!shareToken || isGeneratingToken || isUpdatingPermission}
+                  disabled={!shareToken || isGeneratingToken}
                   title={
                     tokenGenerationError
                       ? tokenGenerationError
                       : !shareToken 
                       ? 'Generating share link...' 
-                      : isUpdatingPermission 
-                      ? 'Updating permission...' 
                       : 'Copy share link'
                   }
                 >
@@ -4028,6 +4084,53 @@ function App() {
 
       {/* Comment Thread Modal removed - inline editing is now handled by CommentBubble component */}
 
+      {/* Copy Fallback Modal */}
+      {showCopyFallbackModal && (
+        <div 
+          className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+          onClick={() => setShowCopyFallbackModal(false)}
+        >
+          <div 
+            className="bg-white rounded-lg p-8 max-w-2xl w-full mx-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="text-lg font-semibold mb-2">Copy Share Link</h2>
+            <p className="text-sm text-gray-600 mb-4">
+              Access Level: {sharePermission === 'edit' ? 'Can edit' : 'View only'}
+            </p>
+            
+            {/* URL field similar to share modal */}
+            <div className="mb-4">
+              <div className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-lg p-3">
+                <input
+                  type="text"
+                  value={copyFallbackUrl}
+                  readOnly
+                  className="flex-1 bg-transparent border-none outline-none text-sm font-mono text-gray-700"
+                  onClick={(e) => e.currentTarget.select()}
+                />
+                <button
+                  onClick={handleCopyFromModal}
+                  className="p-2 hover:bg-gray-100 rounded transition-colors"
+                  title="Copy link"
+                >
+                  <Copy className="w-4 h-4 text-gray-600" />
+                </button>
+              </div>
+            </div>
+            
+            {/* Close button matching share modal style */}
+            <div className="flex justify-end">
+              <button
+                onClick={() => setShowCopyFallbackModal(false)}
+                className="px-6 py-2 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-800 transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* XML Export Warning Modal */}
       {showXmlExportWarning && (() => {
