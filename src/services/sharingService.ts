@@ -348,31 +348,65 @@ export async function getShareTokenWithPermission(sitemapId: string): Promise<{ 
 // Update share permission for existing token (without changing the token)
 export async function updateSharePermission(sitemapId: string, permission: SharePermission): Promise<void> {
   if (supabase) {
-    // Try Supabase first
-    const { error } = await supabase
-      .from('sitemaps')
-      .update({ share_permission: permission })
-      .eq('id', sitemapId);
+    // Try Supabase first with timeout protection
+    try {
+      console.log('[updateSharePermission] Starting Supabase update...', { sitemapId, permission });
+      
+      // Create timeout promise (5 seconds)
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => {
+          console.warn('[updateSharePermission] Update timeout after 5 seconds');
+          reject(new Error('Permission update timeout after 5 seconds'));
+        }, 5000)
+      );
+      
+      // Create update promise
+      const updateResult = supabase
+        .from('sitemaps')
+        .update({ share_permission: permission })
+        .eq('id', sitemapId);
+      
+      // Convert to proper promise and race with timeout
+      const updatePromise = new Promise((resolve, reject) => {
+        if (updateResult && typeof (updateResult as any).then === 'function') {
+          (updateResult as any).then(resolve, reject);
+        } else {
+          Promise.resolve(updateResult).then(resolve, reject);
+        }
+      });
+      
+      const { error } = await Promise.race([updatePromise, timeoutPromise]) as any;
 
-    if (error) {
-      console.error('Error updating share permission:', error);
-      // Fall through to localStorage fallback
-    } else {
-      // Also update in localStorage as backup
-      try {
-        const permissionKey = `share_token_${sitemapId}_permission`;
-        localStorage.setItem(permissionKey, permission);
-      } catch (e) {
-        // Ignore localStorage errors
+      if (error) {
+        console.error('Error updating share permission in Supabase:', error);
+        // Fall through to localStorage fallback
+      } else {
+        console.log('[updateSharePermission] Successfully updated permission in Supabase:', { sitemapId, permission });
+        // Also update in localStorage as backup
+        try {
+          const permissionKey = `share_token_${sitemapId}_permission`;
+          localStorage.setItem(permissionKey, permission);
+        } catch (e) {
+          console.warn('Failed to save permission to localStorage backup:', e);
+        }
+        return;
       }
-      return;
+    } catch (supabaseError: any) {
+      console.warn('Supabase permission update exception or timeout, using localStorage fallback:', {
+        error: supabaseError?.message || supabaseError,
+        sitemapId,
+      });
+      // Fall through to localStorage fallback
     }
+  } else {
+    console.warn('Supabase not initialized, using localStorage fallback for updateSharePermission');
   }
 
   // Fallback to localStorage
   try {
     const permissionKey = `share_token_${sitemapId}_permission`;
     localStorage.setItem(permissionKey, permission);
+    console.log('[updateSharePermission] Successfully updated permission in localStorage:', { sitemapId, permission });
   } catch (error) {
     console.error('Error updating share permission in localStorage:', error);
     throw new Error('Failed to update share permission');

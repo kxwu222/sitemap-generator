@@ -3659,7 +3659,12 @@ function App() {
                           setSharePermission('view');
                           // Update permission in database/storage (keep same token)
                           try {
-                            await updateSharePermission(activeSitemapId, 'view');
+                            // Add a safety timeout to ensure loading state clears
+                            const updatePromise = updateSharePermission(activeSitemapId, 'view');
+                            const timeoutPromise = new Promise((_, reject) =>
+                              setTimeout(() => reject(new Error('Update timeout')), 6000)
+                            );
+                            await Promise.race([updatePromise, timeoutPromise]);
                             // Keep the ref true to prevent useEffect from overwriting
                             setIsUpdatingPermission(false);
                           } catch (err) {
@@ -3693,7 +3698,12 @@ function App() {
                           setSharePermission('edit');
                           // Update permission in database/storage (keep same token)
                           try {
-                            await updateSharePermission(activeSitemapId, 'edit');
+                            // Add a safety timeout to ensure loading state clears
+                            const updatePromise = updateSharePermission(activeSitemapId, 'edit');
+                            const timeoutPromise = new Promise((_, reject) =>
+                              setTimeout(() => reject(new Error('Update timeout')), 6000)
+                            );
+                            await Promise.race([updatePromise, timeoutPromise]);
                             // Keep the ref true to prevent useEffect from overwriting
                             setIsUpdatingPermission(false);
                           } catch (err) {
