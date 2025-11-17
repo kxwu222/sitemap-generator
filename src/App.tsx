@@ -380,6 +380,61 @@ function App() {
             setIsViewerMode(shouldBeViewer);
             setSharedSitemapName(sitemap.name); // Store the original name
             
+            // Prepare the shared sitemap with metadata
+            const sharedSitemap: SitemapData = {
+              ...sitemap,
+              isShared: true,
+              sharePermission: permission,
+              // Preserve original ID but mark as shared
+            };
+            
+            // Add or update the sitemap in the sitemaps array
+            setSitemaps(prev => {
+              const existingIndex = prev.findIndex(s => s.id === sitemap.id);
+              if (existingIndex >= 0) {
+                // Update existing sitemap
+                const updated = [...prev];
+                updated[existingIndex] = {
+                  ...updated[existingIndex],
+                  ...sharedSitemap,
+                  // Preserve any local changes but update shared metadata
+                };
+                return updated;
+              } else {
+                // Add new shared sitemap
+                return [...prev, sharedSitemap];
+              }
+            });
+            
+            // Save the shared sitemap to localStorage/Supabase so it persists
+            try {
+              // Save to localStorage first (always works)
+              const sitemapsStr = localStorage.getItem('sitemaps');
+              const existingSitemaps: SitemapData[] = sitemapsStr ? JSON.parse(sitemapsStr) : [];
+              const existingIndex = existingSitemaps.findIndex(s => s.id === sitemap.id);
+              
+              if (existingIndex >= 0) {
+                existingSitemaps[existingIndex] = sharedSitemap;
+              } else {
+                existingSitemaps.push(sharedSitemap);
+              }
+              
+              localStorage.setItem('sitemaps', JSON.stringify(existingSitemaps));
+              
+              // Also save to Supabase if configured
+              if (isSupabaseConfigured() && supabase) {
+                try {
+                  await saveSitemap(sharedSitemap);
+                } catch (supabaseError) {
+                  console.warn('Failed to save shared sitemap to Supabase:', supabaseError);
+                  // Continue - localStorage save succeeded
+                }
+              }
+            } catch (saveError) {
+              console.error('Failed to save shared sitemap:', saveError);
+              // Continue - sitemap is still loaded in memory
+            }
+            
             // Load the shared sitemap
             setActiveSitemapId(sitemap.id);
             setNodes(JSON.parse(JSON.stringify(sitemap.nodes)));
@@ -397,7 +452,14 @@ function App() {
                 setFreeLines(fl);
               } catch (err) {
                 console.error('Failed to load drawables:', err);
+                // If drawables fail to load, set empty arrays
+                setFigures([]);
+                setFreeLines([]);
               }
+            } else {
+              // If not using Supabase, set empty arrays for drawables
+              setFigures([]);
+              setFreeLines([]);
             }
             
             // Load comments
@@ -406,6 +468,7 @@ function App() {
               setComments(loadedComments);
             } catch (err) {
               console.error('Failed to load comments:', err);
+              setComments([]);
             }
           }
         })
@@ -481,9 +544,15 @@ function App() {
   useEffect(() => {
     if (!activeSitemapId || !shareToken) return;
     
-    // Only poll if JSONBin.io is configured and we have a share token
-    import('./services/jsonbinService').then(({ isJsonBinConfigured, getSharedBin }) => {
+    // Only poll if JSONBin.io is configured and we have a valid JSONBin.io bin ID
+    import('./services/jsonbinService').then(({ isJsonBinConfigured, getSharedBin, isJsonBinId }) => {
       if (!isJsonBinConfigured()) return;
+      
+      // Only poll if the token is a valid JSONBin.io bin ID (not a UUID)
+      if (!isJsonBinId(shareToken)) {
+        // Token is a UUID or other format, not a JSONBin.io bin ID - skip polling
+        return;
+      }
       
       const pollInterval = setInterval(async () => {
         try {

@@ -1,7 +1,7 @@
 import { supabase } from '../lib/supabase';
 import { Comment } from '../types/comments';
 import { RealtimeChannel } from '@supabase/supabase-js';
-import { getSharedBin, updateBinComments, isJsonBinConfigured } from './jsonbinService';
+import { getSharedBin, updateBinComments, isJsonBinConfigured, isJsonBinId } from './jsonbinService';
 import { getShareToken } from './sharingService';
 
 // Database row type
@@ -45,7 +45,7 @@ async function syncCommentsToJsonBin(sitemapId: string, comments: Comment[]): Pr
   
   try {
     const shareToken = await getShareToken(sitemapId);
-    if (shareToken) {
+    if (shareToken && isJsonBinId(shareToken)) {
       await updateBinComments(shareToken, comments);
       console.log('Synced comments to JSONBin.io:', { sitemapId, shareToken, commentCount: comments.length });
     }
@@ -61,7 +61,7 @@ export async function createComment(sitemapId: string, x: number, y: number, tex
   if (isJsonBinConfigured()) {
     try {
       const shareToken = await getShareToken(sitemapId);
-      if (shareToken) {
+      if (shareToken && isJsonBinId(shareToken)) {
         // Get current comments from bin
         const sharedData = await getSharedBin(shareToken);
         if (sharedData) {
@@ -182,7 +182,7 @@ export async function getComments(sitemapId: string): Promise<Comment[]> {
   if (isJsonBinConfigured()) {
     try {
       const shareToken = await getShareToken(sitemapId);
-      if (shareToken) {
+      if (shareToken && isJsonBinId(shareToken)) {
         const sharedData = await getSharedBin(shareToken);
         if (sharedData && sharedData.comments) {
           console.log('Loaded comments from JSONBin.io:', { sitemapId, shareToken, count: sharedData.comments.length });
@@ -227,7 +227,7 @@ export async function updateComment(commentId: string, text: string, sitemapId?:
   if (isJsonBinConfigured() && sitemapId) {
     try {
       const shareToken = await getShareToken(sitemapId);
-      if (shareToken) {
+      if (shareToken && isJsonBinId(shareToken)) {
         const sharedData = await getSharedBin(shareToken);
         if (sharedData) {
           const updatedComments = sharedData.comments.map(c =>
@@ -289,7 +289,7 @@ export async function updateCommentPosition(commentId: string, x: number, y: num
   if (isJsonBinConfigured() && sitemapId) {
     try {
       const shareToken = await getShareToken(sitemapId);
-      if (shareToken) {
+      if (shareToken && isJsonBinId(shareToken)) {
         const sharedData = await getSharedBin(shareToken);
         if (sharedData) {
           const updatedComments = sharedData.comments.map(c =>
@@ -352,7 +352,7 @@ export async function resolveComment(commentId: string, resolved: boolean, sitem
   if (isJsonBinConfigured() && sitemapId) {
     try {
       const shareToken = await getShareToken(sitemapId);
-      if (shareToken) {
+      if (shareToken && isJsonBinId(shareToken)) {
         const sharedData = await getSharedBin(shareToken);
         if (sharedData) {
           const updatedComments = sharedData.comments.map(c =>
@@ -414,7 +414,7 @@ export async function deleteComment(commentId: string, sitemapId?: string): Prom
   if (isJsonBinConfigured() && sitemapId) {
     try {
       const shareToken = await getShareToken(sitemapId);
-      if (shareToken) {
+      if (shareToken && isJsonBinId(shareToken)) {
         const sharedData = await getSharedBin(shareToken);
         if (sharedData) {
           const updatedComments = sharedData.comments.filter(c => c.id !== commentId);

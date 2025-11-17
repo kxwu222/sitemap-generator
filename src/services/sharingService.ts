@@ -124,25 +124,28 @@ export async function generateShareToken(
 
 // Load sitemap by share token
 export async function getSitemapByShareToken(token: string): Promise<{ sitemap: SitemapData; permission: SharePermission } | null> {
-  // Try JSONBin.io first if configured
+  // Try JSONBin.io first if configured and token looks like a JSONBin.io bin ID
   if (isJsonBinConfigured()) {
-    try {
-      console.log('[getSitemapByShareToken] Loading from JSONBin.io...', { token });
-      const sharedData = await getSharedBin(token);
-      
-      if (sharedData) {
-        console.log('Loaded sitemap from JSONBin.io:', { token, permission: sharedData.permission });
-        return {
-          sitemap: sharedData.sitemap,
-          permission: sharedData.permission,
-        };
+    const { isJsonBinId } = await import('./jsonbinService');
+    if (isJsonBinId(token)) {
+      try {
+        console.log('[getSitemapByShareToken] Loading from JSONBin.io...', { token });
+        const sharedData = await getSharedBin(token);
+        
+        if (sharedData) {
+          console.log('Loaded sitemap from JSONBin.io:', { token, permission: sharedData.permission });
+          return {
+            sitemap: sharedData.sitemap,
+            permission: sharedData.permission,
+          };
+        }
+      } catch (jsonbinError: any) {
+        console.warn('JSONBin.io load failed, falling back to Supabase/localStorage:', {
+          error: jsonbinError?.message || jsonbinError,
+          token,
+        });
+        // Fall through to Supabase/localStorage
       }
-    } catch (jsonbinError: any) {
-      console.warn('JSONBin.io load failed, falling back to Supabase/localStorage:', {
-        error: jsonbinError?.message || jsonbinError,
-        token,
-      });
-      // Fall through to Supabase/localStorage
     }
   }
 

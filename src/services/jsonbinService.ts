@@ -162,3 +162,17 @@ export function isJsonBinConfigured(): boolean {
   return true;
 }
 
+// Check if a token looks like a JSONBin.io bin ID
+// JSONBin.io bin IDs are typically 24-character alphanumeric strings
+// UUIDs are 36 characters with hyphens (e.g., "e6536394-1e48-4f01-b229-e1f71756f1ac")
+export function isJsonBinId(token: string | null | undefined): boolean {
+  if (!token) return false;
+  // JSONBin.io bin IDs are typically 20-24 alphanumeric characters, no hyphens
+  // UUIDs have hyphens and are 36 characters
+  // Check: if it has hyphens, it's a UUID; if it's alphanumeric and 20-24 chars, likely a bin ID
+  if (token.includes('-')) return false; // UUIDs have hyphens
+  if (token.length < 20 || token.length > 24) return false; // Bin IDs are typically 20-24 chars
+  // Check if it's alphanumeric
+  return /^[a-zA-Z0-9]+$/.test(token);
+}
+
