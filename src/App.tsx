@@ -364,15 +364,20 @@ function App() {
             const currentUser = await getCurrentUser();
             const isOwner = currentUser && sitemaps.find(s => s.id === sitemap.id)?.id === sitemap.id && 
               sitemaps.find(s => s.id === sitemap.id && s.id === sitemap.id);
-            // For shared links, we'll check ownership by comparing user_id from database
-            // For now, assume viewer mode unless we can verify ownership
+            // Base mode on ownership (used only for UI like \"Exit viewer mode\")
             const mode: ShareMode = isOwner ? 'owner' : 'viewer';
             
             setShareToken(shareTokenParam);
             setShareMode(mode);
             setSharePermission(permission); // Store the permission
-            // Viewer mode should reflect whether the user is accessing via a shared link (not ownership)
-            setIsViewerMode(mode === 'viewer');
+            
+            // Determine whether this session should be in viewer mode:
+            // - Owners always get edit mode, regardless of permission
+            // - Non-owners:
+            //    * 'view'  => viewer mode (comment-only)
+            //    * 'edit'  => edit mode (can modify the sitemap)
+            const shouldBeViewer = !isOwner && permission === 'view';
+            setIsViewerMode(shouldBeViewer);
             setSharedSitemapName(sitemap.name); // Store the original name
             
             // Load the shared sitemap

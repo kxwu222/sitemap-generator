@@ -16,12 +16,12 @@ export async function generateShareToken(sitemapId: string, permission: SharePer
     try {
       console.log('[generateShareToken] Starting Supabase update...');
       
-      // Create timeout promise (5 seconds)
+      // Create timeout promise (1 second)
       const timeoutPromise = new Promise<never>((_, reject) =>
         setTimeout(() => {
-          console.warn('[generateShareToken] Update timeout after 5 seconds');
-          reject(new Error('Token update timeout after 5 seconds'));
-        }, 5000)
+          console.warn('[generateShareToken] Update timeout after 1 second');
+          reject(new Error('Token update timeout after 1 second'));
+        }, 1000)
       );
       
       // Create update promise
@@ -251,12 +251,12 @@ export async function getShareTokenWithPermission(sitemapId: string): Promise<{ 
       try {
         console.log('[getShareTokenWithPermission] Creating query promise...');
         
-        // Create a timeout promise (5 seconds)
+        // Create a timeout promise (1 second)
         const timeoutPromise = new Promise<never>((_, reject) => 
           setTimeout(() => {
-            console.warn('[getShareTokenWithPermission] Timeout triggered after 5 seconds');
-            reject(new Error('Query timeout after 5 seconds'));
-          }, 5000)
+            console.warn('[getShareTokenWithPermission] Timeout triggered after 1 second');
+            reject(new Error('Query timeout after 1 second'));
+          }, 1000)
         );
         
         // Create the query promise
@@ -352,12 +352,12 @@ export async function updateSharePermission(sitemapId: string, permission: Share
     try {
       console.log('[updateSharePermission] Starting Supabase update...', { sitemapId, permission });
       
-      // Create timeout promise (5 seconds)
+      // Create timeout promise (1 second)
       const timeoutPromise = new Promise<never>((_, reject) =>
         setTimeout(() => {
-          console.warn('[updateSharePermission] Update timeout after 5 seconds');
-          reject(new Error('Permission update timeout after 5 seconds'));
-        }, 5000)
+          console.warn('[updateSharePermission] Update timeout after 1 second');
+          reject(new Error('Permission update timeout after 1 second'));
+        }, 1000)
       );
       
       // Create update promise
