@@ -26,7 +26,18 @@ export const supabase: SupabaseClient | null =
           hasKey: !!supabaseAnonKey,
           keyLength: supabaseAnonKey?.length || 0,
         });
-        const client = createClient(supabaseUrl, supabaseAnonKey);
+        const client = createClient(supabaseUrl, supabaseAnonKey, {
+          auth: {
+            autoRefreshToken: false,
+            persistSession: false,
+            detectSessionInUrl: false,
+          },
+          global: {
+            headers: {
+              'apikey': supabaseAnonKey,
+            },
+          },
+        });
         console.log('[Supabase] Client created successfully');
         return client;
       })()

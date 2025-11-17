@@ -12,12 +12,34 @@ export async function generateShareToken(sitemapId: string, permission: SharePer
   const token = generateToken();
 
   if (supabase) {
-    // Try Supabase first
+    // Try Supabase first with timeout protection
     try {
-      const { error } = await supabase
+      console.log('[generateShareToken] Starting Supabase update...');
+      
+      // Create timeout promise (5 seconds)
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => {
+          console.warn('[generateShareToken] Update timeout after 5 seconds');
+          reject(new Error('Token update timeout after 5 seconds'));
+        }, 5000)
+      );
+      
+      // Create update promise
+      const updateResult = supabase
         .from('sitemaps')
         .update({ share_token: token, share_permission: permission })
         .eq('id', sitemapId);
+      
+      // Convert to proper promise and race with timeout
+      const updatePromise = new Promise((resolve, reject) => {
+        if (updateResult && typeof (updateResult as any).then === 'function') {
+          (updateResult as any).then(resolve, reject);
+        } else {
+          Promise.resolve(updateResult).then(resolve, reject);
+        }
+      });
+      
+      const { error } = await Promise.race([updatePromise, timeoutPromise]) as any;
 
       if (error) {
         console.error('Error generating share token in Supabase:', {
@@ -42,8 +64,11 @@ export async function generateShareToken(sitemapId: string, permission: SharePer
         }
         return token;
       }
-    } catch (supabaseError) {
-      console.error('Unexpected error in Supabase token generation:', supabaseError);
+    } catch (supabaseError: any) {
+      console.warn('Supabase token update exception or timeout, using localStorage fallback:', {
+        error: supabaseError?.message || supabaseError,
+        sitemapId,
+      });
       // Fall through to localStorage fallback
     }
   } else {
@@ -242,9 +267,24 @@ export async function getShareTokenWithPermission(sitemapId: string): Promise<{ 
           .eq('id', sitemapId);
         
         console.log('[getShareTokenWithPermission] Calling .single()...');
-        const queryPromise = queryBuilder.single();
+        // Supabase query builders are thenable, so we can use them directly
+        const queryResult = queryBuilder.single();
+        
+        // Add a check to see if the result is thenable
+        const isThenable = queryResult && typeof (queryResult as any).then === 'function';
+        console.log('[getShareTokenWithPermission] Query result is thenable:', isThenable);
         
         console.log('[getShareTokenWithPermission] Starting Promise.race...');
+        
+        // Create a proper promise from the thenable
+        const queryPromise = new Promise((resolve, reject) => {
+          if (isThenable) {
+            (queryResult as any).then(resolve, reject);
+          } else {
+            // If not thenable, try to await it directly
+            Promise.resolve(queryResult).then(resolve, reject);
+          }
+        });
         
         // Race between query and timeout
         const result = await Promise.race([queryPromise, timeoutPromise]);
