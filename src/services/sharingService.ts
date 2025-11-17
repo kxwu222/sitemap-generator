@@ -214,23 +214,43 @@ export async function getShareToken(sitemapId: string): Promise<string | null> {
 // Get share token with permission for a sitemap
 export async function getShareTokenWithPermission(sitemapId: string): Promise<{ token: string | null; permission: SharePermission }> {
   try {
+    // Debug: Check if supabase client exists
+    console.log('[getShareTokenWithPermission] Starting:', {
+      sitemapId,
+      hasSupabase: !!supabase,
+      supabaseType: typeof supabase,
+    });
+
     if (supabase) {
       // Try Supabase first with timeout protection
       try {
+        console.log('[getShareTokenWithPermission] Creating query promise...');
+        
         // Create a timeout promise (5 seconds)
         const timeoutPromise = new Promise<never>((_, reject) => 
-          setTimeout(() => reject(new Error('Query timeout after 5 seconds')), 5000)
+          setTimeout(() => {
+            console.warn('[getShareTokenWithPermission] Timeout triggered after 5 seconds');
+            reject(new Error('Query timeout after 5 seconds'));
+          }, 5000)
         );
         
         // Create the query promise
-        const queryPromise = supabase
+        console.log('[getShareTokenWithPermission] Building Supabase query...');
+        const queryBuilder = supabase
           .from('sitemaps')
           .select('share_token, share_permission')
-          .eq('id', sitemapId)
-          .single();
+          .eq('id', sitemapId);
+        
+        console.log('[getShareTokenWithPermission] Calling .single()...');
+        const queryPromise = queryBuilder.single();
+        
+        console.log('[getShareTokenWithPermission] Starting Promise.race...');
         
         // Race between query and timeout
-        const { data, error } = await Promise.race([queryPromise, timeoutPromise]) as any;
+        const result = await Promise.race([queryPromise, timeoutPromise]);
+        const { data, error } = result as any;
+        
+        console.log('[getShareTokenWithPermission] Promise resolved:', { hasData: !!data, hasError: !!error });
 
         if (!error && data?.share_token) {
           const permission: SharePermission = (data.share_permission === 'edit' ? 'edit' : 'view');
@@ -253,6 +273,8 @@ export async function getShareTokenWithPermission(sitemapId: string): Promise<{ 
         // Supabase query failed or timed out, fall through to localStorage
         console.warn('Supabase query exception or timeout, falling back to localStorage:', {
           error: supabaseError?.message || supabaseError,
+          errorType: supabaseError?.name,
+          errorStack: supabaseError?.stack?.substring(0, 200),
           sitemapId,
         });
       }

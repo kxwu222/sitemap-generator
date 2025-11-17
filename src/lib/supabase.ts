@@ -20,6 +20,22 @@ function isValidUrl(url: string | undefined): boolean {
 // This allows the app to work without Supabase (using localStorage fallback)
 export const supabase: SupabaseClient | null = 
   (isValidUrl(supabaseUrl) && supabaseAnonKey && supabaseAnonKey !== 'your-anon-key')
-    ? createClient(supabaseUrl, supabaseAnonKey)
-    : null;
+    ? (() => {
+        console.log('[Supabase] Creating client:', {
+          url: supabaseUrl,
+          hasKey: !!supabaseAnonKey,
+          keyLength: supabaseAnonKey?.length || 0,
+        });
+        const client = createClient(supabaseUrl, supabaseAnonKey);
+        console.log('[Supabase] Client created successfully');
+        return client;
+      })()
+    : (() => {
+        console.warn('[Supabase] Client NOT created:', {
+          url: supabaseUrl,
+          hasKey: !!supabaseAnonKey,
+          isValidUrl: isValidUrl(supabaseUrl),
+        });
+        return null;
+      })();
 
