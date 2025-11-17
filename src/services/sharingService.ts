@@ -215,13 +215,22 @@ export async function getShareToken(sitemapId: string): Promise<string | null> {
 export async function getShareTokenWithPermission(sitemapId: string): Promise<{ token: string | null; permission: SharePermission }> {
   try {
     if (supabase) {
-      // Try Supabase first
+      // Try Supabase first with timeout protection
       try {
-        const { data, error } = await supabase
+        // Create a timeout promise (5 seconds)
+        const timeoutPromise = new Promise<never>((_, reject) => 
+          setTimeout(() => reject(new Error('Query timeout after 5 seconds')), 5000)
+        );
+        
+        // Create the query promise
+        const queryPromise = supabase
           .from('sitemaps')
           .select('share_token, share_permission')
           .eq('id', sitemapId)
           .single();
+        
+        // Race between query and timeout
+        const { data, error } = await Promise.race([queryPromise, timeoutPromise]) as any;
 
         if (!error && data?.share_token) {
           const permission: SharePermission = (data.share_permission === 'edit' ? 'edit' : 'view');
@@ -240,10 +249,10 @@ export async function getShareTokenWithPermission(sitemapId: string): Promise<{ 
           // No token found in Supabase
           console.log('No share token found in Supabase for sitemap:', sitemapId);
         }
-      } catch (supabaseError) {
-        // Supabase query failed, fall through to localStorage
-        console.warn('Supabase query exception, falling back to localStorage:', {
-          error: supabaseError,
+      } catch (supabaseError: any) {
+        // Supabase query failed or timed out, fall through to localStorage
+        console.warn('Supabase query exception or timeout, falling back to localStorage:', {
+          error: supabaseError?.message || supabaseError,
           sitemapId,
         });
       }
