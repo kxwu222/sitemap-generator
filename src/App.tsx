@@ -12,10 +12,10 @@ import { parseCsvFile } from './utils/csvParser';
 import { SitemapData, SelectionGroup } from './types/sitemap';
 import { LinkStyle } from './types/linkStyle';
 import { Figure, FreeLine } from './types/drawables';
-import { Comment, ShareMode, SharePermission } from './types/comments';
+import { Comment, ShareMode } from './types/comments';
 import { saveSitemap, loadSitemaps, deleteSitemap as deleteSitemapFromSupabase, loadSitemapWithDrawables } from './services/sitemapService';
 import { getCurrentUser, signOut, getSession } from './services/authService';
-import { generateShareToken, getSitemapByShareToken, revokeShareToken, getShareToken, getShareTokenWithPermission, updateSharePermission, sendInvite } from './services/sharingService';
+import { buildShareLink, decodeSharePayload, sendInvite } from './services/sharingService';
 import { createComment, getComments, updateComment, updateCommentPosition, resolveComment, deleteComment, subscribeToComments } from './services/commentsService';
 import { supabase } from './lib/supabase';
 import type { User as SupabaseUser } from '@supabase/supabase-js';
@@ -150,14 +150,13 @@ function App() {
   const exportButtonRef = useRef<HTMLButtonElement | null>(null);
   const [exportDropdownPosition, setExportDropdownPosition] = useState<{ top: number; right: number } | null>(null);
   const [showXmlExportWarning, setShowXmlExportWarning] = useState(false);
-  const permissionManuallyUpdatedRef = useRef(false);
-  const shareModalPermissionLoadedRef = useRef<string | null>(null); // Track which sitemap's permission was loaded
   
   // Sharing and comments state
   const [showShareModal, setShowShareModal] = useState(false);
-  const [shareToken, setShareToken] = useState<string | null>(null);
   const [shareMode, setShareMode] = useState<ShareMode>('owner');
-  const [sharePermission, setSharePermission] = useState<SharePermission>('view'); // Permission for current share link
+  const [shareLink, setShareLink] = useState('');
+  const [shareLinkError, setShareLinkError] = useState<string | null>(null);
+  const [isBuildingShareLink, setIsBuildingShareLink] = useState(false);
   const [sharedSitemapName, setSharedSitemapName] = useState<string | null>(null); // Store original name of shared sitemap
   const [inviteEmails, setInviteEmails] = useState<string[]>([]);
   const [inviteEmailInput, setInviteEmailInput] = useState('');
@@ -166,9 +165,6 @@ function App() {
   const [showCopySuccess, setShowCopySuccess] = useState(false);
   const [showCopyFallbackModal, setShowCopyFallbackModal] = useState(false);
   const [copyFallbackUrl, setCopyFallbackUrl] = useState<string>('');
-  const [isUpdatingPermission, setIsUpdatingPermission] = useState(false); // Track if permission is being updated
-  const [isGeneratingToken, setIsGeneratingToken] = useState(false); // Track if token is being generated
-  const [tokenGenerationError, setTokenGenerationError] = useState<string | null>(null); // Track token generation errors
   const [isSendingInvite, setIsSendingInvite] = useState(false); // Track if invite is being sent
   const [isViewerMode, setIsViewerMode] = useState(false);
   const [comments, setComments] = useState<Comment[]>([]);
@@ -342,147 +338,92 @@ function App() {
     }
   }, [isSupabaseConfigured]);
 
-  // Handle share link URL parameter
+  // Handle share link URL parameter using embedded payload
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
-    const shareTokenParam = urlParams.get('share');
-    
-    if (shareTokenParam) {
-      // Load sitemap via share token
-      getSitemapByShareToken(shareTokenParam)
-        .then(async (result) => {
-          if (result) {
-            const { sitemap, permission } = result;
-            
-            // Check if user is authenticated (required for comments)
-            if (!user && isSupabaseConfigured()) {
-              setShowAuthModal(true);
-              return;
-            }
-            
-            // Check if current user is the owner
-            const currentUser = await getCurrentUser();
-            const isOwner = currentUser && sitemaps.find(s => s.id === sitemap.id)?.id === sitemap.id && 
-              sitemaps.find(s => s.id === sitemap.id && s.id === sitemap.id);
-            // Base mode on ownership (used only for UI like \"Exit viewer mode\")
-            const mode: ShareMode = isOwner ? 'owner' : 'viewer';
-            
-            setShareToken(shareTokenParam);
-            setShareMode(mode);
-            setSharePermission(permission); // Store the permission
-            
-            // Determine whether this session should be in viewer mode:
-            // - Owners always get edit mode, regardless of permission
-            // - Non-owners:
-            //    * 'view'  => viewer mode (comment-only)
-            //    * 'edit'  => edit mode (can modify the sitemap)
-            const shouldBeViewer = !isOwner && permission === 'view';
-            setIsViewerMode(shouldBeViewer);
-            setSharedSitemapName(sitemap.name); // Store the original name
-            
-            // Prepare the shared sitemap with metadata
-            const sharedSitemap: SitemapData = {
-              ...sitemap,
-              isShared: true,
-              sharePermission: permission,
-              // Preserve original ID but mark as shared
-            };
-            
-            // Add or update the sitemap in the sitemaps array
-            setSitemaps(prev => {
-              const existingIndex = prev.findIndex(s => s.id === sitemap.id);
-              if (existingIndex >= 0) {
-                // Update existing sitemap
-                const updated = [...prev];
-                updated[existingIndex] = {
-                  ...updated[existingIndex],
-                  ...sharedSitemap,
-                  // Preserve any local changes but update shared metadata
-                };
-                return updated;
-              } else {
-                // Add new shared sitemap
-                return [...prev, sharedSitemap];
-              }
-            });
-            
-            // Save the shared sitemap to localStorage/Supabase so it persists
-            try {
-              // Save to localStorage first (always works)
-              const sitemapsStr = localStorage.getItem('sitemaps');
-              const existingSitemaps: SitemapData[] = sitemapsStr ? JSON.parse(sitemapsStr) : [];
-              const existingIndex = existingSitemaps.findIndex(s => s.id === sitemap.id);
-              
-              if (existingIndex >= 0) {
-                existingSitemaps[existingIndex] = sharedSitemap;
-              } else {
-                existingSitemaps.push(sharedSitemap);
-              }
-              
-              localStorage.setItem('sitemaps', JSON.stringify(existingSitemaps));
-              
-              // Also save to Supabase if configured
-              if (isSupabaseConfigured() && supabase) {
-                try {
-                  await saveSitemap(sharedSitemap);
-                } catch (supabaseError) {
-                  console.warn('Failed to save shared sitemap to Supabase:', supabaseError);
-                  // Continue - localStorage save succeeded
-                }
-              }
-            } catch (saveError) {
-              console.error('Failed to save shared sitemap:', saveError);
-              // Continue - sitemap is still loaded in memory
-            }
-            
-            // Load the shared sitemap
-            setActiveSitemapId(sitemap.id);
-            setNodes(JSON.parse(JSON.stringify(sitemap.nodes)));
-            setExtraLinks(JSON.parse(JSON.stringify(sitemap.extraLinks)));
-            setLinkStyles(JSON.parse(JSON.stringify(sitemap.linkStyles)));
-            setColorOverrides(JSON.parse(JSON.stringify(sitemap.colorOverrides)));
-            setUrls(JSON.parse(JSON.stringify(sitemap.urls)));
-            setSelectionGroups(JSON.parse(JSON.stringify(sitemap.selectionGroups || [])));
-            
-            // Load drawables
-            if (isSupabaseConfigured() && supabase) {
-              try {
-                const { figures: f, freeLines: fl } = await loadSitemapWithDrawables(sitemap.id);
-                setFigures(f);
-                setFreeLines(fl);
-              } catch (err) {
-                console.error('Failed to load drawables:', err);
-                // If drawables fail to load, set empty arrays
-                setFigures([]);
-                setFreeLines([]);
-              }
-            } else {
-              // If not using Supabase, set empty arrays for drawables
-              setFigures([]);
-              setFreeLines([]);
-            }
-            
-            // Load comments
-            try {
-              const loadedComments = await getComments(sitemap.id);
-              setComments(loadedComments);
-            } catch (err) {
-              console.error('Failed to load comments:', err);
-              setComments([]);
-            }
-          }
-        })
-        .catch(err => {
-          console.error('Failed to load shared sitemap:', err);
-          alert('Invalid or expired share link.');
-        });
-    } else {
-      // Not viewing via share link - reset viewer mode
+    const shareParam = urlParams.get('share');
+
+    if (!shareParam) {
       setIsViewerMode(false);
       setShareMode('owner');
       setSharedSitemapName(null);
+      return;
     }
-  }, [user, isSupabaseConfigured, sitemaps]);
+
+    const decoded = decodeSharePayload(shareParam);
+    if (!decoded) {
+      alert('Invalid or expired share link.');
+      return;
+    }
+
+    const {
+      sitemap: payloadSitemap,
+      comments: payloadComments,
+      figures: payloadFigures,
+      freeLines: payloadFreeLines,
+    } = decoded;
+
+    const sitemapId = payloadSitemap.id || `shared-${Date.now()}`;
+    const sharedSitemap: SitemapData = {
+      ...payloadSitemap,
+      id: sitemapId,
+      isShared: true,
+      sharePermission: 'view',
+    };
+
+    setShareMode('viewer');
+    setIsViewerMode(true);
+    setSharedSitemapName(sharedSitemap.name);
+
+    setSitemaps(prev => {
+      const existingIndex = prev.findIndex(s => s.id === sitemapId);
+      if (existingIndex >= 0) {
+        const updated = [...prev];
+        updated[existingIndex] = { ...updated[existingIndex], ...sharedSitemap };
+        return updated;
+      }
+      return [...prev, sharedSitemap];
+    });
+
+    try {
+      const sitemapsStr = localStorage.getItem('sitemaps');
+      const existingSitemaps: SitemapData[] = sitemapsStr ? JSON.parse(sitemapsStr) : [];
+      const existingIndex = existingSitemaps.findIndex(s => s.id === sitemapId);
+
+      if (existingIndex >= 0) {
+        existingSitemaps[existingIndex] = sharedSitemap;
+      } else {
+        existingSitemaps.push(sharedSitemap);
+      }
+
+      localStorage.setItem('sitemaps', JSON.stringify(existingSitemaps));
+
+      if (isSupabaseConfigured() && supabase) {
+        saveSitemap(sharedSitemap).catch(err => {
+          console.warn('Failed to save shared sitemap to Supabase:', err);
+        });
+      }
+    } catch (error) {
+      console.error('Failed to persist shared sitemap locally:', error);
+    }
+
+    setActiveSitemapId(sitemapId);
+    setNodes(JSON.parse(JSON.stringify(sharedSitemap.nodes)));
+    setExtraLinks(JSON.parse(JSON.stringify(sharedSitemap.extraLinks)));
+    setLinkStyles(JSON.parse(JSON.stringify(sharedSitemap.linkStyles)));
+    setColorOverrides(JSON.parse(JSON.stringify(sharedSitemap.colorOverrides)));
+    setUrls(JSON.parse(JSON.stringify(sharedSitemap.urls)));
+    setSelectionGroups(JSON.parse(JSON.stringify(sharedSitemap.selectionGroups || [])));
+    setFigures(JSON.parse(JSON.stringify(payloadFigures || [])));
+    setFreeLines(JSON.parse(JSON.stringify(payloadFreeLines || [])));
+    setComments(JSON.parse(JSON.stringify(payloadComments || [])));
+
+    getComments(sitemapId)
+      .then(setComments)
+      .catch(err => {
+        console.error('Failed to load comments for shared sitemap:', err);
+      });
+  }, []);
 
   // Load comments when active sitemap changes
   useEffect(() => {
@@ -539,156 +480,6 @@ function App() {
       }
     };
   }, [activeSitemapId, isSupabaseConfigured, isLocalhost]);
-
-  // Poll JSONBin.io for comment updates (for shared sitemaps)
-  useEffect(() => {
-    if (!activeSitemapId || !shareToken) return;
-    
-    // Only poll if JSONBin.io is configured and we have a valid JSONBin.io bin ID
-    import('./services/jsonbinService').then(({ isJsonBinConfigured, getSharedBin, isJsonBinId }) => {
-      if (!isJsonBinConfigured()) return;
-      
-      // Only poll if the token is a valid JSONBin.io bin ID (not a UUID)
-      if (!isJsonBinId(shareToken)) {
-        // Token is a UUID or other format, not a JSONBin.io bin ID - skip polling
-        return;
-      }
-      
-      const pollInterval = setInterval(async () => {
-        try {
-          const sharedData = await getSharedBin(shareToken);
-          if (sharedData && sharedData.comments) {
-            // Only update if comments have changed
-            setComments(prev => {
-              const prevIds = new Set(prev.map(c => c.id));
-              const newIds = new Set(sharedData.comments.map(c => c.id));
-              const idsChanged = prevIds.size !== newIds.size || 
-                [...prevIds].some(id => !newIds.has(id)) ||
-                [...newIds].some(id => !prevIds.has(id));
-              
-              // Also check if any comment text/position/resolved changed
-              const contentChanged = prev.some(pc => {
-                const nc = sharedData.comments.find(c => c.id === pc.id);
-                return !nc || nc.text !== pc.text || nc.x !== pc.x || nc.y !== pc.y || nc.resolved !== pc.resolved;
-              });
-              
-              if (idsChanged || contentChanged) {
-                return sharedData.comments;
-              }
-              return prev;
-            });
-          }
-        } catch (err) {
-          // Silently fail - polling is non-critical
-          console.warn('Polling JSONBin.io for comments failed:', err);
-        }
-      }, 3000); // Poll every 3 seconds
-      
-      return () => clearInterval(pollInterval);
-    }).catch(err => {
-      console.warn('Failed to initialize JSONBin.io polling:', err);
-    });
-    
-    return () => {};
-  }, [activeSitemapId, shareToken]);
-
-  // Auto-generate share token when modal opens if it doesn't exist
-  useEffect(() => {
-    if (showShareModal && activeSitemapId && shareMode !== 'viewer') {
-      // Only load permission once per modal session for this sitemap
-      // This prevents the useEffect from overwriting manual permission changes
-      if (shareModalPermissionLoadedRef.current === activeSitemapId) {
-        // Permission already loaded for this sitemap in this modal session, skip
-        return;
-      }
-      
-      // Reset the manual update flag when modal opens for a new sitemap
-      if (shareModalPermissionLoadedRef.current !== activeSitemapId) {
-        permissionManuallyUpdatedRef.current = false;
-        shareModalPermissionLoadedRef.current = activeSitemapId;
-      }
-      
-      // Load existing token and permission if available
-      setIsGeneratingToken(true);
-      setTokenGenerationError(null);
-      
-      // Add timeout to prevent infinite "Generating..." state
-      const timeoutId = setTimeout(() => {
-        console.warn('Token generation timeout after 10 seconds');
-        setIsGeneratingToken(false);
-        setTokenGenerationError('Unable to generate share link. Please try again.');
-      }, 10000);
-      
-      getShareTokenWithPermission(activeSitemapId)
-        .then(({ token, permission }) => {
-          clearTimeout(timeoutId);
-          // Check ref again at the time the promise resolves (in case it was set during the async operation)
-          if (permissionManuallyUpdatedRef.current) {
-            // Permission was manually updated, don't overwrite it
-            if (token) {
-              setShareToken(token);
-            }
-            setIsGeneratingToken(false);
-            setTokenGenerationError(null);
-            return;
-          }
-          
-          if (token) {
-            setShareToken(token);
-            setSharePermission(permission);
-            setIsGeneratingToken(false);
-            setTokenGenerationError(null);
-          } else {
-            // Generate new token with default 'view' permission
-            // Get current sitemap data for JSONBin.io
-            const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
-            const currentComments = comments.filter(c => c.sitemapId === activeSitemapId);
-            generateShareToken(activeSitemapId, 'view', currentSitemap, currentComments)
-              .then(newToken => {
-                clearTimeout(timeoutId);
-                // Check ref again at the time this promise resolves
-                if (permissionManuallyUpdatedRef.current) {
-                  // Permission was manually updated, don't overwrite it
-                  if (newToken) {
-                    setShareToken(newToken);
-                  }
-                  setIsGeneratingToken(false);
-                  setTokenGenerationError(null);
-                  return;
-                }
-                
-                if (newToken) {
-                  setShareToken(newToken);
-                  setSharePermission('view');
-                  setIsGeneratingToken(false);
-                  setTokenGenerationError(null);
-                } else {
-                  setIsGeneratingToken(false);
-                  setTokenGenerationError('Failed to generate share link. Please try again.');
-                }
-              })
-              .catch(error => {
-                clearTimeout(timeoutId);
-                console.error('Failed to auto-generate share token:', error);
-                setIsGeneratingToken(false);
-                setTokenGenerationError('Failed to generate share link. Please try again.');
-              });
-          }
-        })
-        .catch(error => {
-          clearTimeout(timeoutId);
-          console.error('Failed to get share token:', error);
-          setIsGeneratingToken(false);
-          setTokenGenerationError('Unable to load share link. Please try again.');
-        });
-    } else if (!showShareModal) {
-      // Reset the loaded ref when modal closes
-      shareModalPermissionLoadedRef.current = null;
-      permissionManuallyUpdatedRef.current = false;
-      setIsGeneratingToken(false);
-      setTokenGenerationError(null);
-    }
-  }, [showShareModal, activeSitemapId, shareMode]);
 
   const handleAuthSuccess = async () => {
     // Close modal immediately for better UX
@@ -817,24 +608,16 @@ function App() {
     setIsSendingInvite(true);
     
     try {
-      // Get or generate share token first
-      let token = shareToken;
-      if (!token) {
-        try {
-          // Get current sitemap data for JSONBin.io
-          const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
-          const currentComments = comments.filter(c => c.sitemapId === activeSitemapId);
-          token = await generateShareToken(activeSitemapId, sharePermission, currentSitemap, currentComments);
-          setShareToken(token);
-        } catch (tokenError) {
-          console.error('Failed to generate token for invite:', tokenError);
-          setInviteEmailError('Failed to generate share link. Please try again.');
-          setIsSendingInvite(false);
-          return;
-        }
+      let link = shareLink;
+      if (!link) {
+        link = rebuildShareLink();
       }
-      
-      const shareUrl = `${window.location.origin}${window.location.pathname}?share=${token}`;
+
+      if (!link) {
+        setInviteEmailError(shareLinkError || 'Share link is not ready. Please try again.');
+        setIsSendingInvite(false);
+        return;
+      }
       
       // Get sitemap name for the email
       const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
@@ -843,7 +626,7 @@ function App() {
       // Send invites to all emails
       for (const email of inviteEmails) {
         try {
-          await sendInvite(activeSitemapId, email, shareUrl, sitemapName);
+          await sendInvite(activeSitemapId, email, link, sitemapName);
         } catch (emailError) {
           // If one email fails, show error but continue with others
           console.error(`Failed to send invite to ${email}:`, emailError);
@@ -920,9 +703,51 @@ function App() {
     }
   };
 
+  const handleCopyShareLink = async () => {
+    const link = shareLink || rebuildShareLink();
+    if (!link) {
+      alert(shareLinkError || 'Unable to generate share link. Please try again.');
+      return;
+    }
+
+    try {
+      await ensureDocumentFocus();
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(link);
+        setShowCopySuccess(true);
+        setTimeout(() => setShowCopySuccess(false), 2000);
+      } else {
+        const textArea = document.createElement('textarea');
+        textArea.value = link;
+        textArea.style.position = 'fixed';
+        textArea.style.left = '-999999px';
+        textArea.style.top = '-999999px';
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+
+        try {
+          const successful = document.execCommand('copy');
+          if (successful) {
+            setShowCopySuccess(true);
+            setTimeout(() => setShowCopySuccess(false), 2000);
+          } else {
+            throw new Error('execCommand failed');
+          }
+        } finally {
+          document.body.removeChild(textArea);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to copy link:', error);
+      setCopyFallbackUrl(link);
+      setShowCopyFallbackModal(true);
+    }
+  };
+
   const handleExitViewerMode = async () => {
     // If we're viewing a shared sitemap (either in viewer or edit mode), save it to the viewer's storage
-    if (shareToken && activeSitemapId) {
+    if (isViewerMode && activeSitemapId) {
       // Check if this sitemap is already in the viewer's sitemaps
       const existingSitemap = sitemaps.find(s => s.id === activeSitemapId);
       
@@ -974,7 +799,7 @@ function App() {
           lastModified: now,
           createdAt: now,
           isShared: true, // Mark as shared
-          sharePermission: sharePermission, // Store the permission level
+          sharePermission: 'view', // Shared copies are view-only
           originalSitemapId: activeSitemapId // Track original sitemap
         };
         
@@ -1016,8 +841,6 @@ function App() {
     // Reset viewer mode state
     setIsViewerMode(false);
     setShareMode('owner');
-    setShareToken(null);
-    setSharePermission('view');
     setSharedSitemapName(null);
     
     // The existing useEffect at line 384-389 will handle resetting when share param is removed
@@ -1073,6 +896,64 @@ function App() {
       )));
     }
   }, [activeSitemapId, nodes, extraLinks, linkStyles, colorOverrides, urls, figures, freeLines, selectionGroups, sitemaps, isSupabaseConfigured, isSitemapEditable]);
+
+  const buildShareableSitemapSnapshot = useCallback((): SitemapData | null => {
+    if (!activeSitemapId) return null;
+    const base = sitemaps.find(s => s.id === activeSitemapId);
+    if (!base) return null;
+    return {
+      ...base,
+      nodes: JSON.parse(JSON.stringify(nodes)),
+      extraLinks: JSON.parse(JSON.stringify(extraLinks)),
+      linkStyles: JSON.parse(JSON.stringify(linkStyles)),
+      colorOverrides: JSON.parse(JSON.stringify(colorOverrides)),
+      urls: JSON.parse(JSON.stringify(urls)),
+      selectionGroups: JSON.parse(JSON.stringify(selectionGroups)),
+      lastModified: Date.now(),
+    };
+  }, [activeSitemapId, sitemaps, nodes, extraLinks, linkStyles, colorOverrides, urls, selectionGroups]);
+
+  const rebuildShareLink = useCallback((): string | null => {
+    const snapshot = buildShareableSitemapSnapshot();
+    if (!snapshot) {
+      setShareLink('');
+      setShareLinkError('Select a sitemap to share.');
+      return null;
+    }
+
+    setIsBuildingShareLink(true);
+    try {
+      const link = buildShareLink(
+        snapshot,
+        comments,
+        undefined,
+        JSON.parse(JSON.stringify(figures)),
+        JSON.parse(JSON.stringify(freeLines))
+      );
+      setShareLink(link);
+      setShareLinkError(null);
+      return link;
+    } catch (error) {
+      console.error('Failed to build share link:', error);
+      setShareLink('');
+      setShareLinkError('Failed to build share link.');
+      return null;
+    } finally {
+      setIsBuildingShareLink(false);
+    }
+  }, [buildShareableSitemapSnapshot, comments, figures, freeLines]);
+
+  useEffect(() => {
+    if (showShareModal) {
+      rebuildShareLink();
+      setInviteSuccessMessage('');
+      setShareLinkError(null);
+    } else {
+      setShareLink('');
+      setShareLinkError(null);
+      setShowCopySuccess(false);
+    }
+  }, [showShareModal, rebuildShareLink]);
 
   // Duplicate a sitemap (creates an editable copy)
   const duplicateSitemap = useCallback(async (sitemapId: string) => {
@@ -2568,23 +2449,12 @@ function App() {
               )}
               {nodes.length > 0 && activeSitemapId && (
                 <button
-                  onClick={async () => {
+                  onClick={() => {
                     if (!activeSitemapId) {
                       console.error('No active sitemap selected');
                       return;
                     }
-                    // Open modal immediately for better UX
                     setShowShareModal(true);
-                    // Load share token in background
-                    try {
-                      const token = await getShareToken(activeSitemapId);
-                      setShareToken(token);
-                    } catch (error) {
-                      console.error('Error loading share token:', error);
-                      // Token loading failed, but modal is already open
-                      // The useEffect will auto-generate a token if needed
-                      setShareToken(null);
-                    }
                   }}
                   className="px-4 py-2 text-sm font-medium bg-white border rounded-lg border-gray-300 hover:border-gray-400 transition-colors flex items-center gap-2"
                   title="Share sitemap"
@@ -3052,34 +2922,20 @@ function App() {
                                 <Edit2 className="w-4 h-4 text-gray-600" strokeWidth={1.5} />
                               </button>
                                       <button
-                                        onClick={async (e) => {
+                                        onClick={(e) => {
                                           e.stopPropagation();
                                           setShowSitemapDropdown(false);
-                                          // Set activeSitemapId first
                                           if (!activeSitemapId || activeSitemapId !== sitemap.id) {
                                             setActiveSitemapId(sitemap.id);
                                           }
-                                          // Open modal immediately for better UX
                                           setShowShareModal(true);
-                                          // Load share token and permission in background
-                                          try {
-                                            const { token, permission } = await getShareTokenWithPermission(sitemap.id);
-                                            setShareToken(token);
-                                            setSharePermission(permission);
-                                          } catch (error) {
-                                            console.error('Error loading share token:', error);
-                                            // Token loading failed, but modal is already open
-                                            // The useEffect will auto-generate a token if needed
-                                            setShareToken(null);
-                                            setSharePermission('view');
-                                          }
                                         }}
                                         className="p-1.5 hover:bg-blue-100 rounded transition-colors"
                                         title="Share"
                                         type="button"
                                       >
                                         <Share2 className="w-4 h-4 text-blue-600" strokeWidth={1.5} />
-                                      </button>
+                              </button>
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
@@ -3799,8 +3655,6 @@ function App() {
             setInviteEmailError('');
             setInviteSuccessMessage('');
             setShowCopySuccess(false);
-            setIsSendingInvite(false);
-            setTokenGenerationError(null);
           }}
         >
           {activeSitemapId ? (
@@ -3808,391 +3662,190 @@ function App() {
               className="bg-white rounded-lg p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto"
               onClick={(e) => e.stopPropagation()}
             >
-            {/* Header */}
-            <div className="mb-6">
-              <h2 className="text-lg font-semibold text-gray-900 mb-2">Invite team members</h2>
-              <p className="text-gray-600 text-sm">Invite your team and collaborate on your project.</p>
-      </div>
+              <div className="mb-6">
+                <h2 className="text-lg font-semibold text-gray-900 mb-1">Invite team members</h2>
+                <p className="text-gray-600 text-sm">Share a view-only link so others can explore the sitemap and leave comments.</p>
+              </div>
 
-            {/* Permission selector */}
-            <div className="mb-4">
-              {(() => {
-                // Check if current sitemap is a view-only shared sitemap
-                const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
-                const isViewOnlyShared = currentSitemap?.isShared === true && currentSitemap?.sharePermission === 'view';
-                const isViewerSession = shareMode === 'viewer';
-                const editDisabled = isViewOnlyShared || isViewerSession;
-                const disableMessage = isViewerSession
-                  ? 'Only the sitemap owner can change access level.'
-                  : 'You can only share with view-only permission since this sitemap was shared with you as view-only';
-                return (
-                  <div className="inline-flex bg-gray-100 rounded-full p-0.5 gap-0.5">
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        if (activeSitemapId && !isViewerSession && sharePermission !== 'view') {
-                          const previousPermission = sharePermission;
-                          // Mark that we're manually updating permission BEFORE any state updates
-                          permissionManuallyUpdatedRef.current = true;
-                          setIsUpdatingPermission(true);
-                          // Update permission immediately in UI
-                          setSharePermission('view');
-                          // Generate new token when permission changes (ensures different URLs)
-                          try {
-                            // Get current sitemap data for JSONBin.io
-                            const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
-                            const currentComments = comments.filter(c => c.sitemapId === activeSitemapId);
-                            // Add a safety timeout to ensure loading state clears
-                            const updatePromise = updateSharePermission(activeSitemapId, 'view', currentSitemap, currentComments);
-                            const timeoutPromise = new Promise((_, reject) =>
-                              setTimeout(() => reject(new Error('Update timeout')), 6000)
-                            );
-                            const newToken = await Promise.race([updatePromise, timeoutPromise]) as string;
-                            // Update the token state with the new token
-                            setShareToken(newToken);
-                            // Keep the ref true to prevent useEffect from overwriting
-                            setIsUpdatingPermission(false);
-                          } catch (err) {
-                            console.error('Failed to update permission:', err);
-                            // Revert UI state on error
-                            setSharePermission(previousPermission);
-                            permissionManuallyUpdatedRef.current = false;
-                            setIsUpdatingPermission(false);
-                          }
-                        }
-                      }}
-                      disabled={isViewerSession}
-                      className={`px-3 py-1.5 text-xs font-medium rounded-full transform ${
-                        sharePermission === 'view'
-                          ? 'bg-[#8b3503] text-white shadow-sm scale-105'
-                          : 'text-gray-400 bg-transparent hover:text-gray-500 scale-100'
-                      } ${isViewerSession ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
-                      title={isViewerSession ? 'Access level can only be changed by the owner.' : undefined}
-                    >
-                      View only
-                    </button>
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        if (activeSitemapId && !editDisabled && sharePermission !== 'edit') {
-                          const previousPermission = sharePermission;
-                          // Mark that we're manually updating permission BEFORE any state updates
-                          permissionManuallyUpdatedRef.current = true;
-                          setIsUpdatingPermission(true);
-                          // Update permission immediately in UI
-                          setSharePermission('edit');
-                          // Generate new token when permission changes (ensures different URLs)
-                          try {
-                            // Get current sitemap data for JSONBin.io
-                            const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
-                            const currentComments = comments.filter(c => c.sitemapId === activeSitemapId);
-                            // Add a safety timeout to ensure loading state clears
-                            const updatePromise = updateSharePermission(activeSitemapId, 'edit', currentSitemap, currentComments);
-                            const timeoutPromise = new Promise((_, reject) =>
-                              setTimeout(() => reject(new Error('Update timeout')), 6000)
-                            );
-                            const newToken = await Promise.race([updatePromise, timeoutPromise]) as string;
-                            // Update the token state with the new token
-                            setShareToken(newToken);
-                            // Keep the ref true to prevent useEffect from overwriting
-                            setIsUpdatingPermission(false);
-                          } catch (err) {
-                            console.error('Failed to update permission:', err);
-                            // Revert UI state on error
-                            setSharePermission(previousPermission);
-                            permissionManuallyUpdatedRef.current = false;
-                            setIsUpdatingPermission(false);
-                          }
-                        }
-                      }}
-                      disabled={editDisabled}
-                      className={`px-3 py-1.5 text-xs font-medium rounded-full transform ${
-                        sharePermission === 'edit'
-                          ? 'bg-[#8b3503] text-white shadow-sm scale-105'
-                          : 'text-gray-400 bg-transparent hover:text-gray-500 scale-100'
-                      } ${editDisabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}
-                      title={editDisabled ? disableMessage : undefined}
-                    >
-                      Can edit
-                    </button>
-                  </div>
-                );
-              })()}
-            </div>
+              <div className="mb-4 rounded-lg border border-orange-100 bg-orange-50/70 p-3 text-sm text-[#B54407]">
+                Viewers can navigate the canvas and add comments. Editing tools remain disabled for shared links.
+              </div>
 
-            {/* Invite member section */}
-            <div className="mb-3">
-              <div className="flex flex-col gap-2">
-                {/* Email input with pills inside */}
-                <div className="flex gap-2 items-start">
-                  <div className="flex-1">
-                    <div
-                      className={`flex flex-wrap items-center gap-1 px-2 py-2 border rounded text-sm min-h-[42px] ${
-                        inviteEmailError ? 'border-red-500' : 'border-gray-300'
-                      }`}
-                      onClick={(e) => {
-                        // Only focus if clicking directly on the container (empty space), not on children
-                        if (e.target === e.currentTarget) {
-                          const input = document.getElementById('email-input') as HTMLInputElement;
-                          if (input) {
-                            input.focus();
-                          }
-                        }
-                      }}
-                    >
-                      {/* Email pills inside the input */}
-                      {inviteEmails.map((email, index) => (
-                        <div
-                          key={index}
-                          className="flex items-center gap-1 px-2 py-0.5 bg-gray-100 rounded-full text-sm"
-                        >
-                          <span className="text-gray-700 text-xs">{email}</span>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleRemoveEmail(email);
-                            }}
-                            className="text-gray-500 hover:text-gray-700 ml-0.5"
-                            title="Remove email"
-                          >
-                            <X className="w-3 h-3" strokeWidth={2} />
-                          </button>
-                        </div>
-                      ))}
-                      {/* Email input */}
-                      <input
-                        id="email-input"
-                        type="email"
-                        value={inviteEmailInput}
-                        onChange={(e) => {
-                          e.stopPropagation();
-                          setInviteEmailInput(e.target.value);
-                          // Clear error and success message when user starts typing
-                          if (inviteEmailError) {
-                            setInviteEmailError('');
-                          }
-                          if (inviteSuccessMessage) {
-                            setInviteSuccessMessage('');
-                          }
-                        }}
-                        onClick={(e) => e.stopPropagation()}
-                        placeholder={inviteEmails.length === 0 ? "Enter email address..." : ""}
-                        className="flex-1 min-w-[120px] outline-none bg-transparent text-sm"
-                        onKeyDown={(e) => {
-                          e.stopPropagation();
-                          if (e.key === 'Enter' && inviteEmailInput.trim()) {
-                            e.preventDefault();
-                            handleAddEmail(inviteEmailInput);
-                          } else if (e.key === ',' && inviteEmailInput.trim()) {
-                            e.preventDefault();
-                            handleAddEmail(inviteEmailInput);
-                          } else if (e.key === ' ' && inviteEmailInput.trim()) {
-                            e.preventDefault();
-                            handleAddEmail(inviteEmailInput);
-                          } else if (e.key === 'Backspace' && inviteEmailInput === '' && inviteEmails.length > 0) {
-                            // Remove last email when backspace is pressed on empty input
-                            e.preventDefault();
-                            handleRemoveEmail(inviteEmails[inviteEmails.length - 1]);
-                          }
-                        }}
-                      />
-                    </div>
-                    {inviteEmailError && (
-                      <p className="text-sm text-red-600 mt-1">{inviteEmailError}</p>
-                    )}
-                    {inviteSuccessMessage && (
-                      <p className="text-sm text-green-600 mt-1">{inviteSuccessMessage}</p>
-                    )}
+              <div className="mb-5">
+                <label className="block text-sm font-medium text-gray-700 mb-2">Share link</label>
+                <div className="flex items-center gap-2">
+                  <div className="flex-1 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-700 flex items-center gap-2">
+                    <input
+                      type="text"
+                      readOnly
+                      value={shareLink || (shareLinkError ? 'Unable to build share link' : 'Generating link...')}
+                      className="flex-1 bg-transparent border-none outline-none text-sm text-gray-700"
+                      onClick={(e) => e.currentTarget.select()}
+                    />
                   </div>
                   <button
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      handleSendInvite(e);
-                    }}
-                    disabled={inviteEmails.length === 0 || isSendingInvite}
-                    className="px-4 py-2 text-sm rounded-lg shadow-sm min-h-[42px] transition-colors disabled:cursor-not-allowed flex-shrink-0 flex items-center gap-2"
-                    style={{
-                      backgroundColor: (inviteEmails.length === 0 || isSendingInvite) ? '#f5f0e8' : '#CB6015',
-                      color: (inviteEmails.length === 0 || isSendingInvite) ? '#9ca3af' : '#ffffff',
-                    }}
-                    onMouseEnter={(e) => {
-                      if (inviteEmails.length > 0 && !e.currentTarget.disabled && !isSendingInvite) {
-                        e.currentTarget.style.backgroundColor = '#CB6015';
-                      }
-                    }}
-                    onMouseLeave={(e) => {
-                      if (inviteEmails.length > 0 && !e.currentTarget.disabled && !isSendingInvite) {
-                        e.currentTarget.style.backgroundColor = '#CB6015';
-                      } else if (e.currentTarget.disabled || isSendingInvite) {
-                        e.currentTarget.style.backgroundColor = '#f5f0e8';
-                      }
-                    }}
+                    onClick={handleCopyShareLink}
+                    disabled={isBuildingShareLink || !shareLink}
+                    className="px-3 py-2 rounded-lg border-2 border-gray-100 text-sm flex items-center gap-2 text-gray-700 hover:text-gray-900 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    title={shareLinkError || (!shareLink ? 'Building share link…' : 'Copy link')}
                   >
-                    {isSendingInvite ? (
+                    {isBuildingShareLink ? (
                       <>
                         <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                           <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                           <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                         </svg>
-                        <span>Sending...</span>
+                        <span>Preparing…</span>
                       </>
                     ) : (
-                      <span>Send Invite</span>
+                      <>
+                        <Link className="w-4 h-4" strokeWidth={1.5} />
+                        <span>Copy link</span>
+                      </>
                     )}
                   </button>
-                </div>
-              </div>
-            </div>
-            {/* Copy link button */}
-            <div className="mb-3">
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={async () => {
-                    // Safety checks before copying
-                    if (!shareToken) {
-                      console.warn('Cannot copy: share token not available');
-                      if (tokenGenerationError) {
-                        alert(`Share link is not available: ${tokenGenerationError}`);
-                      } else {
-                        alert('Share link is not ready yet. Please wait a moment and try again.');
-                      }
-                      return;
-                    }
-                    
-                    if (!activeSitemapId) {
-                      console.warn('Cannot copy: no active sitemap');
-                      alert('No sitemap selected. Please select a sitemap first.');
-                      return;
-                    }
-                    
-                    // Wait for permission update to complete if in progress (with max wait)
-                    if (isUpdatingPermission) {
-                      // Wait up to 2 seconds for permission update to complete
-                      let waited = 0;
-                      while (isUpdatingPermission && waited < 2000) {
-                        await new Promise(resolve => setTimeout(resolve, 100));
-                        waited += 100;
-                      }
-                      if (isUpdatingPermission) {
-                        console.warn('Permission update still in progress, proceeding anyway');
-                      }
-                    }
-                    
-                    // Verify token and permission are synced (optional verification, with timeout)
-                    try {
-                      const verificationPromise = getShareTokenWithPermission(activeSitemapId);
-                      const timeoutPromise = new Promise((_, reject) => 
-                        setTimeout(() => reject(new Error('Verification timeout')), 3000)
-                      );
-                      const { token, permission } = await Promise.race([verificationPromise, timeoutPromise]) as { token: string | null; permission: SharePermission };
-                      if (token !== shareToken) {
-                        console.warn('Token mismatch detected, updating state');
-                        setShareToken(token);
-                      }
-                      if (permission !== sharePermission) {
-                        console.warn('Permission mismatch detected, updating state');
-                        setSharePermission(permission);
-                      }
-                    } catch (err) {
-                      // If verification fails or times out, proceed anyway (might be localStorage only or network issue)
-                      console.warn('Could not verify token/permission, proceeding with current state:', err);
-                    }
-                    
-                    const shareUrl = `${window.location.origin}${window.location.pathname}?share=${shareToken}`;
-                    
-                    // Ensure document has focus before attempting clipboard operations
-                    await ensureDocumentFocus();
-                    
-                    try {
-                      // Try modern clipboard API first
-                      if (navigator.clipboard && navigator.clipboard.writeText) {
-                        await navigator.clipboard.writeText(shareUrl);
-                        setShowCopySuccess(true);
-                        setTimeout(() => setShowCopySuccess(false), 2000);
-                      } else {
-                        // Fallback for older browsers or non-HTTPS
-                        const textArea = document.createElement('textarea');
-                        textArea.value = shareUrl;
-                        textArea.style.position = 'fixed';
-                        textArea.style.left = '-999999px';
-                        textArea.style.top = '-999999px';
-                        document.body.appendChild(textArea);
-                        textArea.focus();
-                        textArea.select();
-                        
-                        try {
-                          const successful = document.execCommand('copy');
-                          if (successful) {
-                            setShowCopySuccess(true);
-                            setTimeout(() => setShowCopySuccess(false), 2000);
-                          } else {
-                            throw new Error('execCommand failed');
-                          }
-                        } finally {
-                          document.body.removeChild(textArea);
-                        }
-                      }
-                    } catch (error) {
-                      console.error('Failed to copy link:', error);
-                      // Fallback: show custom modal with the URL so user can manually copy
-                      setCopyFallbackUrl(shareUrl);
-                      setShowCopyFallbackModal(true);
-                    }
-                  }}
-                  className="px-3 py-1.5 border-2 border-gray-100 rounded-lg text-gray-700 hover:text-gray-900 hover:bg-gray-50 transition-all duration-200 flex items-center gap-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
-                  disabled={!shareToken || isGeneratingToken}
-                  title={
-                    tokenGenerationError
-                      ? tokenGenerationError
-                      : !shareToken 
-                      ? 'Generating share link...' 
-                      : 'Copy share link'
-                  }
-                >
-                  {isGeneratingToken || isUpdatingPermission ? (
-                    <>
-                      <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                      </svg>
-                      <span>{isGeneratingToken ? 'Generating...' : 'Updating...'}</span>
-                    </>
-                  ) : (
-                    <>
-                      <Link className="w-4 h-4" strokeWidth={1.5} />
-                      <span>Copy link</span>
-                    </>
+                  {showCopySuccess && (
+                    <span className="text-sm text-green-600">Copied!</span>
                   )}
-                </button>
-                {showCopySuccess && (
-                  <span className="px-2 text-sm text-green-600 transition-opacity duration-200 opacity-100">
-                    Copied!
-                  </span>
+                </div>
+                {shareLinkError ? (
+                  <p className="text-sm text-red-600 mt-1">{shareLinkError}</p>
+                ) : (
+                  <p className="text-xs text-gray-500 mt-1">Link updates automatically with the latest canvas state.</p>
                 )}
               </div>
-              {tokenGenerationError && (
-                <p className="text-sm text-red-600 mt-1">{tokenGenerationError}</p>
-              )}
+
+              {/* Invite member section */}
+              <div className="mb-3">
+                <div className="flex flex-col gap-2">
+                  {/* Email input with pills inside */}
+                  <div className="flex gap-2 items-start">
+                    <div className="flex-1">
+                      <div
+                        className={`flex flex-wrap items-center gap-1 px-2 py-2 border rounded text-sm min-h-[42px] ${inviteEmailError ? 'border-red-500' : 'border-gray-300'}`}
+                        onClick={(e) => {
+                          if (e.target === e.currentTarget) {
+                            const input = document.getElementById('email-input') as HTMLInputElement;
+                            if (input) {
+                              input.focus();
+                            }
+                          }
+                        }}
+                      >
+                        {inviteEmails.map((email, index) => (
+                          <div
+                            key={index}
+                            className="flex items-center gap-1 px-2 py-0.5 bg-gray-100 rounded-full text-sm"
+                          >
+                            <span className="text-gray-700 text-xs">{email}</span>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleRemoveEmail(email);
+                              }}
+                              className="text-gray-500 hover:text-gray-700 ml-0.5"
+                              title="Remove email"
+                            >
+                              <X className="w-3 h-3" strokeWidth={2} />
+                            </button>
+                          </div>
+                        ))}
+                        <input
+                          id="email-input"
+                          type="email"
+                          value={inviteEmailInput}
+                          onChange={(e) => {
+                            e.stopPropagation();
+                            setInviteEmailInput(e.target.value);
+                            if (inviteEmailError) setInviteEmailError('');
+                            if (inviteSuccessMessage) setInviteSuccessMessage('');
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                          placeholder={inviteEmails.length === 0 ? 'Enter email address...' : ''}
+                          className="flex-1 min-w-[120px] outline-none bg-transparent text-sm"
+                          onKeyDown={(e) => {
+                            e.stopPropagation();
+                            if (e.key === 'Enter' && inviteEmailInput.trim()) {
+                              e.preventDefault();
+                              handleAddEmail(inviteEmailInput);
+                            } else if (e.key === ',' && inviteEmailInput.trim()) {
+                              e.preventDefault();
+                              handleAddEmail(inviteEmailInput);
+                            } else if (e.key === ' ' && inviteEmailInput.trim()) {
+                              e.preventDefault();
+                              handleAddEmail(inviteEmailInput);
+                            } else if (e.key === 'Backspace' && inviteEmailInput === '' && inviteEmails.length > 0) {
+                              e.preventDefault();
+                              handleRemoveEmail(inviteEmails[inviteEmails.length - 1]);
+                            }
+                          }}
+                        />
+                      </div>
+                      {inviteEmailError && (
+                        <p className="text-sm text-red-600 mt-1">{inviteEmailError}</p>
+                      )}
+                      {inviteSuccessMessage && (
+                        <p className="text-sm text-green-600 mt-1">{inviteSuccessMessage}</p>
+                      )}
+                    </div>
+                    <button
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        handleSendInvite(e);
+                      }}
+                      disabled={inviteEmails.length === 0 || isSendingInvite}
+                      className="px-4 py-2 text-sm rounded-lg shadow-sm min-h-[42px] transition-colors disabled:cursor-not-allowed flex-shrink-0 flex items-center gap-2"
+                      style={{
+                        backgroundColor: (inviteEmails.length === 0 || isSendingInvite) ? '#f5f0e8' : '#CB6015',
+                        color: (inviteEmails.length === 0 || isSendingInvite) ? '#9ca3af' : '#ffffff',
+                      }}
+                      onMouseEnter={(e) => {
+                        if (inviteEmails.length > 0 && !e.currentTarget.disabled && !isSendingInvite) {
+                          e.currentTarget.style.backgroundColor = '#CB6015';
+                        }
+                      }}
+                      onMouseLeave={(e) => {
+                        if (inviteEmails.length > 0 && !e.currentTarget.disabled && !isSendingInvite) {
+                          e.currentTarget.style.backgroundColor = '#CB6015';
+                        } else if (e.currentTarget.disabled || isSendingInvite) {
+                          e.currentTarget.style.backgroundColor = '#f5f0e8';
+                        }
+                      }}
+                    >
+                      {isSendingInvite ? (
+                        <>
+                          <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                          </svg>
+                          <span>Sending...</span>
+                        </>
+                      ) : (
+                        <span>Send Invite</span>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex justify-end">
+                <button
+                  onClick={() => {
+                    setShowShareModal(false);
+                    setInviteEmails([]);
+                    setInviteEmailInput('');
+                    setInviteEmailError('');
+                    setInviteSuccessMessage('');
+                    setShowCopySuccess(false);
+                  }}
+                  className="px-6 py-2 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-800 transition-colors"
+                >
+                  Close
+                </button>
+              </div>
             </div>
-            {/* Close button */}
-            <div className="flex justify-end">
-              <button
-                onClick={() => {
-                  setShowShareModal(false);
-                  setInviteEmails([]);
-                  setInviteEmailInput('');
-                  setInviteEmailError('');
-                  setInviteSuccessMessage('');
-                  setShowCopySuccess(false);
-                }}
-                className="px-6 py-2 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-800 transition-colors"
-              >
-                Close
-              </button>
-            </div>
-          </div>
           ) : (
             <div 
               className="bg-white rounded-lg p-6 max-w-md w-full"
@@ -4232,7 +3885,7 @@ function App() {
           >
             <h2 className="text-lg font-semibold mb-2">Copy Share Link</h2>
             <p className="text-sm text-gray-600 mb-4">
-              Access Level: {sharePermission === 'edit' ? 'Can edit' : 'View only'}
+              Viewers can explore the sitemap and leave comments. Editing remains disabled.
             </p>
             
             {/* URL field similar to share modal */}

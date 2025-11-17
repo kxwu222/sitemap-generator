@@ -1,419 +1,135 @@
 import { supabase } from '../lib/supabase';
 import { SitemapData } from '../types/sitemap';
-import { SharePermission, Comment } from '../types/comments';
-import { createSharedBin, getSharedBin, updateSharedBin, isJsonBinConfigured } from './jsonbinService';
+import { Comment } from '../types/comments';
+import { Figure, FreeLine } from '../types/drawables';
+import { compressToEncodedURIComponent, decompressFromEncodedURIComponent } from 'lz-string';
 
-// Generate a unique share token
-function generateToken(): string {
-  return crypto.randomUUID();
+const SHARE_PAYLOAD_VERSION = 1;
+
+type SharePayload = {
+  v: number;
+  ts: number;
+  sitemap: Pick<
+    SitemapData,
+    | 'id'
+    | 'name'
+    | 'nodes'
+    | 'extraLinks'
+    | 'linkStyles'
+    | 'colorOverrides'
+    | 'urls'
+    | 'selectionGroups'
+    | 'lastModified'
+    | 'createdAt'
+  >;
+  figures: Figure[];
+  freeLines: FreeLine[];
+  comments: Comment[];
+};
+
+function cloneSitemapForShare(sitemap: SitemapData): SharePayload['sitemap'] {
+  return {
+    id: sitemap.id,
+    name: sitemap.name,
+    nodes: JSON.parse(JSON.stringify(sitemap.nodes)),
+    extraLinks: JSON.parse(JSON.stringify(sitemap.extraLinks)),
+    linkStyles: JSON.parse(JSON.stringify(sitemap.linkStyles)),
+    colorOverrides: JSON.parse(JSON.stringify(sitemap.colorOverrides)),
+    urls: JSON.parse(JSON.stringify(sitemap.urls)),
+    selectionGroups: JSON.parse(JSON.stringify(sitemap.selectionGroups || [])),
+    lastModified: sitemap.lastModified,
+    createdAt: sitemap.createdAt,
+  };
 }
 
-// Generate and save share token for a sitemap
-export async function generateShareToken(
-  sitemapId: string, 
-  permission: SharePermission = 'view',
-  sitemap?: SitemapData,
-  comments: Comment[] = []
-): Promise<string> {
-  // Try JSONBin.io first if configured
-  if (isJsonBinConfigured() && sitemap) {
-    try {
-      console.log('[generateShareToken] Creating JSONBin.io bin...', { sitemapId, permission });
-      const binId = await createSharedBin(sitemap, permission, comments);
-      console.log('Share token (bin) generated successfully in JSONBin.io:', { sitemapId, binId, permission });
-      
-      // Also store in localStorage as backup
-      try {
-        const storageKey = `share_token_${sitemapId}`;
-        const permissionKey = `share_token_${sitemapId}_permission`;
-        localStorage.setItem(storageKey, binId);
-        localStorage.setItem(permissionKey, permission);
-      } catch (e) {
-        console.warn('Failed to save token to localStorage backup:', e);
-      }
-      
-      return binId;
-    } catch (jsonbinError: any) {
-      console.warn('JSONBin.io token generation failed, falling back to Supabase/localStorage:', {
-        error: jsonbinError?.message || jsonbinError,
-        sitemapId,
-      });
-      // Fall through to Supabase/localStorage
-    }
-  }
-
-  const token = generateToken();
-
-  if (supabase) {
-    // Try Supabase first with timeout protection
-    try {
-      console.log('[generateShareToken] Starting Supabase update...');
-      
-      // Create timeout promise (1 second)
-      const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => {
-          console.warn('[generateShareToken] Update timeout after 1 second');
-          reject(new Error('Token update timeout after 1 second'));
-        }, 1000)
-      );
-      
-      // Create update promise
-      const updateResult = supabase
-        .from('sitemaps')
-        .update({ share_token: token, share_permission: permission })
-        .eq('id', sitemapId);
-      
-      // Convert to proper promise and race with timeout
-      const updatePromise = new Promise((resolve, reject) => {
-        if (updateResult && typeof (updateResult as any).then === 'function') {
-          (updateResult as any).then(resolve, reject);
-        } else {
-          Promise.resolve(updateResult).then(resolve, reject);
-        }
-      });
-      
-      const { error } = await Promise.race([updatePromise, timeoutPromise]) as any;
-
-      if (error) {
-        console.error('Error generating share token in Supabase:', {
-          message: error.message,
-          code: error.code,
-          details: error.details,
-          hint: error.hint,
-          sitemapId,
-        });
-        // Fall through to localStorage fallback
-      } else {
-        // Successfully saved to Supabase
-        console.log('Share token generated successfully in Supabase:', { sitemapId, token, permission });
-        // Also store in localStorage as backup
-        try {
-          const storageKey = `share_token_${sitemapId}`;
-          const permissionKey = `share_token_${sitemapId}_permission`;
-          localStorage.setItem(storageKey, token);
-          localStorage.setItem(permissionKey, permission);
-        } catch (e) {
-          console.warn('Failed to save token to localStorage backup:', e);
-        }
-        return token;
-      }
-    } catch (supabaseError: any) {
-      console.warn('Supabase token update exception or timeout, using localStorage fallback:', {
-        error: supabaseError?.message || supabaseError,
-        sitemapId,
-      });
-      // Fall through to localStorage fallback
-    }
-  } else {
-    console.warn('Supabase not initialized, using localStorage fallback for share token');
-  }
-
-  // Fallback to localStorage
-  try {
-    const storageKey = `share_token_${sitemapId}`;
-    const permissionKey = `share_token_${sitemapId}_permission`;
-    localStorage.setItem(storageKey, token);
-    localStorage.setItem(permissionKey, permission);
-    console.log('Share token generated successfully in localStorage:', { sitemapId, token, permission });
-    return token;
-  } catch (error) {
-    console.error('Error saving share token to localStorage:', error);
-    throw new Error('Failed to generate share token');
-  }
+function cloneCommentsForShare(comments: Comment[]): Comment[] {
+  return JSON.parse(JSON.stringify(comments));
 }
 
-// Load sitemap by share token
-export async function getSitemapByShareToken(token: string): Promise<{ sitemap: SitemapData; permission: SharePermission } | null> {
-  // Try JSONBin.io first if configured and token looks like a JSONBin.io bin ID
-  if (isJsonBinConfigured()) {
-    const { isJsonBinId } = await import('./jsonbinService');
-    if (isJsonBinId(token)) {
-      try {
-        console.log('[getSitemapByShareToken] Loading from JSONBin.io...', { token });
-        const sharedData = await getSharedBin(token);
-        
-        if (sharedData) {
-          console.log('Loaded sitemap from JSONBin.io:', { token, permission: sharedData.permission });
-          return {
-            sitemap: sharedData.sitemap,
-            permission: sharedData.permission,
-          };
-        }
-      } catch (jsonbinError: any) {
-        console.warn('JSONBin.io load failed, falling back to Supabase/localStorage:', {
-          error: jsonbinError?.message || jsonbinError,
-          token,
-        });
-        // Fall through to Supabase/localStorage
-      }
-    }
-  }
+function cloneFigures(figures: Figure[]): Figure[] {
+  return JSON.parse(JSON.stringify(figures));
+}
 
-  // Try Supabase first if available
-  if (supabase) {
-    const { data, error } = await supabase
-      .from('sitemaps')
-      .select('*')
-      .eq('share_token', token)
-      .single();
+function toSharePayload(
+  sitemap: SitemapData,
+  comments: Comment[],
+  figures: Figure[] = [],
+  freeLines: FreeLine[] = []
+): SharePayload {
+  return {
+    v: SHARE_PAYLOAD_VERSION,
+    ts: Date.now(),
+    sitemap: cloneSitemapForShare(sitemap),
+    figures: cloneFigures(figures),
+    freeLines: JSON.parse(JSON.stringify(freeLines)),
+    comments: cloneCommentsForShare(comments),
+  };
+}
 
-    if (!error && data) {
-      // Convert to SitemapData format
-      const sitemap: SitemapData = {
-        id: data.id,
-        name: data.name,
-        nodes: data.data.nodes || [],
-        extraLinks: data.data.extraLinks || [],
-        linkStyles: data.data.linkStyles || {},
-        colorOverrides: data.data.colorOverrides || {},
-        urls: data.data.urls || [],
-        selectionGroups: data.data.selectionGroups || [],
-        lastModified: data.last_modified,
-        createdAt: data.created_at,
-      };
-      
-      const permission: SharePermission = (data.share_permission === 'edit' ? 'edit' : 'view');
-      
-      return { sitemap, permission };
-    }
-    
-    // If Supabase query failed with "no rows", continue to localStorage fallback
-    if (error && error.code !== 'PGRST116') {
-      console.error('Error loading sitemap by share token:', error);
-      // Continue to localStorage fallback instead of throwing
-    }
-  }
+export function buildSharePayloadToken(
+  sitemap: SitemapData,
+  comments: Comment[],
+  figures: Figure[] = [],
+  freeLines: FreeLine[] = []
+): string {
+  const payload = toSharePayload(sitemap, comments, figures, freeLines);
+  const json = JSON.stringify(payload);
+  return compressToEncodedURIComponent(json);
+}
 
-  // Fallback to localStorage: find sitemap by matching share token
+export function decodeSharePayload(token: string): {
+  sitemap: SitemapData;
+  comments: Comment[];
+  figures: Figure[];
+  freeLines: FreeLine[];
+  timestamp: number;
+  version: number;
+} | null {
   try {
-    const sitemapsStr = localStorage.getItem('sitemaps');
-    if (!sitemapsStr) {
+    const json = decompressFromEncodedURIComponent(token);
+    if (!json) return null;
+    const payload = JSON.parse(json) as SharePayload;
+    if (!payload?.sitemap) {
       return null;
     }
-    
-    const sitemaps: SitemapData[] = JSON.parse(sitemapsStr);
-    
-    // Find sitemap that has this share token
-    for (const sitemap of sitemaps) {
-      const storageKey = `share_token_${sitemap.id}`;
-      const storedToken = localStorage.getItem(storageKey);
-      
-      if (storedToken === token) {
-        const permissionKey = `share_token_${sitemap.id}_permission`;
-        const permission: SharePermission = (localStorage.getItem(permissionKey) === 'edit' ? 'edit' : 'view');
-        return { sitemap, permission };
-      }
-    }
-    
-    return null; // Token not found
-  } catch (error) {
-    console.error('Error loading sitemap from localStorage:', error);
+
+    const sitemap: SitemapData = {
+      ...payload.sitemap,
+      isShared: true,
+      sharePermission: 'view',
+    };
+
+    return {
+      sitemap,
+      comments: payload.comments || [],
+      figures: payload.figures || [],
+      freeLines: payload.freeLines || [],
+      timestamp: payload.ts,
+      version: payload.v,
+    };
+  } catch (error: unknown) {
+    console.error('Failed to decode share payload:', error);
     return null;
   }
 }
 
-// Revoke share token (remove sharing)
-export async function revokeShareToken(sitemapId: string): Promise<void> {
-  if (supabase) {
-    const { error } = await supabase
-      .from('sitemaps')
-      .update({ share_token: null, share_permission: null })
-      .eq('id', sitemapId);
-
-    if (error) {
-      console.error('Error revoking share token:', error);
-      // Fall through to localStorage cleanup
-    }
-  }
-
-  // Also clear from localStorage
-  try {
-    const storageKey = `share_token_${sitemapId}`;
-    const permissionKey = `share_token_${sitemapId}_permission`;
-    localStorage.removeItem(storageKey);
-    localStorage.removeItem(permissionKey);
-  } catch (error) {
-    console.error('Error removing share token from localStorage:', error);
-  }
-}
-
-// Check if sitemap has active share token
-export async function isSitemapShared(sitemapId: string): Promise<boolean> {
-  if (!supabase) {
-    return false;
-  }
-
-  const { data, error } = await supabase
-    .from('sitemaps')
-    .select('share_token')
-    .eq('id', sitemapId)
-    .single();
-
-  if (error) {
-    console.error('Error checking share status:', error);
-    return false;
-  }
-
-  return !!data?.share_token;
-}
-
-// Get share token for a sitemap
-export async function getShareToken(sitemapId: string): Promise<string | null> {
-  try {
-    if (supabase) {
-      // Try Supabase first
-      try {
-        const { data, error } = await supabase
-          .from('sitemaps')
-          .select('share_token')
-          .eq('id', sitemapId)
-          .single();
-
-        if (!error && data?.share_token) {
-          return data.share_token;
-        }
-      } catch (supabaseError) {
-        // Supabase query failed, fall through to localStorage
-        console.warn('Supabase query failed, falling back to localStorage:', supabaseError);
-      }
-    }
-
-    // Fallback to localStorage
-    try {
-      const storageKey = `share_token_${sitemapId}`;
-      const token = localStorage.getItem(storageKey);
-      return token;
-    } catch (localStorageError) {
-      console.error('Error getting share token from localStorage:', localStorageError);
-      return null;
-    }
-  } catch (error) {
-    // Catch any unexpected errors
-    console.error('Unexpected error in getShareToken:', error);
-    return null;
-  }
-}
-
-// Get share token with permission for a sitemap
-export async function getShareTokenWithPermission(sitemapId: string): Promise<{ token: string | null; permission: SharePermission }> {
-  try {
-    // Debug: Check if supabase client exists
-    console.log('[getShareTokenWithPermission] Starting:', {
-      sitemapId,
-      hasSupabase: !!supabase,
-      supabaseType: typeof supabase,
-    });
-
-    if (supabase) {
-      // Try Supabase first with timeout protection
-      try {
-        console.log('[getShareTokenWithPermission] Creating query promise...');
-        
-        // Create a timeout promise (1 second)
-        const timeoutPromise = new Promise<never>((_, reject) => 
-          setTimeout(() => {
-            console.warn('[getShareTokenWithPermission] Timeout triggered after 1 second');
-            reject(new Error('Query timeout after 1 second'));
-          }, 1000)
-        );
-        
-        // Create the query promise
-        console.log('[getShareTokenWithPermission] Building Supabase query...');
-        const queryBuilder = supabase
-          .from('sitemaps')
-          .select('share_token, share_permission')
-          .eq('id', sitemapId);
-        
-        console.log('[getShareTokenWithPermission] Calling .single()...');
-        // Supabase query builders are thenable, so we can use them directly
-        const queryResult = queryBuilder.single();
-        
-        // Add a check to see if the result is thenable
-        const isThenable = queryResult && typeof (queryResult as any).then === 'function';
-        console.log('[getShareTokenWithPermission] Query result is thenable:', isThenable);
-        
-        console.log('[getShareTokenWithPermission] Starting Promise.race...');
-        
-        // Create a proper promise from the thenable
-        const queryPromise = new Promise((resolve, reject) => {
-          if (isThenable) {
-            (queryResult as any).then(resolve, reject);
-          } else {
-            // If not thenable, try to await it directly
-            Promise.resolve(queryResult).then(resolve, reject);
-          }
-        });
-        
-        // Race between query and timeout
-        const result = await Promise.race([queryPromise, timeoutPromise]);
-        const { data, error } = result as any;
-        
-        console.log('[getShareTokenWithPermission] Promise resolved:', { hasData: !!data, hasError: !!error });
-
-        if (!error && data?.share_token) {
-          const permission: SharePermission = (data.share_permission === 'edit' ? 'edit' : 'view');
-          console.log('Retrieved share token from Supabase:', { sitemapId, token: data.share_token, permission });
-          return { token: data.share_token, permission };
-        } else if (error) {
-          console.warn('Supabase query failed for getShareTokenWithPermission:', {
-            message: error.message,
-            code: error.code,
-            details: error.details,
-            hint: error.hint,
-            sitemapId,
-          });
-          // Fall through to localStorage
-        } else {
-          // No token found in Supabase
-          console.log('No share token found in Supabase for sitemap:', sitemapId);
-        }
-      } catch (supabaseError: any) {
-        // Supabase query failed or timed out, fall through to localStorage
-        console.warn('Supabase query exception or timeout, falling back to localStorage:', {
-          error: supabaseError?.message || supabaseError,
-          errorType: supabaseError?.name,
-          errorStack: supabaseError?.stack?.substring(0, 200),
-          sitemapId,
-        });
-      }
-    } else {
-      console.warn('Supabase not initialized, using localStorage for getShareTokenWithPermission');
-    }
-
-    // Fallback to localStorage
-    try {
-      const storageKey = `share_token_${sitemapId}`;
-      const permissionKey = `share_token_${sitemapId}_permission`;
-      const token = localStorage.getItem(storageKey);
-      const permission: SharePermission = (localStorage.getItem(permissionKey) === 'edit' ? 'edit' : 'view');
-      if (token) {
-        console.log('Retrieved share token from localStorage:', { sitemapId, token, permission });
-      } else {
-        console.log('No share token found in localStorage for sitemap:', sitemapId);
-      }
-      return { token, permission };
-    } catch (localStorageError) {
-      console.error('Error getting share token from localStorage:', localStorageError);
-      return { token: null, permission: 'view' };
-    }
-  } catch (error) {
-    // Catch any unexpected errors
-    console.error('Unexpected error in getShareTokenWithPermission:', error);
-    return { token: null, permission: 'view' };
-  }
-}
-
-// Update share permission by generating a new token (ensures different URLs for different permissions)
-export async function updateSharePermission(
-  sitemapId: string, 
-  permission: SharePermission,
-  sitemap?: SitemapData,
-  comments: Comment[] = []
-): Promise<string> {
-  // Generate a new token when permission changes
-  // This ensures "view only" and "can edit" get different URLs
-  console.log('[updateSharePermission] Generating new token for permission change:', { sitemapId, permission });
-  return await generateShareToken(sitemapId, permission, sitemap, comments);
+export function buildShareLink(
+  sitemap: SitemapData,
+  comments: Comment[],
+  options?: { origin?: string; path?: string },
+  figures: Figure[] = [],
+  freeLines: FreeLine[] = []
+): string {
+  const token = buildSharePayloadToken(sitemap, comments, figures, freeLines);
+  const origin =
+    options?.origin ??
+    (typeof window !== 'undefined' ? window.location.origin : '');
+  const path =
+    options?.path ??
+    (typeof window !== 'undefined' ? window.location.pathname : '');
+  const base = `${origin}${path}`;
+  const separator = base.includes('?') ? '&' : '?';
+  return `${base}${separator}share=${token}`;
 }
 
 // Send invite to a user by email using Supabase's built-in email templates
