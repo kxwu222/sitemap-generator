@@ -938,6 +938,7 @@ function App() {
     }
 
     setIsBuildingShareLink(true);
+    setShareLinkError(null);
     try {
       const link = await buildShareLink(
         snapshot,
@@ -951,8 +952,9 @@ function App() {
       return link;
     } catch (error) {
       console.error('Failed to build share link:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Failed to build share link.';
       setShareLink('');
-      setShareLinkError('Failed to build share link.');
+      setShareLinkError(errorMessage);
       return null;
     } finally {
       setIsBuildingShareLink(false);
@@ -978,6 +980,8 @@ function App() {
     // Initial build when modal opens
     rebuildShareLink().catch(err => {
       console.error('Failed to rebuild share link:', err);
+      // Ensure loading state is cleared on error
+      setIsBuildingShareLink(false);
     });
     setInviteSuccessMessage('');
     setShareLinkError(null);
@@ -991,6 +995,8 @@ function App() {
       if (showShareModal) {
         rebuildShareLink().catch(err => {
           console.error('Failed to rebuild share link:', err);
+          // Ensure loading state is cleared on error
+          setIsBuildingShareLink(false);
         });
       }
     }, 2000); // 2 second debounce
@@ -1305,6 +1311,12 @@ function App() {
   // Load sitemaps on mount (from Supabase or localStorage)
   useEffect(() => {
     const loadData = async () => {
+      // Check if we're loading from a share link - if so, skip creating empty sitemaps
+      // The share link useEffect will handle loading the shared sitemap
+      const urlParams = new URLSearchParams(window.location.search);
+      const shareParam = urlParams.get('share');
+      const isShareLink = !!shareParam;
+      
       // Show local immediately to avoid blank UI on refresh
       try {
         const localStrEarly = localStorage.getItem('sitemaps');
@@ -1357,6 +1369,12 @@ function App() {
             setUrls(JSON.parse(JSON.stringify(activeSitemap.urls)));
             setSelectionGroups(JSON.parse(JSON.stringify(activeSitemap.selectionGroups || [])));
           } else {
+            // If loading from share link, don't create empty sitemap - share link will handle it
+            if (isShareLink) {
+              setInitialized(true);
+              return;
+            }
+            
             // No sitemaps in Supabase, initialize with empty one
             const initialSitemap: SitemapData = {
               id: `sitemap-${Date.now()}`,
@@ -1385,6 +1403,12 @@ function App() {
               setActiveSitemapId(savedActiveId);
             }
           } else {
+            // If loading from share link, don't create empty sitemap - share link will handle it
+            if (isShareLink) {
+              setInitialized(true);
+              return;
+            }
+            
             const initialSitemap: SitemapData = {
               id: `sitemap-${Date.now()}`,
               name: 'Untitled Sitemap 1',
@@ -1412,6 +1436,12 @@ function App() {
             setActiveSitemapId(savedActiveId);
           }
         } else {
+          // If loading from share link, don't create empty sitemap - share link will handle it
+          if (isShareLink) {
+            setInitialized(true);
+            return;
+          }
+          
           const initialSitemap: SitemapData = {
             id: `sitemap-${Date.now()}`,
             name: 'Untitled Sitemap 1',
@@ -3427,7 +3457,7 @@ function App() {
             </div>
           )}
         </main>
-      </div>
+                </div>
 
       {/* Search Overlay */}
       <SearchOverlay
@@ -3699,7 +3729,7 @@ function App() {
               <div className="mb-6">
                 <h2 className="text-lg font-semibold text-gray-900 mb-1">Invite team members</h2>
                 <p className="text-gray-600 text-sm">Share a view-only link so others can explore the sitemap and leave comments.</p>
-              </div>
+      </div>
 
               <div className="mb-4 rounded-lg border border-orange-100 bg-orange-50/70 p-3 text-sm text-[#B54407]">
                 Viewers can navigate the canvas and add comments. Editing tools remain disabled for shared links.
