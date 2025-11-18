@@ -234,11 +234,20 @@ export async function buildShareLink(
             // Store compressed payload separately
             share_payload: compressed,
           },
-          last_modified: new Date().toISOString(),
+          last_modified: sitemap.lastModified || Date.now(),
         })
         .eq('id', sitemap.id);
       
       const { error: updateError } = await Promise.race([updatePromise, timeoutPromise]);
+      
+      // If update failed, check if it's a type mismatch error (don't retry)
+      if (updateError) {
+        // Check if it's a type mismatch error (22P02 is PostgreSQL invalid input syntax)
+        if (updateError.code === '22P02' || updateError.message?.includes('invalid input syntax')) {
+          // Don't try insert - it will fail with the same error
+          throw new Error('Database schema mismatch: timestamps must be BIGINT, not strings.');
+        }
+      }
       
       // If update failed (sitemap doesn't exist), try insert
       if (updateError) {
@@ -258,8 +267,8 @@ export async function buildShareLink(
               share_payload: compressed,
             },
             name: sitemap.name,
-            created_at: sitemap.createdAt || new Date().toISOString(),
-            last_modified: new Date().toISOString(),
+            created_at: sitemap.createdAt || Date.now(),
+            last_modified: sitemap.lastModified || Date.now(),
           });
         
         const { error: insertError } = await Promise.race([insertPromise, timeoutPromise]);
