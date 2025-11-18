@@ -168,6 +168,7 @@ function App() {
   const [isSendingInvite, setIsSendingInvite] = useState(false); // Track if invite is being sent
   const [isViewerMode, setIsViewerMode] = useState(false);
   const [comments, setComments] = useState<Comment[]>([]);
+  const [commentsLastUpdated, setCommentsLastUpdated] = useState<Date | null>(null);
   const [commentChannel, setCommentChannel] = useState<RealtimeChannel | null>(null);
   const [commentFilter, setCommentFilter] = useState<'all' | 'unresolved' | 'resolved'>('all');
   const [sidebarTab, setSidebarTab] = useState<'sitemap' | 'comments'>('sitemap');
@@ -419,6 +420,7 @@ function App() {
         setFreeLines(JSON.parse(JSON.stringify(payloadFreeLines || [])));
         // Use comments from payload (they're already embedded in the share link)
         setComments(JSON.parse(JSON.stringify(payloadComments || [])));
+        setCommentsLastUpdated(new Date());
         
         // Also save comments to localStorage for persistence
         try {
@@ -457,7 +459,10 @@ function App() {
     
     // Load comments
     getComments(activeSitemapId)
-      .then(setComments)
+      .then((loadedComments) => {
+        setComments(loadedComments);
+        setCommentsLastUpdated(new Date());
+      })
       .catch(err => console.error('Failed to load comments:', err));
     
     // Subscribe to real-time updates (Supabase)
@@ -476,6 +481,8 @@ function App() {
         } else if (eventType === 'DELETE') {
           setComments(prev => prev.filter(c => c.id !== comment.id));
         }
+        // Update timestamp when real-time updates occur
+        setCommentsLastUpdated(new Date());
       });
       
       if (channel) {
@@ -3148,19 +3155,40 @@ function App() {
                       console.error('Failed to delete comment:', err);
                       // Rollback: reload comments if delete failed
                       if (activeSitemapId) {
-                        getComments(activeSitemapId).then(setComments).catch(console.error);
+                        getComments(activeSitemapId)
+                          .then((loadedComments) => {
+                            setComments(loadedComments);
+                            setCommentsLastUpdated(new Date());
+                          })
+                          .catch(console.error);
                       }
                     });
                   } catch (err) {
                     console.error('Failed to delete comment:', err);
                     // Rollback on error
                     if (activeSitemapId) {
-                      getComments(activeSitemapId).then(setComments).catch(console.error);
+                      getComments(activeSitemapId)
+                        .then((loadedComments) => {
+                          setComments(loadedComments);
+                          setCommentsLastUpdated(new Date());
+                        })
+                        .catch(console.error);
                     }
                   }
                 }}
                 currentUserId={isLocalhost() && !isSupabaseConfigured() ? 'localhost-user' : (user?.id)}
-                isOwner={shareMode === 'owner' || !isViewerMode}
+                isOwner={shareMode === 'owner' || (!isViewerMode && !(sitemaps.find(s => s.id === activeSitemapId)?.isShared === true && sitemaps.find(s => s.id === activeSitemapId)?.sharePermission === 'view'))}
+                lastUpdated={commentsLastUpdated}
+                onRefresh={() => {
+                  if (activeSitemapId) {
+                    getComments(activeSitemapId)
+                      .then((loadedComments) => {
+                        setComments(loadedComments);
+                        setCommentsLastUpdated(new Date());
+                      })
+                      .catch(err => console.error('Failed to refresh comments:', err));
+                  }
+                }}
               />
             </div>
           )}
@@ -3392,14 +3420,14 @@ function App() {
                     }
                   }
                 }}
-                isViewerMode={isViewerMode}
+                isViewerMode={isViewerMode || (sitemaps.find(s => s.id === activeSitemapId)?.isShared === true && sitemaps.find(s => s.id === activeSitemapId)?.sharePermission === 'view')}
                 currentUserId={isLocalhost() && !isSupabaseConfigured() ? 'localhost-user' : (user?.id)}
-                isOwner={shareMode === 'owner' || !isViewerMode}
+                isOwner={shareMode === 'owner' || (!isViewerMode && !(sitemaps.find(s => s.id === activeSitemapId)?.isShared === true && sitemaps.find(s => s.id === activeSitemapId)?.sharePermission === 'view'))}
               />
             </div>
           )}
         </main>
-                </div>
+      </div>
 
       {/* Search Overlay */}
       <SearchOverlay

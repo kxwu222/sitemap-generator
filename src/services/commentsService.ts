@@ -120,17 +120,20 @@ export async function createComment(sitemapId: string, x: number, y: number, tex
     }
   }
 
-  // Fallback to localStorage
+  // Fallback to localStorage (always succeeds, even if storage fails)
   try {
     const storageKey = `comments_${sitemapId}`;
     const existingComments = JSON.parse(localStorage.getItem(storageKey) || '[]') as Comment[];
     const updatedComments = [newComment, ...existingComments];
     localStorage.setItem(storageKey, JSON.stringify(updatedComments));
-    return newComment;
   } catch (err) {
-    console.error('Failed to create comment in localStorage:', err);
-    throw new Error('Failed to create comment');
+    // If localStorage fails (e.g., quota exceeded), still return the comment
+    // The comment will exist in memory and can be saved later
+    console.warn('Failed to persist comment to localStorage, comment exists in memory only:', err);
   }
+  
+  // Always return the comment, even if persistence failed
+  return newComment;
 }
 
 // Get all comments for a sitemap

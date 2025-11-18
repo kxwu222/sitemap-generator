@@ -11,6 +11,8 @@ interface CommentsPanelProps {
   onDelete: (commentId: string) => void;
   currentUserId?: string;
   isOwner?: boolean;
+  lastUpdated?: Date | null;
+  onRefresh?: () => void;
 }
 
 export function CommentsPanel({
@@ -22,6 +24,8 @@ export function CommentsPanel({
   onDelete,
   currentUserId,
   isOwner = false,
+  lastUpdated = null,
+  onRefresh,
 }: CommentsPanelProps) {
   const [isExpanded, setIsExpanded] = useState(true);
   const [isFilterOpen, setIsFilterOpen] = useState(false);
@@ -86,6 +90,21 @@ export function CommentsPanel({
     return date.toLocaleDateString();
   };
 
+  const formatLastUpdated = (date: Date | null) => {
+    if (!date) return 'Never';
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMs / 3600000);
+    const diffDays = Math.floor(diffMs / 86400000);
+
+    if (diffMins < 1) return 'Just now';
+    if (diffMins < 60) return `${diffMins}m ago`;
+    if (diffHours < 24) return `${diffHours}h ago`;
+    if (diffDays < 7) return `${diffDays}d ago`;
+    return date.toLocaleDateString();
+  };
+
   return (
     <div className="border-t border-gray-200 flex flex-col flex-1 min-h-0">
       <div className="w-full pt-6 pb-3 px-6 flex items-center justify-between transition-colors flex-shrink-0">
@@ -96,65 +115,99 @@ export function CommentsPanel({
 
       {isExpanded && (
         <div className="px-6 pb-3 flex-shrink-0">
-          {/* Filter button - pill shaped, smaller, under header */}
-          <div className="relative" ref={filterDropdownRef}>
-            <button
-              onClick={() => setIsFilterOpen(!isFilterOpen)}
-              className={`flex items-center gap-1.5 px-2.5 py-1 bg-white rounded-full text-xs font-medium transition-colors ${
-                filter === 'all'
-                  ? 'border border-gray-900 text-gray-900 hover:bg-orange-50'
-                  : filter === 'unresolved'
-                  ? 'border border-orange-600 text-orange-600 hover:bg-orange-50'
-                  : 'border border-green-600 text-green-600 hover:bg-green-50'
-              }`}
-            >
-              <Filter className={`w-3 h-3 ${filter === 'all' ? 'text-gray-900' : filter === 'unresolved' ? 'text-orange-600' : 'text-green-600'}`} strokeWidth={1.5} />
-              <span>{getFilterLabel(filter)}</span>
-            </button>
-            
-            {/* Dropdown with checkboxes */}
-            {isFilterOpen && (
-              <div className="absolute top-full left-0 mt-2 bg-white border border-[#B54407] rounded-lg shadow-lg z-50 min-w-[200px]">
-                <div className="p-2">
-                  {(['all', 'unresolved', 'resolved'] as const).map((filterValue) => {
-                    const isSelected = filter === filterValue;
-                    const getCount = () => {
-                      switch (filterValue) {
-                        case 'all':
-                          return comments.length;
-                        case 'unresolved':
-                          return unresolvedCount;
-                        case 'resolved':
-                          return resolvedCount;
-                      }
-                    };
-                    
-                    return (
-                      <label
-                        key={filterValue}
-                        className="flex items-center gap-2 px-3 py-2 rounded-md cursor-pointer hover:bg-orange-50 transition-colors"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={isSelected}
-                          onChange={() => {
-                            onFilterChange(filterValue);
-                            setIsFilterOpen(false);
-                          }}
-                          className="w-4 h-4 text-[#B54407] border-gray-300 rounded focus:ring-[#B54407] focus:ring-2"
-                        />
-                        <span className={`text-sm flex-1 ${isSelected ? 'text-[#B54407] font-medium' : 'text-gray-900'}`}>
-                          {getFilterLabel(filterValue)}
-                        </span>
-                        <span className={`text-xs ${isSelected ? 'text-[#B54407]' : 'text-gray-500'}`}>
-                          ({getCount()})
-                        </span>
-                      </label>
-                    );
-                  })}
+          {/* Filter button and refresh section */}
+          <div className="flex items-center gap-3">
+            {/* Filter button - pill shaped, smaller, under header */}
+            <div className="relative" ref={filterDropdownRef}>
+              <button
+                onClick={() => setIsFilterOpen(!isFilterOpen)}
+                className={`flex items-center gap-1.5 px-2.5 py-1 bg-white rounded-full text-xs font-medium transition-colors ${
+                  filter === 'all'
+                    ? 'border border-gray-900 text-gray-900 hover:bg-orange-50'
+                    : filter === 'unresolved'
+                    ? 'border border-orange-600 text-orange-600 hover:bg-orange-50'
+                    : 'border border-green-600 text-green-600 hover:bg-green-50'
+                }`}
+              >
+                <Filter className={`w-3 h-3 ${filter === 'all' ? 'text-gray-900' : filter === 'unresolved' ? 'text-orange-600' : 'text-green-600'}`} strokeWidth={1.5} />
+                <span>{getFilterLabel(filter)}</span>
+              </button>
+              
+              {/* Dropdown with checkboxes */}
+              {isFilterOpen && (
+                <div className="absolute top-full left-0 mt-2 bg-white border border-[#B54407] rounded-lg shadow-lg z-50 min-w-[200px]">
+                  <div className="p-2">
+                    {(['all', 'unresolved', 'resolved'] as const).map((filterValue) => {
+                      const isSelected = filter === filterValue;
+                      const getCount = () => {
+                        switch (filterValue) {
+                          case 'all':
+                            return comments.length;
+                          case 'unresolved':
+                            return unresolvedCount;
+                          case 'resolved':
+                            return resolvedCount;
+                        }
+                      };
+                      
+                      return (
+                        <label
+                          key={filterValue}
+                          className="flex items-center gap-2 px-3 py-2 rounded-md cursor-pointer hover:bg-orange-50 transition-colors"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => {
+                              onFilterChange(filterValue);
+                              setIsFilterOpen(false);
+                            }}
+                            className="w-4 h-4 text-[#B54407] border-gray-300 rounded focus:ring-[#B54407] focus:ring-2"
+                          />
+                          <span className={`text-sm flex-1 ${isSelected ? 'text-[#B54407] font-medium' : 'text-gray-900'}`}>
+                            {getFilterLabel(filterValue)}
+                          </span>
+                          <span className={`text-xs ${isSelected ? 'text-[#B54407]' : 'text-gray-500'}`}>
+                            ({getCount()})
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
                 </div>
-              </div>
-            )}
+              )}
+            </div>
+
+            {/* Last updated time and refresh button */}
+            <div className="flex items-center gap-2 text-xs text-gray-500">
+              <span className="text-[10px]">
+                Updated: {formatLastUpdated(lastUpdated)}
+              </span>
+              {onRefresh && (
+                <button
+                  onClick={onRefresh}
+                  className="p-1 hover:bg-gray-100 rounded transition-colors"
+                  title="Refresh comments"
+                >
+                  <svg 
+                    width="12" 
+                    height="12" 
+                    viewBox="0 0 24 24" 
+                    fill="none" 
+                    stroke="currentColor" 
+                    strokeWidth="2" 
+                    strokeLinecap="round" 
+                    strokeLinejoin="round"
+                    className="text-gray-600"
+                  >
+                    <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+                    <path d="M21 3v5h-5" />
+                    <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+                    <path d="M3 21v-5h5" />
+                  </svg>
+                </button>
+              )}
+            </div>
           </div>
         </div>
       )}
