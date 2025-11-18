@@ -417,13 +417,16 @@ function App() {
         setSelectionGroups(JSON.parse(JSON.stringify(sharedSitemap.selectionGroups || [])));
         setFigures(JSON.parse(JSON.stringify(payloadFigures || [])));
         setFreeLines(JSON.parse(JSON.stringify(payloadFreeLines || [])));
+        // Use comments from payload (they're already embedded in the share link)
         setComments(JSON.parse(JSON.stringify(payloadComments || [])));
-
-        getComments(sitemapId)
-          .then(setComments)
-          .catch(err => {
-            console.error('Failed to load comments for shared sitemap:', err);
-          });
+        
+        // Also save comments to localStorage for persistence
+        try {
+          const storageKey = `comments_${sitemapId}`;
+          localStorage.setItem(storageKey, JSON.stringify(payloadComments || []));
+        } catch (err) {
+          console.warn('Failed to save comments to localStorage:', err);
+        }
       })
       .catch(err => {
         console.error('Failed to decode share payload:', err);
@@ -614,7 +617,7 @@ function App() {
     setIsSendingInvite(true);
     
     try {
-      let link = shareLink;
+      let link: string | null = shareLink;
       if (!link) {
         link = await rebuildShareLink();
       }
@@ -949,18 +952,48 @@ function App() {
     }
   }, [buildShareableSitemapSnapshot, comments, figures, freeLines]);
 
+  // Debounced share link rebuild (only when modal is open)
+  const shareLinkRebuildTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  
   useEffect(() => {
-    if (showShareModal) {
-      rebuildShareLink().catch(err => {
-        console.error('Failed to rebuild share link:', err);
-      });
-      setInviteSuccessMessage('');
-      setShareLinkError(null);
-    } else {
+    if (!showShareModal) {
+      // Clear any pending rebuilds when modal closes
+      if (shareLinkRebuildTimeoutRef.current) {
+        clearTimeout(shareLinkRebuildTimeoutRef.current);
+        shareLinkRebuildTimeoutRef.current = null;
+      }
       setShareLink('');
       setShareLinkError(null);
       setShowCopySuccess(false);
+      return;
     }
+
+    // Initial build when modal opens
+    rebuildShareLink().catch(err => {
+      console.error('Failed to rebuild share link:', err);
+    });
+    setInviteSuccessMessage('');
+    setShareLinkError(null);
+
+    // Debounced rebuild when dependencies change (2 second delay)
+    if (shareLinkRebuildTimeoutRef.current) {
+      clearTimeout(shareLinkRebuildTimeoutRef.current);
+    }
+
+    shareLinkRebuildTimeoutRef.current = setTimeout(() => {
+      if (showShareModal) {
+        rebuildShareLink().catch(err => {
+          console.error('Failed to rebuild share link:', err);
+        });
+      }
+    }, 2000); // 2 second debounce
+
+    return () => {
+      if (shareLinkRebuildTimeoutRef.current) {
+        clearTimeout(shareLinkRebuildTimeoutRef.current);
+        shareLinkRebuildTimeoutRef.current = null;
+      }
+    };
   }, [showShareModal, rebuildShareLink]);
 
   // Duplicate a sitemap (creates an editable copy)
@@ -3318,15 +3351,17 @@ function App() {
                   }
                 }}
                 onCommentPlace={async (x, y) => {
-                  // Allow comments on localhost without authentication
+                  // Allow comments on localhost or in viewer mode without authentication
                   const isLocal = isLocalhost();
-                  const allowWithoutAuth = isLocal && !isSupabaseConfigured();
+                  const allowWithoutAuth = (isLocal && !isSupabaseConfigured()) || isViewerMode;
                   
                   if (!activeSitemapId) {
                     return;
                   }
                   
-                  if (!user && !allowWithoutAuth) {
+                  // In viewer mode or localhost, allow comments without authentication (will use localStorage)
+                  // Otherwise, require authentication
+                  if (!isViewerMode && !user && !allowWithoutAuth) {
                     if (isSupabaseConfigured()) {
                       setShowAuthModal(true);
                     }
@@ -3338,46 +3373,8 @@ function App() {
                   setRedoStack([]);
                   
                   try {
-                    // For localhost without Supabase, create comment in localStorage
-                    if (allowWithoutAuth) {
-                      const commentId = crypto.randomUUID();
-                      const mockUser = {
-                        id: 'localhost-user',
-                        email: 'localhost@local.dev',
-                        user_metadata: { name: 'Local User' }
-                      };
-                      
-                      const newComment: Comment = {
-                        id: commentId,
-                        sitemapId: activeSitemapId,
-                        userId: mockUser.id,
-                        userName: mockUser.user_metadata.name || 'Local User',
-                        userEmail: mockUser.email,
-                        x,
-                        y,
-                        text: '',
-                        resolved: false,
-                        createdAt: new Date().toISOString(),
-                        updatedAt: new Date().toISOString(),
-                      };
-                      
-                      // Store in localStorage
-                      const storageKey = `comments_${activeSitemapId}`;
-                      const existingComments = JSON.parse(localStorage.getItem(storageKey) || '[]');
-                      existingComments.push(newComment);
-                      localStorage.setItem(storageKey, JSON.stringify(existingComments));
-                      
-                      // Optimistically add comment to state immediately
-                      setComments(prev => {
-                        if (prev.some(c => c.id === newComment.id)) {
-                          return prev;
-                        }
-                        return [newComment, ...prev];
-                      });
-                      return;
-                    }
-                    
-                    // Normal Supabase flow
+                    // createComment now handles localStorage fallback automatically
+                    // Works for both authenticated users, localhost, and viewer mode
                     const newComment = await createComment(activeSitemapId, x, y, '');
                     // Optimistically add comment to state immediately
                     setComments(prev => {
@@ -3389,7 +3386,8 @@ function App() {
                     });
                   } catch (err) {
                     console.error('Failed to create comment:', err);
-                    if (isSupabaseConfigured() && !user && !isLocal) {
+                    // Don't show auth modal in viewer mode or localhost
+                    if (isSupabaseConfigured() && !user && !isLocal && !isViewerMode) {
                       setShowAuthModal(true);
                     }
                   }

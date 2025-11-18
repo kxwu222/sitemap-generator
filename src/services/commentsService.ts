@@ -39,41 +39,98 @@ function rowToComment(row: CommentRow): Comment {
 
 // Create a new comment
 export async function createComment(sitemapId: string, x: number, y: number, text: string): Promise<Comment> {
-  if (!supabase) {
-    throw new Error('Supabase client not initialized');
-  }
-
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) {
-    throw new Error('User must be authenticated to create comments');
+  // Get user info (try Supabase, fallback to localStorage)
+  let userId = 'anonymous';
+  let userEmail = '';
+  let userName = 'Anonymous User';
+  
+  if (supabase) {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        userId = user.id;
+        userEmail = user.email || '';
+        userName = user.user_metadata?.name || user.email?.split('@')[0] || `User ${user.id.slice(0, 8)}`;
+      }
+    } catch (err) {
+      // Fallback to localStorage user
+      const localUser = localStorage.getItem('localUser');
+      if (localUser) {
+        const user = JSON.parse(localUser);
+        userId = user.id || 'local-user';
+        userEmail = user.email || '';
+        userName = user.name || 'Local User';
+      }
+    }
+  } else {
+    // Use localStorage user
+    const localUser = localStorage.getItem('localUser');
+    if (localUser) {
+      const user = JSON.parse(localUser);
+      userId = user.id || 'local-user';
+      userEmail = user.email || '';
+      userName = user.name || 'Local User';
+    }
   }
 
   const commentId = crypto.randomUUID();
-  const userEmail = user.email || '';
-  const userName = user.user_metadata?.name || user.email?.split('@')[0] || `User ${user.id.slice(0, 8)}`;
+  const now = new Date().toISOString();
+  
+  const newComment: Comment = {
+    id: commentId,
+    sitemapId,
+    userId,
+    userName,
+    userEmail,
+    x,
+    y,
+    text: text.trim(),
+    resolved: false,
+    createdAt: now,
+    updatedAt: now,
+  };
 
-  const { data, error } = await supabase
-    .from('comments')
-    .insert({
-      id: commentId,
-      sitemap_id: sitemapId,
-      user_id: user.id,
-      user_name: userName,
-      user_email: userEmail,
-      x,
-      y,
-      text: text.trim(),
-      resolved: false,
-    })
-    .select()
-    .single();
+  // Try Supabase first if available
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from('comments')
+        .insert({
+          id: commentId,
+          sitemap_id: sitemapId,
+          user_id: userId,
+          user_name: userName,
+          user_email: userEmail,
+          x,
+          y,
+          text: text.trim(),
+          resolved: false,
+        })
+        .select()
+        .single();
 
-  if (error) {
-    console.error('Error creating comment:', error);
-    throw new Error(`Failed to create comment: ${error.message}`);
+      if (!error && data) {
+        return rowToComment(data);
+      }
+      
+      // If error (e.g., table doesn't exist), fall through to localStorage
+      console.warn('Failed to create comment in Supabase, using localStorage:', error?.message);
+    } catch (err) {
+      console.warn('Error creating comment in Supabase, using localStorage:', err);
+    }
   }
 
-  return rowToComment(data);
+  // Fallback to localStorage
+  try {
+    const storageKey = `comments_${sitemapId}`;
+    const existingComments = JSON.parse(localStorage.getItem(storageKey) || '[]') as Comment[];
+    const updatedComments = [newComment, ...existingComments];
+    localStorage.setItem(storageKey, JSON.stringify(updatedComments));
+    return newComment;
+  } catch (err) {
+    console.error('Failed to create comment in localStorage:', err);
+    throw new Error('Failed to create comment');
+  }
 }
 
 // Get all comments for a sitemap
@@ -127,76 +184,152 @@ export async function getComments(sitemapId: string): Promise<Comment[]> {
 }
 
 // Update comment text
-export async function updateComment(commentId: string, text: string, _sitemapId?: string): Promise<Comment> {
-  if (!supabase) {
-    throw new Error('Supabase client not initialized');
+export async function updateComment(commentId: string, text: string, sitemapId?: string): Promise<Comment> {
+  // Try Supabase first if available
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from('comments')
+        .update({
+          text: text.trim(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', commentId)
+        .select()
+        .single();
+
+      if (!error && data) {
+        return rowToComment(data);
+      }
+      
+      // If error (e.g., table doesn't exist), fall through to localStorage
+      console.warn('Failed to update comment in Supabase, using localStorage:', error?.message);
+    } catch (err) {
+      console.warn('Error updating comment in Supabase, using localStorage:', err);
+    }
   }
 
-  const { data, error } = await supabase
-    .from('comments')
-    .update({
-      text: text.trim(),
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', commentId)
-    .select()
-    .single();
-
-  if (error) {
-    console.error('Error updating comment:', error);
-    throw new Error(`Failed to update comment: ${error.message}`);
+  // Fallback to localStorage
+  if (!sitemapId) {
+    throw new Error('sitemapId is required when Supabase is not available');
   }
 
-  return rowToComment(data);
+  try {
+    const storageKey = `comments_${sitemapId}`;
+    const comments = JSON.parse(localStorage.getItem(storageKey) || '[]') as Comment[];
+    const comment = comments.find(c => c.id === commentId);
+    if (!comment) {
+      throw new Error('Comment not found');
+    }
+    
+    comment.text = text.trim();
+    comment.updatedAt = new Date().toISOString();
+    localStorage.setItem(storageKey, JSON.stringify(comments));
+    return comment;
+  } catch (err) {
+    console.error('Failed to update comment in localStorage:', err);
+    throw new Error('Failed to update comment');
+  }
 }
 
 // Update comment position
-export async function updateCommentPosition(commentId: string, x: number, y: number, _sitemapId?: string): Promise<Comment> {
-  if (!supabase) {
-    throw new Error('Supabase client not initialized');
+export async function updateCommentPosition(commentId: string, x: number, y: number, sitemapId?: string): Promise<Comment> {
+  // Try Supabase first if available
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from('comments')
+        .update({
+          x,
+          y,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', commentId)
+        .select()
+        .single();
+
+      if (!error && data) {
+        return rowToComment(data);
+      }
+      
+      // If error (e.g., table doesn't exist), fall through to localStorage
+      console.warn('Failed to update comment position in Supabase, using localStorage:', error?.message);
+    } catch (err) {
+      console.warn('Error updating comment position in Supabase, using localStorage:', err);
+    }
   }
 
-  const { data, error } = await supabase
-    .from('comments')
-    .update({
-      x,
-      y,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', commentId)
-    .select()
-    .single();
-
-  if (error) {
-    console.error('Error updating comment position:', error);
-    throw new Error(`Failed to update comment position: ${error.message}`);
+  // Fallback to localStorage
+  if (!sitemapId) {
+    throw new Error('sitemapId is required when Supabase is not available');
   }
 
-  return rowToComment(data);
+  try {
+    const storageKey = `comments_${sitemapId}`;
+    const comments = JSON.parse(localStorage.getItem(storageKey) || '[]') as Comment[];
+    const comment = comments.find(c => c.id === commentId);
+    if (!comment) {
+      throw new Error('Comment not found');
+    }
+    
+    comment.x = x;
+    comment.y = y;
+    comment.updatedAt = new Date().toISOString();
+    localStorage.setItem(storageKey, JSON.stringify(comments));
+    return comment;
+  } catch (err) {
+    console.error('Failed to update comment position in localStorage:', err);
+    throw new Error('Failed to update comment position');
+  }
 }
 
 // Resolve/unresolve a comment
-export async function resolveComment(commentId: string, resolved: boolean, _sitemapId?: string): Promise<Comment> {
-  if (!supabase) {
-    throw new Error('Supabase client not initialized');
+export async function resolveComment(commentId: string, resolved: boolean, sitemapId?: string): Promise<Comment> {
+  // Try Supabase first if available
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from('comments')
+        .update({
+          resolved,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', commentId)
+        .select()
+        .single();
+
+      if (!error && data) {
+        return rowToComment(data);
+      }
+      
+      // If error (e.g., table doesn't exist), fall through to localStorage
+      console.warn('Failed to resolve comment in Supabase, using localStorage:', error?.message);
+    } catch (err) {
+      console.warn('Error resolving comment in Supabase, using localStorage:', err);
+    }
   }
 
-  const { data, error } = await supabase
-    .from('comments')
-    .update({
-      resolved,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', commentId)
-    .select()
-    .single();
-
-  if (error) {
-    console.error('Error resolving comment:', error);
-    throw new Error(`Failed to resolve comment: ${error.message}`);
+  // Fallback to localStorage
+  if (!sitemapId) {
+    throw new Error('sitemapId is required when Supabase is not available');
   }
 
-  return rowToComment(data);
+  try {
+    const storageKey = `comments_${sitemapId}`;
+    const comments = JSON.parse(localStorage.getItem(storageKey) || '[]') as Comment[];
+    const comment = comments.find(c => c.id === commentId);
+    if (!comment) {
+      throw new Error('Comment not found');
+    }
+    
+    comment.resolved = resolved;
+    comment.updatedAt = new Date().toISOString();
+    localStorage.setItem(storageKey, JSON.stringify(comments));
+    return comment;
+  } catch (err) {
+    console.error('Failed to resolve comment in localStorage:', err);
+    throw new Error('Failed to resolve comment');
+  }
 }
 
 // Delete a comment
