@@ -207,7 +207,7 @@ export async function buildShareLink(
     console.warn('Failed to store share token in localStorage:', err);
   }
   
-  // Try Supabase first (handles large payloads)
+  // Try Supabase first (handles large payloads and works across devices)
   if (supabase) {
     try {
       // Add timeout to prevent hanging on slow networks (deployment)
@@ -281,52 +281,71 @@ export async function buildShareLink(
       // Success - return the share link
       return createShareUrl(token, options);
     } catch (err) {
-      console.warn('Error storing share payload in Supabase, trying localStorage:', err);
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      const isTimeout = errorMsg.includes('timeout') || errorMsg.includes('Supabase operation timeout');
+      
+      if (isTimeout) {
+        // If Supabase times out, use embedded payload instead of localStorage
+        // localStorage won't work for cross-device sharing
+        console.warn('Supabase timeout, using embedded payload for share link:', err);
+        const embeddedValue = `${EMBEDDED_SHARE_PREFIX}${compressed}`;
+        try {
+          return createShareUrl(embeddedValue, options);
+        } catch (embeddedErr) {
+          // If embedded is too large, fall through to localStorage as last resort
+          console.warn('Embedded payload too large, falling back to localStorage:', embeddedErr);
+        }
+      } else {
+        // For other errors, try localStorage as fallback
+        console.warn('Error storing share payload in Supabase, trying localStorage:', err);
+      }
     }
   }
   
-  // Fallback to localStorage (with size check)
+  // Fallback to localStorage (only works on same device - not ideal for sharing)
+  // But use embedded payload if possible for cross-device compatibility
   const storeInLocalStorage = () => {
     localStorage.setItem(`share_payload_${token}`, compressed);
     return createShareUrl(token, options);
   };
 
+  // Try embedded payload first (works across devices)
   try {
-    // Check if payload is too large (localStorage limit is ~5-10MB)
-    if (compressed.length > 4 * 1024 * 1024) { // 4MB threshold
-      throw new Error('Share payload is too large for localStorage. Please configure Supabase for large sitemaps.');
-    }
+    const embeddedValue = `${EMBEDDED_SHARE_PREFIX}${compressed}`;
+    return createShareUrl(embeddedValue, options);
+  } catch (embeddedErr) {
+    // If embedded is too large, try localStorage
+    console.warn('Embedded payload too large, trying localStorage:', embeddedErr);
     
-    return storeInLocalStorage();
-  } catch (err) {
-    console.error('Failed to store share payload in localStorage:', err);
-    const message = err instanceof Error ? err.message : '';
-    const isQuotaError =
-      message.includes('QuotaExceededError') ||
-      (err instanceof DOMException && err.name === 'QuotaExceededError');
-    
-    if (isQuotaError) {
-      // Attempt to clear previous share payloads and retry once
-      clearStoredSharePayloads();
-      try {
-        return storeInLocalStorage();
-      } catch (retryErr) {
-        console.warn('Retry storing share payload failed, falling back to embedded link:', retryErr);
-        const embeddedValue = `${EMBEDDED_SHARE_PREFIX}${compressed}`;
+    try {
+      // Check if payload is too large (localStorage limit is ~5-10MB)
+      if (compressed.length > 4 * 1024 * 1024) { // 4MB threshold
+        throw new Error('Share payload is too large for localStorage. Please configure Supabase for large sitemaps.');
+      }
+      
+      return storeInLocalStorage();
+    } catch (err) {
+      console.error('Failed to store share payload in localStorage:', err);
+      const message = err instanceof Error ? err.message : '';
+      const isQuotaError =
+        message.includes('QuotaExceededError') ||
+        (err instanceof DOMException && err.name === 'QuotaExceededError');
+      
+      if (isQuotaError) {
+        // Attempt to clear previous share payloads and retry once
+        clearStoredSharePayloads();
         try {
-          return createShareUrl(embeddedValue, options);
-        } catch (embeddedErr) {
+          return storeInLocalStorage();
+        } catch (retryErr) {
           throw new Error(
-            embeddedErr instanceof Error
-              ? embeddedErr.message
-              : 'Share payload is too large. Please configure Supabase for large sitemaps.'
+            'Share payload is too large. Please configure Supabase for large sitemaps.'
           );
         }
       }
+      
+      // If both embedded and localStorage fail, throw error
+      throw new Error(message || 'Failed to generate share link');
     }
-    
-    // If both Supabase and localStorage fail, still throw an error so the UI can handle it
-    throw new Error(message || 'Failed to generate share link');
   }
 }
 
@@ -346,43 +365,92 @@ export async function decodeSharePayload(token: string): Promise<{
   }
 
   let compressed: string | null = null;
+  let sitemapRow: any = null;
   
-  // Try Supabase first
+  // Try Supabase first (with timeout)
   if (supabase) {
     try {
-      const { data, error } = await supabase
+      const supabaseTimeout = 10000; // 10 seconds
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Supabase query timeout')), supabaseTimeout)
+      );
+
+      const queryPromise = supabase
         .from('sitemaps')
-        .select('data')
+        .select('*') // Select all fields, not just 'data'
         .eq('share_token', token)
         .single();
       
-      if (!error && data?.data) {
+      const { data, error } = await Promise.race([queryPromise, timeoutPromise]) as any;
+      
+      if (!error && data) {
+        sitemapRow = data;
         const sitemapData = data.data as any;
         // Check for share_payload field (new format)
-        if (sitemapData.share_payload) {
+        if (sitemapData?.share_payload) {
           compressed = sitemapData.share_payload;
         }
       }
     } catch (err) {
-      console.warn('Failed to load share payload from Supabase, trying localStorage:', err);
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      if (errorMsg.includes('timeout')) {
+        console.warn('Supabase query timeout when loading share payload, trying localStorage:', err);
+      } else {
+        console.warn('Failed to load share payload from Supabase, trying localStorage:', err);
+      }
+    }
+  }
+  
+  // If we have compressed payload, use it
+  if (compressed) {
+    return parseCompressedPayload(compressed);
+  }
+  
+  // If we have sitemap row but no share_payload, reconstruct from sitemap data
+  // This handles cases where share_payload wasn't stored but sitemap data exists
+  if (sitemapRow && sitemapRow.data) {
+    try {
+      const sitemapData = sitemapRow.data;
+      const sitemap: SitemapData = {
+        id: sitemapRow.id,
+        name: sitemapRow.name,
+        nodes: sitemapData.nodes || [],
+        extraLinks: sitemapData.extraLinks || [],
+        linkStyles: sitemapData.linkStyles || {},
+        colorOverrides: sitemapData.colorOverrides || {},
+        urls: sitemapData.urls || [],
+        selectionGroups: sitemapData.selectionGroups || [],
+        lastModified: sitemapRow.last_modified,
+        createdAt: sitemapRow.created_at,
+        isShared: true,
+        sharePermission: sitemapRow.share_permission === 'edit' ? 'edit' : 'view',
+      };
+
+      return {
+        sitemap,
+        comments: sitemapData.comments || [],
+        figures: sitemapData.figures || [],
+        freeLines: sitemapData.freeLines || [],
+        timestamp: sitemapRow.last_modified || Date.now(),
+        version: SHARE_PAYLOAD_VERSION,
+      };
+    } catch (err) {
+      console.warn('Failed to reconstruct sitemap from row data:', err);
     }
   }
   
   // Fallback to localStorage
-  if (!compressed) {
-    try {
-      compressed = localStorage.getItem(`share_payload_${token}`);
-    } catch (err) {
-      console.error('Failed to load share payload from localStorage:', err);
-      return null;
+  try {
+    compressed = localStorage.getItem(`share_payload_${token}`);
+    if (compressed) {
+      return parseCompressedPayload(compressed);
     }
+  } catch (err) {
+    console.error('Failed to load share payload from localStorage:', err);
   }
   
-  if (!compressed) {
-    return null;
-  }
-  
-  return parseCompressedPayload(compressed);
+  // If all methods fail, return null
+  return null;
 }
 
 // Send invite to a user by email using Supabase's built-in email templates
