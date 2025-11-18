@@ -2227,7 +2227,17 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
     
     // PRIORITY: When comment tool is active, place new comment
     // (Comment clicks are handled by CommentBubble DOM elements)
+    // Works in both normal and viewer mode
     if (activeTool === 'comment' && onCommentPlace) {
+      // Detect node early to avoid placing comment on top of node
+      const node = getNodeAtPosition(e.clientX, e.clientY);
+      
+      // Don't place comment if clicking on a node (unless in viewer mode where we allow it)
+      if (node && !isViewerMode) {
+        // Let the node click handler take over
+        return;
+      }
+      
       e.preventDefault();
       e.stopPropagation();
       const canvas = canvasRef.current;
@@ -2255,21 +2265,6 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
     
     // Detect node early for use in other checks
     const node = getNodeAtPosition(e.clientX, e.clientY);
-    
-    // Check for comment placement (in viewer mode)
-    // (Comment clicks are handled by CommentBubble DOM elements)
-    if (isViewerMode && activeTool === 'comment' && onCommentPlace && !node) {
-      // In viewer mode, clicking on empty canvas places a comment (only when comment tool is active)
-      const canvas = canvasRef.current;
-      if (canvas) {
-        const rect = canvas.getBoundingClientRect();
-        const cx = (e.clientX - rect.left - transform.x) / transform.scale;
-        const cy = (e.clientY - rect.top - transform.y) / transform.scale;
-        // Place new comment
-        onCommentPlace(cx, cy);
-        return;
-      }
-    }
 
     // Detect link first; clicking a connection opens the connection style popover and stops further handling
     const tolPxMd = 14; const tolCanvasMd = tolPxMd / transform.scale;

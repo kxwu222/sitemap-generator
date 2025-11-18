@@ -990,6 +990,8 @@ function App() {
 
   // Debounced share link rebuild (only when modal is open)
   const shareLinkRebuildTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const hasBuiltShareLinkRef = useRef(false);
+  const lastBuildErrorRef = useRef<string | null>(null);
   
   useEffect(() => {
     if (!showShareModal) {
@@ -1001,32 +1003,58 @@ function App() {
       setShareLink('');
       setShareLinkError(null);
       setShowCopySuccess(false);
+      hasBuiltShareLinkRef.current = false;
+      lastBuildErrorRef.current = null;
       return;
     }
 
-    // Initial build when modal opens
-    rebuildShareLink().catch(err => {
-      console.error('Failed to rebuild share link:', err);
-      // Ensure loading state is cleared on error
-      setIsBuildingShareLink(false);
-    });
     setInviteSuccessMessage('');
-    setShareLinkError(null);
+    
+    // Only build once when modal opens, unless there was a previous error that's now resolved
+    if (!hasBuiltShareLinkRef.current || (lastBuildErrorRef.current && !shareLinkError)) {
+      hasBuiltShareLinkRef.current = true;
+      
+      // Initial build when modal opens
+      rebuildShareLink().catch(err => {
+        console.error('Failed to rebuild share link:', err);
+        // Ensure loading state is cleared on error
+        setIsBuildingShareLink(false);
+        // Store error to prevent retries on timeout
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        if (errorMsg.includes('timeout') || errorMsg.includes('Supabase operation timeout')) {
+          lastBuildErrorRef.current = errorMsg;
+          // Don't retry on timeout - fallback to localStorage is already handled
+          // Clear the error flag after a delay to allow manual retry
+          setTimeout(() => {
+            lastBuildErrorRef.current = null;
+          }, 5000);
+        } else {
+          lastBuildErrorRef.current = null;
+        }
+      });
+    }
 
-    // Debounced rebuild when dependencies change (2 second delay)
+    // Debounced rebuild when dependencies change (only if no timeout error occurred)
     if (shareLinkRebuildTimeoutRef.current) {
       clearTimeout(shareLinkRebuildTimeoutRef.current);
     }
 
-    shareLinkRebuildTimeoutRef.current = setTimeout(() => {
-      if (showShareModal) {
-        rebuildShareLink().catch(err => {
-          console.error('Failed to rebuild share link:', err);
-          // Ensure loading state is cleared on error
-          setIsBuildingShareLink(false);
-        });
-      }
-    }, 2000); // 2 second debounce
+    // Only schedule debounced rebuild if there's no timeout error
+    if (!lastBuildErrorRef.current || !lastBuildErrorRef.current.includes('timeout')) {
+      shareLinkRebuildTimeoutRef.current = setTimeout(() => {
+        if (showShareModal && !lastBuildErrorRef.current?.includes('timeout')) {
+          rebuildShareLink().catch(err => {
+            console.error('Failed to rebuild share link:', err);
+            // Ensure loading state is cleared on error
+            setIsBuildingShareLink(false);
+            const errorMsg = err instanceof Error ? err.message : String(err);
+            if (errorMsg.includes('timeout')) {
+              lastBuildErrorRef.current = errorMsg;
+            }
+          });
+        }
+      }, 2000); // 2 second debounce
+    }
 
     return () => {
       if (shareLinkRebuildTimeoutRef.current) {
@@ -1034,7 +1062,7 @@ function App() {
         shareLinkRebuildTimeoutRef.current = null;
       }
     };
-  }, [showShareModal, rebuildShareLink]);
+  }, [showShareModal, rebuildShareLink, shareLinkError]);
 
   // Duplicate a sitemap (creates an editable copy)
   const duplicateSitemap = useCallback(async (sitemapId: string) => {
