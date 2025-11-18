@@ -78,29 +78,52 @@ export async function createComment(sitemapId: string, x: number, y: number, tex
 
 // Get all comments for a sitemap
 export async function getComments(sitemapId: string): Promise<Comment[]> {
-  if (!supabase) {
-    // Try localStorage fallback
+  // Try localStorage first (works without Supabase)
+  try {
     const storageKey = `comments_${sitemapId}`;
     const stored = localStorage.getItem(storageKey);
     if (stored) {
       return JSON.parse(stored);
     }
-    return [];
+  } catch (err) {
+    // Ignore localStorage errors
   }
 
-  const { data, error } = await supabase
-    .from('comments')
-    .select('*')
-    .eq('sitemap_id', sitemapId)
-    .order('created_at', { ascending: false });
+  // Try Supabase if available
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from('comments')
+        .select('*')
+        .eq('sitemap_id', sitemapId)
+        .order('created_at', { ascending: false });
 
-  if (error) {
-    console.error('Error loading comments:', error);
-    throw new Error(`Failed to load comments: ${error.message}`);
+      if (error) {
+        // If table doesn't exist or other error, fall back to localStorage
+        console.warn('Error loading comments from Supabase, using localStorage:', error.message);
+        const storageKey = `comments_${sitemapId}`;
+        const stored = localStorage.getItem(storageKey);
+        if (stored) {
+          return JSON.parse(stored);
+        }
+        return [];
+      }
+
+      // Convert all rows to comments
+      return (data || []).map(rowToComment);
+    } catch (err) {
+      // Catch any unexpected errors (e.g., table doesn't exist)
+      console.warn('Failed to load comments from Supabase, using localStorage:', err);
+      const storageKey = `comments_${sitemapId}`;
+      const stored = localStorage.getItem(storageKey);
+      if (stored) {
+        return JSON.parse(stored);
+      }
+      return [];
+    }
   }
 
-  // Convert all rows to comments
-  return (data || []).map(rowToComment);
+  return [];
 }
 
 // Update comment text
@@ -214,34 +237,40 @@ export function subscribeToComments(
     return null;
   }
 
-  const channel = supabase
-    .channel(`comments:${sitemapId}`)
-    .on(
-      'postgres_changes',
-      {
-        event: '*',
-        schema: 'public',
-        table: 'comments',
-        filter: `sitemap_id=eq.${sitemapId}`,
-      },
-      async (payload) => {
-        try {
-          if (payload.eventType === 'DELETE') {
-            // For deletes, we only have the old record
-            const oldRecord = payload.old as CommentRow;
-            callback(rowToComment(oldRecord), 'DELETE');
-          } else {
-            // For INSERT and UPDATE, convert the new record
-            const newRecord = payload.new as CommentRow;
-            callback(rowToComment(newRecord), payload.eventType as 'INSERT' | 'UPDATE');
+  try {
+    const channel = supabase
+      .channel(`comments:${sitemapId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'comments',
+          filter: `sitemap_id=eq.${sitemapId}`,
+        },
+        async (payload) => {
+          try {
+            if (payload.eventType === 'DELETE') {
+              // For deletes, we only have the old record
+              const oldRecord = payload.old as CommentRow;
+              callback(rowToComment(oldRecord), 'DELETE');
+            } else {
+              // For INSERT and UPDATE, convert the new record
+              const newRecord = payload.new as CommentRow;
+              callback(rowToComment(newRecord), payload.eventType as 'INSERT' | 'UPDATE');
+            }
+          } catch (error) {
+            console.error('Error processing real-time comment update:', error);
           }
-        } catch (error) {
-          console.error('Error processing real-time comment update:', error);
         }
-      }
-    )
-    .subscribe();
+      )
+      .subscribe();
 
-  return channel;
+    return channel;
+  } catch (error) {
+    // If subscription fails (e.g., table doesn't exist), return null
+    console.warn('Failed to subscribe to comments (table may not exist):', error);
+    return null;
+  }
 }
 

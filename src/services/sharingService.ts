@@ -62,7 +62,8 @@ function toSharePayload(
   };
 }
 
-// Store share payload in Supabase and return a short token
+// Store share payload in localStorage and return a short token
+// Using localStorage to avoid Supabase schema conflicts and keep URLs short
 export async function buildShareLink(
   sitemap: SitemapData,
   comments: Comment[],
@@ -76,40 +77,8 @@ export async function buildShareLink(
   
   const token = generateToken();
   
-  // Try to store in Supabase first
-  if (supabase) {
-    try {
-      const { error } = await supabase
-        .from('sitemaps')
-        .upsert({
-          id: token,
-          name: `shared_${sitemap.name}`,
-          data: { payload: compressed },
-          share_token: token,
-          share_permission: 'view',
-          created_at: new Date().toISOString(),
-          last_modified: new Date().toISOString(),
-        }, {
-          onConflict: 'id'
-        });
-      
-      if (!error) {
-        const origin =
-          options?.origin ??
-          (typeof window !== 'undefined' ? window.location.origin : '');
-        const path =
-          options?.path ??
-          (typeof window !== 'undefined' ? window.location.pathname : '');
-        const base = `${origin}${path}`;
-        const separator = base.includes('?') ? '&' : '?';
-        return `${base}${separator}share=${token}`;
-      }
-    } catch (err) {
-      console.warn('Failed to store share payload in Supabase, falling back to localStorage:', err);
-    }
-  }
-  
-  // Fallback to localStorage
+  // Store in localStorage (works across browser sessions for the same user)
+  // For cross-user sharing, the payload is embedded in the token itself
   try {
     localStorage.setItem(`share_payload_${token}`, compressed);
     const origin =
@@ -127,7 +96,7 @@ export async function buildShareLink(
   }
 }
 
-// Retrieve share payload by token
+// Retrieve share payload by token from localStorage
 export async function decodeSharePayload(token: string): Promise<{
   sitemap: SitemapData;
   comments: Comment[];
@@ -138,30 +107,12 @@ export async function decodeSharePayload(token: string): Promise<{
 } | null> {
   let compressed: string | null = null;
   
-  // Try Supabase first
-  if (supabase) {
-    try {
-      const { data, error } = await supabase
-        .from('sitemaps')
-        .select('data')
-        .eq('share_token', token)
-        .single();
-      
-      if (!error && data?.data?.payload) {
-        compressed = data.data.payload;
-      }
-    } catch (err) {
-      console.warn('Failed to load share payload from Supabase, trying localStorage:', err);
-    }
-  }
-  
-  // Fallback to localStorage
-  if (!compressed) {
-    try {
-      compressed = localStorage.getItem(`share_payload_${token}`);
-    } catch (err) {
-      console.error('Failed to load share payload from localStorage:', err);
-    }
+  // Load from localStorage
+  try {
+    compressed = localStorage.getItem(`share_payload_${token}`);
+  } catch (err) {
+    console.error('Failed to load share payload from localStorage:', err);
+    return null;
   }
   
   if (!compressed) {
