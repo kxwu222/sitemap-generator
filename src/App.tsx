@@ -148,6 +148,7 @@ function App() {
   const [authDropdownPosition, setAuthDropdownPosition] = useState<{ top: number; right: number } | null>(null);
   const authDropdownTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const exportButtonRef = useRef<HTMLButtonElement | null>(null);
+  const currentBuildPromiseRef = useRef<Promise<string | null> | null>(null);
   const [exportDropdownPosition, setExportDropdownPosition] = useState<{ top: number; right: number } | null>(null);
   const [showXmlExportWarning, setShowXmlExportWarning] = useState(false);
   
@@ -720,7 +721,20 @@ function App() {
   };
 
   const handleCopyShareLink = async () => {
-    const link = shareLink || await rebuildShareLink();
+    // If we have a link, use it immediately
+    let link: string | null = shareLink;
+    
+    // If no link exists, wait for any in-progress build or start a new one
+    if (!link) {
+      if (currentBuildPromiseRef.current) {
+        // Wait for the existing build to complete
+        link = await currentBuildPromiseRef.current;
+      } else {
+        // Start a new build
+        link = await rebuildShareLink();
+      }
+    }
+
     if (!link) {
       alert(shareLinkError || 'Unable to generate share link. Please try again.');
       return;
@@ -930,6 +944,11 @@ function App() {
   }, [activeSitemapId, sitemaps, nodes, extraLinks, linkStyles, colorOverrides, urls, selectionGroups]);
 
   const rebuildShareLink = useCallback(async (): Promise<string | null> => {
+    // If a build is already in progress, return the existing promise
+    if (currentBuildPromiseRef.current) {
+      return currentBuildPromiseRef.current;
+    }
+
     const snapshot = buildShareableSitemapSnapshot();
     if (!snapshot) {
       setShareLink('');
@@ -939,26 +958,34 @@ function App() {
 
     setIsBuildingShareLink(true);
     setShareLinkError(null);
-    try {
-      const link = await buildShareLink(
-        snapshot,
-        comments,
-        undefined,
-        JSON.parse(JSON.stringify(figures)),
-        JSON.parse(JSON.stringify(freeLines))
-      );
-      setShareLink(link);
-      setShareLinkError(null);
-      return link;
-    } catch (error) {
-      console.error('Failed to build share link:', error);
-      const errorMessage = error instanceof Error ? error.message : 'Failed to build share link.';
-      setShareLink('');
-      setShareLinkError(errorMessage);
-      return null;
-    } finally {
-      setIsBuildingShareLink(false);
-    }
+    
+    // Create the build promise and store it
+    const buildPromise = (async () => {
+      try {
+        const link = await buildShareLink(
+          snapshot,
+          comments,
+          undefined,
+          JSON.parse(JSON.stringify(figures)),
+          JSON.parse(JSON.stringify(freeLines))
+        );
+        setShareLink(link);
+        setShareLinkError(null);
+        return link;
+      } catch (error) {
+        console.error('Failed to build share link:', error);
+        const errorMessage = error instanceof Error ? error.message : 'Failed to build share link.';
+        setShareLink('');
+        setShareLinkError(errorMessage);
+        return null;
+      } finally {
+        setIsBuildingShareLink(false);
+        currentBuildPromiseRef.current = null; // Clear the promise reference
+      }
+    })();
+
+    currentBuildPromiseRef.current = buildPromise;
+    return buildPromise;
   }, [buildShareableSitemapSnapshot, comments, figures, freeLines]);
 
   // Debounced share link rebuild (only when modal is open)

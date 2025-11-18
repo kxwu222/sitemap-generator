@@ -139,9 +139,15 @@ export async function buildShareLink(
   // Try Supabase first (handles large payloads)
   if (supabase) {
     try {
+      // Add timeout to prevent hanging on slow networks (deployment)
+      const supabaseTimeout = 10000; // 10 seconds
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Supabase operation timeout')), supabaseTimeout)
+      );
+
       // First, try to update existing sitemap's share_token and share_payload
       // This avoids conflicts with the id field
-      const { error: updateError } = await supabase
+      const updatePromise = supabase
         .from('sitemaps')
         .update({
           share_token: token,
@@ -161,9 +167,11 @@ export async function buildShareLink(
         })
         .eq('id', sitemap.id);
       
+      const { error: updateError } = await Promise.race([updatePromise, timeoutPromise]);
+      
       // If update failed (sitemap doesn't exist), try insert
       if (updateError) {
-        const { error: insertError } = await supabase
+        const insertPromise = supabase
           .from('sitemaps')
           .insert({
             id: sitemap.id,
@@ -182,6 +190,8 @@ export async function buildShareLink(
             created_at: sitemap.createdAt || new Date().toISOString(),
             last_modified: new Date().toISOString(),
           });
+        
+        const { error: insertError } = await Promise.race([insertPromise, timeoutPromise]);
         
         if (insertError) {
           throw insertError;
