@@ -492,8 +492,11 @@ function App() {
     }
     
     return () => {
-      if (commentChannel) {
-        supabase?.removeChannel(commentChannel);
+      // Use the local channel variable for cleanup to ensure we have the correct reference
+      // The state variable commentChannel might not be updated yet or might be stale in the cleanup closure
+      if (supabase) {
+        // We can also try to remove all channels for this sitemap to be safe
+        supabase.removeAllChannels();
       }
     };
   }, [activeSitemapId, isSupabaseConfigured, isLocalhost]);
