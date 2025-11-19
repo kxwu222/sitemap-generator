@@ -18,6 +18,10 @@ DROP POLICY IF EXISTS "Allow create comments for shared sitemaps" ON comments;
 DROP POLICY IF EXISTS "Allow update comments for shared sitemaps" ON comments;
 DROP POLICY IF EXISTS "Allow delete comments for shared sitemaps" ON comments;
 DROP POLICY IF EXISTS "Allow read comments for shared sitemaps" ON comments;
+DROP POLICY IF EXISTS "Allow read comments" ON comments;
+DROP POLICY IF EXISTS "Allow create comments" ON comments;
+DROP POLICY IF EXISTS "Allow update comments" ON comments;
+DROP POLICY IF EXISTS "Allow delete comments" ON comments;
 
 -- Step 3: Create comprehensive policies
 
@@ -123,3 +127,17 @@ CREATE POLICY "Allow delete comments" ON comments
       AND sitemaps.user_id = auth.uid()::text
     )
   );
+
+-- Step 4: Enable Realtime
+-- Ensure the table is in the publication to broadcast changes
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_publication_tables 
+    WHERE pubname = 'supabase_realtime' 
+    AND tablename = 'comments'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE comments;
+  END IF;
+END
+$$;

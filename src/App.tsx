@@ -140,6 +140,7 @@ function App() {
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [lastUsedGroup, setLastUsedGroup] = useState<string>('general');
+  const [activeTool, setActiveTool] = useState<'select' | 'text' | 'draw' | 'comment'>('select');
   const [user, setUser] = useState<SupabaseUser | null>(null);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authLoading, setAuthLoading] = useState(true);
@@ -151,7 +152,7 @@ function App() {
   const currentBuildPromiseRef = useRef<Promise<string | null> | null>(null);
   const [exportDropdownPosition, setExportDropdownPosition] = useState<{ top: number; right: number } | null>(null);
   const [showXmlExportWarning, setShowXmlExportWarning] = useState(false);
-  
+
   // Sharing and comments state
   const [showShareModal, setShowShareModal] = useState(false);
   const [shareMode, setShareMode] = useState<ShareMode>('owner');
@@ -229,7 +230,7 @@ function App() {
       try {
         localStorage.setItem('sitemaps', JSON.stringify(merged));
         localStorage.setItem('activeSitemapId', activeId);
-      } catch {}
+      } catch { }
     } catch (e) {
       console.error('Failed to refresh sitemaps after auth change:', e);
     }
@@ -242,9 +243,9 @@ function App() {
 
   // Check if running on localhost
   const isLocalhost = useCallback(() => {
-    return window.location.hostname === 'localhost' || 
-           window.location.hostname === '127.0.0.1' || 
-           window.location.hostname === '';
+    return window.location.hostname === 'localhost' ||
+      window.location.hostname === '127.0.0.1' ||
+      window.location.hostname === '';
   }, []);
 
   // Require authentication for actions (only if Supabase is configured)
@@ -287,7 +288,7 @@ function App() {
           setSitemaps(localList);
           if (localActiveEarly) setActiveSitemapId(localActiveEarly);
         }
-      } catch {}
+      } catch { }
 
       if (!isSupabaseConfigured()) {
         setAuthLoading(false);
@@ -316,7 +317,7 @@ function App() {
       const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
         const newUser = session?.user ?? null;
         setUser(newUser);
-        
+
         if (newUser) {
           // User signed in - close modal and refresh sitemaps
           setShowAuthModal(false);
@@ -422,7 +423,7 @@ function App() {
         // Use comments from payload (they're already embedded in the share link)
         setComments(JSON.parse(JSON.stringify(payloadComments || [])));
         setCommentsLastUpdated(new Date());
-        
+
         // Also save comments to localStorage for persistence
         try {
           const storageKey = `comments_${sitemapId}`;
@@ -440,7 +441,7 @@ function App() {
   // Load comments when active sitemap changes
   useEffect(() => {
     if (!activeSitemapId) return;
-    
+
     // Load from localStorage if on localhost without Supabase
     const isLocal = isLocalhost();
     if (isLocal && !isSupabaseConfigured()) {
@@ -449,15 +450,15 @@ function App() {
       setComments(storedComments);
       return;
     }
-    
+
     if (!isSupabaseConfigured()) return;
-    
+
     // Cleanup previous subscription
     if (commentChannel) {
       supabase?.removeChannel(commentChannel);
       setCommentChannel(null);
     }
-    
+
     // Load comments
     getComments(activeSitemapId)
       .then((loadedComments) => {
@@ -465,7 +466,7 @@ function App() {
         setCommentsLastUpdated(new Date());
       })
       .catch(err => console.error('Failed to load comments:', err));
-    
+
     // Subscribe to real-time updates (Supabase)
     if (supabase) {
       const channel = subscribeToComments(activeSitemapId, (comment, eventType) => {
@@ -485,12 +486,12 @@ function App() {
         // Update timestamp when real-time updates occur
         setCommentsLastUpdated(new Date());
       });
-      
+
       if (channel) {
         setCommentChannel(channel);
       }
     }
-    
+
     return () => {
       // Use the local channel variable for cleanup to ensure we have the correct reference
       // The state variable commentChannel might not be updated yet or might be stale in the cleanup closure
@@ -504,7 +505,7 @@ function App() {
   const handleAuthSuccess = async () => {
     // Close modal immediately for better UX
     setShowAuthModal(false);
-    
+
     const currentUser = await getCurrentUser();
     if (currentUser) {
       setUser(currentUser);
@@ -518,11 +519,11 @@ function App() {
   const handleSignOut = async () => {
     // Close dropdown first
     setShowAuthDropdown(false);
-    
+
     // Set user to null and show modal immediately for better UX
     setUser(null);
     setShowAuthModal(true);
-    
+
     try {
       // Call signOut to trigger auth state change event
       const { error } = await signOut();
@@ -532,7 +533,7 @@ function App() {
     } catch (e) {
       console.error('signOut() failed:', e);
     }
-    
+
     // Clear Supabase tokens after signOut
     try {
       const toClear: string[] = [];
@@ -543,7 +544,7 @@ function App() {
         }
       }
       toClear.forEach(k => localStorage.removeItem(k));
-    } catch {}
+    } catch { }
 
     // Restore local sitemaps (no wipe)
     try {
@@ -619,14 +620,14 @@ function App() {
       e.preventDefault();
       e.stopPropagation();
     }
-    
+
     if (inviteEmails.length === 0 || !activeSitemapId) return;
-    
+
     // Clear any previous error and success message
     setInviteEmailError('');
     setInviteSuccessMessage('');
     setIsSendingInvite(true);
-    
+
     try {
       let link: string | null = shareLink;
       if (!link) {
@@ -638,11 +639,11 @@ function App() {
         setIsSendingInvite(false);
         return;
       }
-      
+
       // Get sitemap name for the email
       const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
       const sitemapName = currentSitemap?.name;
-      
+
       // Send invites to all emails
       for (const email of inviteEmails) {
         try {
@@ -656,7 +657,7 @@ function App() {
           return; // Stop on first error
         }
       }
-      
+
       // All invites sent successfully
       setInviteSuccessMessage('Invite sent!');
       setInviteEmailInput('');
@@ -685,7 +686,7 @@ function App() {
 
     try {
       await ensureDocumentFocus();
-      
+
       // Try modern clipboard API first
       if (navigator.clipboard && navigator.clipboard.writeText) {
         await navigator.clipboard.writeText(copyFallbackUrl);
@@ -694,7 +695,7 @@ function App() {
         setShowCopyFallbackModal(false);
         return;
       }
-      
+
       // Fallback for older browsers or non-HTTPS
       const textArea = document.createElement('textarea');
       textArea.value = copyFallbackUrl;
@@ -704,7 +705,7 @@ function App() {
       document.body.appendChild(textArea);
       textArea.focus();
       textArea.select();
-      
+
       try {
         const successful = document.execCommand('copy');
         if (successful) {
@@ -726,7 +727,7 @@ function App() {
   const handleCopyShareLink = async () => {
     // If we have a link, use it immediately
     let link: string | null = shareLink;
-    
+
     // If no link exists, wait for any in-progress build or start a new one
     if (!link) {
       if (currentBuildPromiseRef.current) {
@@ -783,16 +784,16 @@ function App() {
     if (isViewerMode && activeSitemapId) {
       // Check if this sitemap is already in the viewer's sitemaps
       const existingSitemap = sitemaps.find(s => s.id === activeSitemapId);
-      
+
       if (!existingSitemap) {
         // Create a new sitemap with a new ID but keep the original name
         const newSitemapId = `sitemap-${Date.now()}`;
         const now = Date.now();
-        
+
         // Get the original name from the shared sitemap
         // Use the stored name if available, otherwise try to infer from nodes
         let finalName = sharedSitemapName || 'Shared Sitemap';
-        
+
         // If we don't have the stored name, try to infer from nodes
         if (!sharedSitemapName && nodes.length > 0) {
           // Try to get name from the first node's URL or title
@@ -809,7 +810,7 @@ function App() {
             finalName = `${firstNode.title} Sitemap`;
           }
         }
-        
+
         // Check for name conflicts and append number if needed
         const nameExists = sitemaps.some(s => s.name === finalName);
         if (nameExists) {
@@ -819,7 +820,7 @@ function App() {
           }
           finalName = `${finalName} ${counter}`;
         }
-        
+
         const savedSitemap: SitemapData = {
           id: newSitemapId,
           name: finalName,
@@ -835,7 +836,7 @@ function App() {
           sharePermission: 'view', // Shared copies are view-only
           originalSitemapId: activeSitemapId // Track original sitemap
         };
-        
+
         // Add to sitemaps array
         setSitemaps(prev => {
           const updated = [...prev, savedSitemap];
@@ -848,7 +849,7 @@ function App() {
           }
           return updated;
         });
-        
+
         // Save to Supabase if configured
         if (isSupabaseConfigured() && supabase) {
           try {
@@ -858,7 +859,7 @@ function App() {
             // Already saved to localStorage above, so continue
           }
         }
-        
+
         // Set as active sitemap
         setActiveSitemapId(newSitemapId);
       } else {
@@ -867,28 +868,28 @@ function App() {
         await saveCurrentStateToActiveSitemap();
       }
     }
-    
+
     // Clear URL parameter
     window.history.replaceState({}, '', window.location.pathname);
-    
+
     // Reset viewer mode state
     setIsViewerMode(false);
     setShareMode('owner');
     setSharedSitemapName(null);
-    
+
     // The existing useEffect at line 384-389 will handle resetting when share param is removed
   };
 
   // Sitemap management functions
   const saveCurrentStateToActiveSitemap = useCallback(async () => {
     if (!activeSitemapId) return;
-    
+
     const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
     // Prevent saving view-only shared sitemaps
     if (!isSitemapEditable(currentSitemap || null)) {
       return;
     }
-    
+
     const updatedSitemap: SitemapData = {
       id: activeSitemapId,
       name: currentSitemap?.name || 'Untitled Sitemap',
@@ -907,7 +908,7 @@ function App() {
     };
 
     // Update local state
-    setSitemaps(prev => prev.map(sitemap => 
+    setSitemaps(prev => prev.map(sitemap =>
       sitemap.id === activeSitemapId ? updatedSitemap : sitemap
     ));
 
@@ -918,13 +919,13 @@ function App() {
       } catch (error) {
         console.error('Failed to save to Supabase:', error);
         // Fallback to localStorage
-        localStorage.setItem('sitemaps', JSON.stringify(sitemaps.map(s => 
+        localStorage.setItem('sitemaps', JSON.stringify(sitemaps.map(s =>
           s.id === activeSitemapId ? updatedSitemap : s
         )));
       }
     } else {
       // Fallback to localStorage
-      localStorage.setItem('sitemaps', JSON.stringify(sitemaps.map(s => 
+      localStorage.setItem('sitemaps', JSON.stringify(sitemaps.map(s =>
         s.id === activeSitemapId ? updatedSitemap : s
       )));
     }
@@ -961,7 +962,7 @@ function App() {
 
     setIsBuildingShareLink(true);
     setShareLinkError(null);
-    
+
     // Create the build promise and store it
     const buildPromise = (async () => {
       try {
@@ -995,7 +996,7 @@ function App() {
   const shareLinkRebuildTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const hasBuiltShareLinkRef = useRef(false);
   const lastBuildErrorRef = useRef<string | null>(null);
-  
+
   useEffect(() => {
     if (!showShareModal) {
       // Clear any pending rebuilds when modal closes
@@ -1012,11 +1013,11 @@ function App() {
     }
 
     setInviteSuccessMessage('');
-    
+
     // Only build once when modal opens, unless there was a previous error that's now resolved
     if (!hasBuiltShareLinkRef.current || (lastBuildErrorRef.current && !shareLinkError)) {
       hasBuiltShareLinkRef.current = true;
-      
+
       // Initial build when modal opens
       rebuildShareLink().catch(err => {
         console.error('Failed to rebuild share link:', err);
@@ -1070,13 +1071,13 @@ function App() {
   // Duplicate a sitemap (creates an editable copy)
   const duplicateSitemap = useCallback(async (sitemapId: string) => {
     if (!requireAuth()) return;
-    
+
     const sitemapToDuplicate = sitemaps.find(s => s.id === sitemapId);
     if (!sitemapToDuplicate) return;
-    
+
     const newSitemapId = `sitemap-${Date.now()}`;
     const now = Date.now();
-    
+
     // Create duplicate with same data but new ID and remove shared metadata
     const duplicated: SitemapData = {
       id: newSitemapId,
@@ -1092,7 +1093,7 @@ function App() {
       // Remove shared metadata - this becomes an owned sitemap
       // isShared, sharePermission, originalSitemapId are not set (undefined)
     };
-    
+
     // Add to sitemaps array
     setSitemaps(prev => {
       const updated = [...prev, duplicated];
@@ -1104,7 +1105,7 @@ function App() {
       }
       return updated;
     });
-    
+
     // Save to Supabase if configured
     if (isSupabaseConfigured() && supabase) {
       try {
@@ -1124,7 +1125,7 @@ function App() {
         // Already saved to localStorage above, so continue
       }
     }
-    
+
     // Switch to the duplicated sitemap
     setActiveSitemapId(newSitemapId);
     setNodes(JSON.parse(JSON.stringify(duplicated.nodes)));
@@ -1136,7 +1137,7 @@ function App() {
     setUndoStack([]);
     setRedoStack([]);
     setSelectedNode(null);
-    
+
     // Load drawables if available
     if (isSupabaseConfigured() && supabase) {
       try {
@@ -1152,7 +1153,7 @@ function App() {
       setFigures([]);
       setFreeLines([]);
     }
-    
+
     try {
       localStorage.setItem('activeSitemapId', newSitemapId);
     } catch (e) {
@@ -1162,9 +1163,9 @@ function App() {
 
   const createNewSitemap = useCallback(async () => {
     if (!requireAuth()) return;
-    
+
     console.log('Create New Sitemap: start');
-    
+
     // Don't await save - do it in background to avoid blocking
     if (activeSitemapId) {
       saveCurrentStateToActiveSitemap().catch(error => {
@@ -1180,7 +1181,7 @@ function App() {
       // Find the highest number used in "Untitled Sitemap" names
       const untitledPattern = /^Untitled Sitemap (\d+)$/;
       let maxNumber = 0;
-      
+
       prev.forEach(sitemap => {
         const match = sitemap.name.match(untitledPattern);
         if (match) {
@@ -1202,7 +1203,7 @@ function App() {
       };
 
       const next = [...prev, newSitemap];
-      
+
       // Save to localStorage immediately
       try {
         localStorage.setItem('sitemaps', JSON.stringify(next));
@@ -1234,7 +1235,7 @@ function App() {
     setRedoStack([]);
     setSelectionGroups([]);
     setSelectedNode(null);
-    
+
     console.log('Create New Sitemap: completed', newSitemapId);
   }, [activeSitemapId, saveCurrentStateToActiveSitemap, isSupabaseConfigured]);
 
@@ -1260,7 +1261,7 @@ function App() {
     setUndoStack([]);
     setRedoStack([]);
     setSelectedNode(null);
-    try { localStorage.setItem('activeSitemapId', sitemapId); } catch {}
+    try { localStorage.setItem('activeSitemapId', sitemapId); } catch { }
 
     // Load drawables in background
     if (isSupabaseConfigured() && supabase) {
@@ -1275,11 +1276,11 @@ function App() {
 
   const deleteSitemap = useCallback(async (sitemapId: string) => {
     if (!requireAuth()) return;
-    
+
     // Immediate UI update
     const filtered = sitemaps.filter(s => s.id !== sitemapId);
     setSitemaps(filtered);
-    try { localStorage.setItem('sitemaps', JSON.stringify(filtered)); } catch {}
+    try { localStorage.setItem('sitemaps', JSON.stringify(filtered)); } catch { }
 
     // If deleting active sitemap
     if (activeSitemapId === sitemapId) {
@@ -1298,7 +1299,7 @@ function App() {
         setUndoStack([]);
         setRedoStack([]);
         setSelectedNode(null);
-        try { localStorage.setItem('activeSitemapId', next.id); } catch {}
+        try { localStorage.setItem('activeSitemapId', next.id); } catch { }
 
         if (isSupabaseConfigured() && supabase) {
           loadSitemapWithDrawables(next.id)
@@ -1322,10 +1323,10 @@ function App() {
         setUndoStack([]);
         setRedoStack([]);
         setSelectedNode(null);
-        try { 
+        try {
           localStorage.setItem('activeSitemapId', '');
           localStorage.removeItem('activeSitemapId');
-        } catch {}
+        } catch { }
       }
     }
 
@@ -1340,7 +1341,7 @@ function App() {
   const renameSitemap = useCallback(async (sitemapId: string, newName: string) => {
     if (!requireAuth()) return;
     if (!newName.trim()) return; // Still validate non-empty
-    
+
     const updatedSitemap = sitemaps.find(s => s.id === sitemapId);
     if (!updatedSitemap) return;
 
@@ -1352,7 +1353,7 @@ function App() {
 
     setSitemaps(prev => {
       const next = prev.map(s => s.id === sitemapId ? renamed : s);
-      try { localStorage.setItem('sitemaps', JSON.stringify(next)); } catch {}
+      try { localStorage.setItem('sitemaps', JSON.stringify(next)); } catch { }
       return next;
     });
 
@@ -1374,7 +1375,7 @@ function App() {
       const urlParams = new URLSearchParams(window.location.search);
       const shareParam = urlParams.get('share');
       const isShareLink = !!shareParam;
-      
+
       // Show local immediately to avoid blank UI on refresh
       try {
         const localStrEarly = localStorage.getItem('sitemaps');
@@ -1384,7 +1385,7 @@ function App() {
           setSitemaps(localList);
           if (localActiveEarly) setActiveSitemapId(localActiveEarly);
         }
-      } catch {}
+      } catch { }
 
       if (isSupabaseConfigured()) {
         try {
@@ -1432,7 +1433,7 @@ function App() {
               setInitialized(true);
               return;
             }
-            
+
             // No sitemaps in Supabase, initialize with empty one
             const initialSitemap: SitemapData = {
               id: `sitemap-${Date.now()}`,
@@ -1453,7 +1454,7 @@ function App() {
           // Fallback to localStorage
           const savedSitemaps = localStorage.getItem('sitemaps');
           const savedActiveId = localStorage.getItem('activeSitemapId');
-          
+
           if (savedSitemaps) {
             const parsedSitemaps = JSON.parse(savedSitemaps) as SitemapData[];
             setSitemaps(parsedSitemaps);
@@ -1466,7 +1467,7 @@ function App() {
               setInitialized(true);
               return;
             }
-            
+
             const initialSitemap: SitemapData = {
               id: `sitemap-${Date.now()}`,
               name: 'Untitled Sitemap 1',
@@ -1486,7 +1487,7 @@ function App() {
         // Use localStorage fallback
         const savedSitemaps = localStorage.getItem('sitemaps');
         const savedActiveId = localStorage.getItem('activeSitemapId');
-        
+
         if (savedSitemaps) {
           const parsedSitemaps = JSON.parse(savedSitemaps) as SitemapData[];
           setSitemaps(parsedSitemaps);
@@ -1499,7 +1500,7 @@ function App() {
             setInitialized(true);
             return;
           }
-          
+
           const initialSitemap: SitemapData = {
             id: `sitemap-${Date.now()}`,
             name: 'Untitled Sitemap 1',
@@ -1526,12 +1527,12 @@ function App() {
     if (!initialized || !activeSitemapId || isUploadingCsvRef.current) {
       return;
     }
-    
+
     const activeSitemap = sitemaps.find(s => s.id === activeSitemapId);
     if (!activeSitemap) {
       return;
     }
-    
+
     // Only sync if nodes are currently empty (to avoid overwriting during CSV upload or manual edits)
     if (nodes.length === 0 && activeSitemap.nodes.length > 0) {
       setNodes(JSON.parse(JSON.stringify(activeSitemap.nodes)));
@@ -1561,7 +1562,7 @@ function App() {
     if (isUploadingCsvRef.current) {
       return;
     }
-    
+
     const timeoutId = setTimeout(() => {
       saveCurrentStateToActiveSitemap();
     }, 1000); // Debounce auto-save
@@ -1625,7 +1626,7 @@ function App() {
     if (isUploadingCsvRef.current) {
       return;
     }
-    
+
     // Only analyze URLs if we don't already have nodes (e.g., from CSV upload)
     // This prevents overwriting nodes that were set from CSV or other sources
     if (urls.length > 0 && nodes.length === 0) {
@@ -1634,7 +1635,7 @@ function App() {
 
       // Only apply layout if nodes don't have manual positions
       const hasManualPositions = hierarchy.nodes.some(node => node.x !== undefined && node.y !== undefined);
-      
+
       if (!hasManualPositions) {
         // Apply grouped layout algorithm
         layoutNodes = applyGroupedFlowLayout(hierarchy.nodes, { width: 1800, height: 900 });
@@ -1669,9 +1670,9 @@ function App() {
   // Close export menu when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (showExportMenu && 
-          !(event.target as Element).closest('.export-menu-container') &&
-          !(event.target as Element).closest('[data-export-dropdown]')) {
+      if (showExportMenu &&
+        !(event.target as Element).closest('.export-menu-container') &&
+        !(event.target as Element).closest('[data-export-dropdown]')) {
         setShowExportMenu(false);
       }
     };
@@ -1702,7 +1703,7 @@ function App() {
 
     try {
       const result = await parseCsvFile(file);
-      
+
       if (result.errors.length > 0) {
         setCsvErrors(result.errors);
         setShowCsvErrors(true);
@@ -1726,8 +1727,8 @@ function App() {
 
       // Check if we should use the active sitemap (if it's empty) or create a new one
       const activeSitemap = activeSitemapId ? sitemaps.find(s => s.id === activeSitemapId) : null;
-      const isActiveSitemapEmpty = activeSitemap && 
-        activeSitemap.nodes.length === 0 && 
+      const isActiveSitemapEmpty = activeSitemap &&
+        activeSitemap.nodes.length === 0 &&
         activeSitemap.urls.length === 0 &&
         activeSitemap.extraLinks.length === 0;
 
@@ -1738,19 +1739,19 @@ function App() {
       if (isActiveSitemapEmpty && activeSitemap) {
         // Use the existing empty sitemap
         targetSitemapId = activeSitemapId!;
-        
+
         // Update the existing sitemap
-        next = sitemaps.map(s => 
+        next = sitemaps.map(s =>
           s.id === targetSitemapId
             ? {
-                ...s,
-                nodes: JSON.parse(JSON.stringify(layoutNodes)),
-                urls: JSON.parse(JSON.stringify(result.data.map(row => row.url))),
-                extraLinks: [],
-                linkStyles: {},
-                colorOverrides: {},
-                lastModified: now
-              }
+              ...s,
+              nodes: JSON.parse(JSON.stringify(layoutNodes)),
+              urls: JSON.parse(JSON.stringify(result.data.map(row => row.url))),
+              extraLinks: [],
+              linkStyles: {},
+              colorOverrides: {},
+              lastModified: now
+            }
             : s
         );
       } else {
@@ -1771,7 +1772,7 @@ function App() {
         // Find the highest number used in "Untitled Sitemap" names
         const untitledPattern = /^Untitled Sitemap (\d+)$/;
         let maxNumber = 0;
-        
+
         sitemaps.forEach(sitemap => {
           const match = sitemap.name.match(untitledPattern);
           if (match) {
@@ -1794,7 +1795,7 @@ function App() {
 
         next = [...sitemaps, newSitemap];
       }
-      
+
       // Persist immediately to survive refresh
       try {
         localStorage.setItem('sitemaps', JSON.stringify(next));
@@ -1822,13 +1823,13 @@ function App() {
         }
         return n;
       });
-      
+
       // Set nodes FIRST so the canvas renders immediately and blocks URL-analysis overwrite
       const nodesCopy = JSON.parse(JSON.stringify(fixedNodes));
       flushSync(() => {
         setNodes(nodesCopy);
       });
-      
+
       // Now update sitemaps and activate the target one
       flushSync(() => {
         setSitemaps(next);
@@ -1851,10 +1852,10 @@ function App() {
       setSidebarCollapsed(true);
       setCsvErrors([]);
       setShowCsvErrors(false);
-      
+
       // Reset file input
       e.target.value = '';
-      
+
       // Clear the flag after a short delay to allow state updates to complete
       setTimeout(() => {
         isUploadingCsvRef.current = false;
@@ -1872,15 +1873,15 @@ function App() {
   const handleNodesUpdate = (updatedNodes: PageNode[]) => {
     if (isViewerMode) return; // Disable editing in viewer mode
     if (!requireAuth()) return;
-    
+
     // Check if current sitemap is editable
     const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
     if (!isSitemapEditable(currentSitemap || null)) return;
-    
+
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
     setNodes(updatedNodes);
-    
+
     // Sync colorOverrides with node colors - if a node has customColor/textColor, 
     // ensure colorOverrides matches (or clear it if node colors are removed)
     setColorOverrides(prev => {
@@ -1908,13 +1909,13 @@ function App() {
   const handleExtraLinkCreate = (sourceId: string, targetId: string) => {
     if (isViewerMode) return; // Disable editing in viewer mode
     if (!requireAuth()) return;
-    
+
     // Check if current sitemap is editable
     const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
     if (!isSitemapEditable(currentSitemap || null)) {
       return; // Prevent editing view-only shared sitemaps
     }
-    
+
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
 
@@ -1953,13 +1954,13 @@ function App() {
   const handleExtraLinkDelete = (sourceId: string, targetId: string) => {
     if (isViewerMode) return; // Disable editing in viewer mode
     if (!requireAuth()) return;
-    
+
     // Check if current sitemap is editable
     const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
     if (!isSitemapEditable(currentSitemap || null)) {
       return; // Prevent editing view-only shared sitemaps
     }
-    
+
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
     setExtraLinks(prev => prev.filter(l => !(l.sourceId === sourceId && l.targetId === targetId)));
@@ -1967,13 +1968,13 @@ function App() {
 
   const handleNodeEdit = (nodeId: string, updates: Partial<PageNode>) => {
     if (!requireAuth()) return;
-    
+
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
-    setNodes(prev => prev.map(node => 
+    setNodes(prev => prev.map(node =>
       node.id === nodeId ? { ...node, ...updates } : node
     ));
-    
+
     // Update selected node if it's the one being edited
     if (selectedNode && selectedNode.id === nodeId) {
       setSelectedNode(prev => prev ? { ...prev, ...updates } : null);
@@ -1982,13 +1983,13 @@ function App() {
 
   const handleGroupEdit = (category: string, updates: Partial<PageNode>) => {
     if (!requireAuth()) return;
-    
+
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
-    setNodes(prev => prev.map(node => 
+    setNodes(prev => prev.map(node =>
       node.category === category ? { ...node, ...updates } : node
     ));
-    
+
     // Update selected node if it's in the same category
     if (selectedNode && selectedNode.category === category) {
       setSelectedNode(prev => prev ? { ...prev, ...updates } : null);
@@ -2027,18 +2028,18 @@ function App() {
   const handleNodeDelete = (nodeId: string) => {
     if (isViewerMode) return; // Disable editing in viewer mode
     if (!requireAuth()) return;
-    
+
     // Check if current sitemap is editable
     const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
     if (!isSitemapEditable(currentSitemap || null)) {
       return; // Prevent editing view-only shared sitemaps
     }
-    
+
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
     setNodes(prev => {
       const updatedNodes = prev.filter(node => node.id !== nodeId);
-      
+
       // Update parent-child relationships
       return updatedNodes.map(node => ({
         ...node,
@@ -2046,10 +2047,10 @@ function App() {
         parent: node.parent === nodeId ? null : node.parent
       }));
     });
-    
+
     // Clear selected node if it was deleted
     if (selectedNode && selectedNode.id === nodeId) {
-    setSelectedNode(null);
+      setSelectedNode(null);
     }
   };
 
@@ -2083,13 +2084,13 @@ function App() {
   function handleMoveNodesToGroup(nodeIds: string[], targetGroup: string, opts?: { includeSubtree?: boolean; relayout?: boolean }) {
     if (isViewerMode) return; // Disable editing in viewer mode
     if (!requireAuth()) return;
-    
+
     // Check if current sitemap is editable
     const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
     if (!isSitemapEditable(currentSitemap || null)) {
       return; // Prevent editing view-only shared sitemaps
     }
-    
+
     if (nodeIds.length === 0) return;
     const include = new Set<string>(nodeIds);
     if (opts?.includeSubtree) {
@@ -2118,7 +2119,7 @@ function App() {
   function handleCreateGroupFromSelection(selectedIds: string[], newGroupName: string, opts?: { relayout?: boolean }) {
     if (isViewerMode) return; // Disable editing in viewer mode
     if (!requireAuth()) return;
-    
+
     // Check if current sitemap is editable
     const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
     if (!isSitemapEditable(currentSitemap || null)) {
@@ -2132,7 +2133,7 @@ function App() {
   function handleDeleteGroup(groupName: string) {
     if (isViewerMode) return; // Disable editing in viewer mode
     if (!requireAuth()) return;
-    
+
     // Check if current sitemap is editable
     const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
     if (!isSitemapEditable(currentSitemap || null)) {
@@ -2149,13 +2150,13 @@ function App() {
   function handleRenameGroup(oldName: string, newName: string) {
     if (isViewerMode) return; // Disable editing in viewer mode
     if (!requireAuth()) return;
-    
+
     // Check if current sitemap is editable
     const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
     if (!isSitemapEditable(currentSitemap || null)) {
       return; // Prevent editing view-only shared sitemaps
     }
-    
+
     const name = (newName || '').trim();
     if (!name || name === oldName) return;
     const updated = nodes.map(n => n.category === oldName ? { ...n, category: name } : n);
@@ -2166,7 +2167,7 @@ function App() {
   const createSelectionGroup = useCallback((memberNodeIds: string[], memberFigureIds: string[], name?: string) => {
     if (isViewerMode) return; // Disable editing in viewer mode
     if (!requireAuth()) return;
-    
+
     // Check if current sitemap is editable
     const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
     if (!isSitemapEditable(currentSitemap || null)) {
@@ -2175,7 +2176,7 @@ function App() {
     // Add snapshot before making changes
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
-    
+
     const id = `sg-${Date.now()}`;
     const group: SelectionGroup = { id, name: name || `Group ${selectionGroups.length + 1}`, memberNodeIds, memberFigureIds };
     setSelectionGroups(prev => [...prev, group]);
@@ -2184,7 +2185,7 @@ function App() {
   const ungroupSelection = useCallback((memberNodeIds: string[], memberFigureIds: string[]) => {
     if (isViewerMode) return; // Disable editing in viewer mode
     if (!requireAuth()) return;
-    
+
     // Check if current sitemap is editable
     const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
     if (!isSitemapEditable(currentSitemap || null)) {
@@ -2193,7 +2194,7 @@ function App() {
     // Add snapshot before making changes
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
-    
+
     setSelectionGroups(prev => prev.map(g => ({
       ...g,
       memberNodeIds: g.memberNodeIds.filter(id => !memberNodeIds.includes(id)),
@@ -2210,16 +2211,16 @@ function App() {
   const handleAddNode = (parentId: string | null = null) => {
     if (isViewerMode) return; // Disable editing in viewer mode
     if (!requireAuth()) return;
-    
+
     // Check if current sitemap is editable
     const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
     if (!isSitemapEditable(currentSitemap || null)) {
       return; // Prevent editing view-only shared sitemaps
     }
-    
+
     const newNodeId = `node-${Date.now()}`;
     const parentNode = parentId ? nodes.find(n => n.id === parentId) : null;
-    
+
     // Compute a non-overlapping position for the new node
     const dx = 300;
     const dyBase = 120;
@@ -2245,16 +2246,16 @@ function App() {
     setRedoStack([]);
     setNodes(prev => {
       const updatedNodes = [...prev, newNode];
-      
+
       // Update parent's children array
       if (parentId) {
-        return updatedNodes.map(node => 
-          node.id === parentId 
+        return updatedNodes.map(node =>
+          node.id === parentId
             ? { ...node, children: [...node.children, newNodeId] }
             : node
         );
       }
-      
+
       return updatedNodes;
     });
 
@@ -2266,13 +2267,13 @@ function App() {
   const handleConnectionCreate = (sourceId: string, targetId: string) => {
     if (isViewerMode) return; // Disable editing in viewer mode
     if (!requireAuth()) return;
-    
+
     // Check if current sitemap is editable
     const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
     if (!isSitemapEditable(currentSitemap || null)) {
       return; // Prevent editing view-only shared sitemaps
     }
-    
+
     setNodes(prev => {
       const updated = prev.map(node => {
         if (node.id === targetId) {
@@ -2320,13 +2321,13 @@ function App() {
   const handleLinkStyleChange = useCallback((linkKey: string, style: LinkStyle) => {
     if (isViewerMode) return; // Disable editing in viewer mode
     if (!requireAuth()) return;
-    
+
     // Check if current sitemap is editable
     const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
     if (!isSitemapEditable(currentSitemap || null)) {
       return; // Prevent editing view-only shared sitemaps
     }
-    
+
     setLinkStyles(prev => ({
       ...prev,
       [linkKey]: { ...prev[linkKey], ...style }
@@ -2337,13 +2338,13 @@ function App() {
   const handleCreateFigure = useCallback((figure: Figure) => {
     if (isViewerMode) return; // Disable editing in viewer mode
     if (!requireAuth()) return;
-    
+
     // Check if current sitemap is editable
     const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
     if (!isSitemapEditable(currentSitemap || null)) {
       return; // Prevent editing view-only shared sitemaps
     }
-    
+
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
     setFigures(prev => [...prev, figure]);
@@ -2352,13 +2353,13 @@ function App() {
   const handleUpdateFigure = useCallback((id: string, updates: Partial<Figure>) => {
     if (isViewerMode) return; // Disable editing in viewer mode
     if (!requireAuth()) return;
-    
+
     // Check if current sitemap is editable
     const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
     if (!isSitemapEditable(currentSitemap || null)) {
       return; // Prevent editing view-only shared sitemaps
     }
-    
+
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
     setFigures(prev => prev.map(f => f.id === id ? { ...f, ...updates } : f));
@@ -2367,13 +2368,13 @@ function App() {
   const handleDeleteFigure = useCallback((id: string) => {
     if (isViewerMode) return; // Disable editing in viewer mode
     if (!requireAuth()) return;
-    
+
     // Check if current sitemap is editable
     const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
     if (!isSitemapEditable(currentSitemap || null)) {
       return; // Prevent editing view-only shared sitemaps
     }
-    
+
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
     setFigures(prev => prev.filter(f => f.id !== id));
@@ -2383,13 +2384,13 @@ function App() {
   const handleCreateFreeLine = useCallback((line: FreeLine) => {
     if (isViewerMode) return; // Disable editing in viewer mode
     if (!requireAuth()) return;
-    
+
     // Check if current sitemap is editable
     const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
     if (!isSitemapEditable(currentSitemap || null)) {
       return; // Prevent editing view-only shared sitemaps
     }
-    
+
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
     setFreeLines(prev => [...prev, line]);
@@ -2398,13 +2399,13 @@ function App() {
   const handleUpdateFreeLine = useCallback((id: string, updates: Partial<FreeLine>) => {
     if (isViewerMode) return; // Disable editing in viewer mode
     if (!requireAuth()) return;
-    
+
     // Check if current sitemap is editable
     const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
     if (!isSitemapEditable(currentSitemap || null)) {
       return; // Prevent editing view-only shared sitemaps
     }
-    
+
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
     setFreeLines(prev => prev.map(l => l.id === id ? { ...l, ...updates } : l));
@@ -2413,13 +2414,13 @@ function App() {
   const handleDeleteFreeLine = useCallback((id: string) => {
     if (isViewerMode) return; // Disable editing in viewer mode
     if (!requireAuth()) return;
-    
+
     // Check if current sitemap is editable
     const currentSitemap = sitemaps.find(s => s.id === activeSitemapId);
     if (!isSitemapEditable(currentSitemap || null)) {
       return; // Prevent editing view-only shared sitemaps
     }
-    
+
     setUndoStack(stack => [...stack, makeSnapshot()]);
     setRedoStack([]);
     setFreeLines(prev => prev.filter(l => l.id !== id));
@@ -2430,7 +2431,7 @@ function App() {
     flushSync(() => {
       setFocusedNode(node);
     });
-    
+
     // Then center the view on the selected node using ref
     if (sitemapCanvasRef.current && sitemapCanvasRef.current.centerOnNode) {
       sitemapCanvasRef.current.centerOnNode(node);
@@ -2446,7 +2447,7 @@ function App() {
         return;
       }
     }
-    
+
     switch (format) {
       case 'png':
         await exportToPNG(
@@ -2556,692 +2557,698 @@ function App() {
         <header className="border-b border-gray-200 flex-shrink-0 relative z-50 overflow-hidden" style={{ backgroundColor: '#FFF8F0' }}>
           {/* Base warm light background */}
           <div className="header-gradient-background"></div>
-          
+
           {/* Multiple moving gradient blobs */}
           <div className="header-gradient-blob header-gradient-blob-1" style={{ top: '-20%', left: '5%' }}></div>
           <div className="header-gradient-blob header-gradient-blob-2" style={{ top: '-15%', right: '10%' }}></div>
           <div className="header-gradient-blob header-gradient-blob-3" style={{ top: '-10%', left: '50%', transform: 'translateX(-50%)' }}></div>
-          
+
           {/* Soft warm overlay for depth */}
           <div className="absolute inset-0 bg-gradient-to-br from-orange-50/20 to-blue-50/20"></div>
-          
+
           {/* Header content - overflow-visible to allow dropdowns */}
           <div className="max-w-screen-5xl mx-auto px-6 py-5 relative z-10 overflow-visible">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3 relative">
-              <img width="28" height="28" src="https://img.icons8.com/?size=100&id=1rQZ4drGQD6F&format=png&color=000000" alt="Sitemap Generator"/>
-              <h1 className="text-2xl font-semibold tracking-tight">Sitemap Generator</h1>
-            </div>
-            <div className="flex items-center gap-3">
-              {nodes.length > 0 && (
-                <button
-                  onClick={() => setShowSearch(true)}
-                  className="px-4 py-2 text-sm font-medium bg-white border rounded-lg border-gray-300 hover:border-gray-400 transition-colors flex items-center gap-2"
-                  title="Search nodes (Ctrl+F)"
-                >
-                  <Search className="w-4 h-4" strokeWidth={1.5} />
-                  Search URL
-                </button>
-              )}
-              {nodes.length > 0 && activeSitemapId && (
-                <button
-                  onClick={() => {
-                    if (!activeSitemapId) {
-                      console.error('No active sitemap selected');
-                      return;
-                    }
-                    setShowShareModal(true);
-                  }}
-                  className="px-4 py-2 text-sm font-medium bg-white border rounded-lg border-gray-300 hover:border-gray-400 transition-colors flex items-center gap-2"
-                  title="Share sitemap"
-                >
-                  <Share2 className="w-4 h-4" strokeWidth={1.5} />
-                  Share
-                </button>
-              )}
-              {nodes.length > 0 && (
-                <div className="relative export-menu-container">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3 relative">
+                <img width="28" height="28" src="https://img.icons8.com/?size=100&id=1rQZ4drGQD6F&format=png&color=000000" alt="Sitemap Generator" />
+                <h1 className="text-2xl font-semibold tracking-tight">Sitemap Generator</h1>
+              </div>
+              <div className="flex items-center gap-3">
+                {nodes.length > 0 && (
                   <button
-                    ref={exportButtonRef}
+                    onClick={() => setShowSearch(true)}
+                    className="px-4 py-2 text-sm font-medium bg-white border rounded-lg border-gray-300 hover:border-gray-400 transition-colors flex items-center gap-2"
+                    title="Search nodes (Ctrl+F)"
+                  >
+                    <Search className="w-4 h-4" strokeWidth={1.5} />
+                    Search URL
+                  </button>
+                )}
+                {nodes.length > 0 && activeSitemapId && (
+                  <button
                     onClick={() => {
-                      if (exportButtonRef.current) {
-                        const rect = exportButtonRef.current.getBoundingClientRect();
-                        setExportDropdownPosition({
-                          top: rect.bottom + 4,
-                          right: window.innerWidth - rect.right
-                        });
+                      if (!activeSitemapId) {
+                        console.error('No active sitemap selected');
+                        return;
                       }
-                      setShowExportMenu(v => !v);
+                      setShowShareModal(true);
                     }}
                     className="px-4 py-2 text-sm font-medium bg-white border rounded-lg border-gray-300 hover:border-gray-400 transition-colors flex items-center gap-2"
-                    title="Export"
+                    title="Share sitemap"
                   >
-                    <Download className="w-4 h-4" strokeWidth={1.5} />
-                    Export
+                    <Share2 className="w-4 h-4" strokeWidth={1.5} />
+                    Share
                   </button>
-                  {showExportMenu && exportDropdownPosition && createPortal(
-                    <div 
-                      data-export-dropdown
-                      className="fixed w-48 bg-white border border-gray-200 shadow-lg z-[100] rounded-lg"
-                      style={{
-                        top: `${exportDropdownPosition.top}px`,
-                        right: `${exportDropdownPosition.right}px`
-                      }}
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <button onClick={() => { setShowExportMenu(false); handleExport('png-white'); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm flex items-center gap-2 rounded-t-lg">
-                        <Image className="w-4 h-4 text-gray-600" strokeWidth={1.5} />
-                        PNG
-                      </button>
-                      <button onClick={() => { setShowExportMenu(false); handleExport('png'); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm flex items-center gap-2">
-                        <Layers className="w-4 h-4 text-gray-600" strokeWidth={1.5} />
-                        PNG (Transparent)
-                      </button>
-                      <button onClick={() => { setShowExportMenu(false); handleExport('csv'); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm flex items-center gap-2 rounded-b-lg">
-                        <FileText className="w-4 h-4 text-gray-600" strokeWidth={1.5} />
-                        CSV
-                      </button>
-                      <button onClick={() => { setShowExportMenu(false); handleExport('xml'); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm flex items-center gap-2">
-                        <FileText className="w-4 h-4 text-gray-600" strokeWidth={1.5} />
-                        XML (Sitemap)
-                      </button>
-                    </div>,
-                    document.body
-                  )}
-                </div>
-              )}
-              {/* Align Guides toggle removed per request */}
-              <button
-                onClick={() => setShowSettings(!showSettings)}
-                className="px-4 py-2 text-sm font-medium bg-white border rounded-lg border-gray-300 hover:border-gray-400 transition-colors flex items-center gap-2"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" className="text-gray-700" viewBox="0 0 16 16">
-                  <path d="M.54 3.87.5 3a2 2 0 0 1 2-2h3.672a2 2 0 0 1 1.414.586l.828.828A2 2 0 0 0 9.828 3h3.982a2 2 0 0 1 1.992 2.181l-.637 7A2 2 0 0 1 13.174 14H2.826a2 2 0 0 1-1.991-1.819l-.637-7a2 2 0 0 1 .342-1.31zM2.19 4a1 1 0 0 0-.996 1.09l.637 7a1 1 0 0 0 .995.91h10.348a1 1 0 0 0 .995-.91l.637-7A1 1 0 0 0 13.81 4zm4.69-1.707A1 1 0 0 0 6.172 2H2.5a1 1 0 0 0-1 .981l.006.139q.323-.119.684-.12h5.396z"/>
-                </svg>
-                Groups
-              </button>
-              {/* AI organize button removed per request */}
-              {!isViewerMode && (
-              <button
-                onClick={() => setShowHelp(true)}
-                className="px-3 py-2 text-sm font-medium bg-white border rounded-lg border-gray-300 hover:border-gray-400 transition-colors flex items-center gap-2"
-                title="Help"
-              >
-                <HelpCircle className="w-4 h-4" strokeWidth={1.5} />
-                Help
-              </button>
-              )}
-              {isViewerMode && (
-                <button
-                  onClick={handleExitViewerMode}
-                  className="px-4 py-2 text-sm font-medium rounded-lg border transition-colors flex items-center gap-2 text-white"
-                  style={{
-                    backgroundColor: '#CB6015',
-                    borderColor: '#CB6015',
-                  }}
-                  title="Exit viewer mode"
-                >
-                  <X className="w-4 h-4" strokeWidth={1.5} />
-                  Exit viewer mode
-                </button>
-              )}
-              
-              {/* Auth Section */}
-              {(isSupabaseConfigured() || isLocalhost()) && (
-                <div className="flex items-center gap-2 ml-2 pl-2 border-l border-gray-300">
-                  {user || (isLocalhost() && !isSupabaseConfigured()) ? (
-                    <div 
-                      className="relative"
-                      onMouseEnter={() => {
-                        // Clear any pending close timeout
-                        if (authDropdownTimeoutRef.current) {
-                          clearTimeout(authDropdownTimeoutRef.current);
-                          authDropdownTimeoutRef.current = null;
-                        }
-                        
-                        if (authButtonRef.current) {
-                          const rect = authButtonRef.current.getBoundingClientRect();
-                          setAuthDropdownPosition({
-                            top: rect.bottom + 4, // Reduced gap to 4px
+                )}
+                {nodes.length > 0 && (
+                  <div className="relative export-menu-container">
+                    <button
+                      ref={exportButtonRef}
+                      onClick={() => {
+                        if (exportButtonRef.current) {
+                          const rect = exportButtonRef.current.getBoundingClientRect();
+                          setExportDropdownPosition({
+                            top: rect.bottom + 4,
                             right: window.innerWidth - rect.right
                           });
                         }
-                        setShowAuthDropdown(true);
+                        setShowExportMenu(v => !v);
                       }}
-                      onMouseLeave={() => {
-                        // Add a small delay before closing to allow mouse to reach dropdown
-                        authDropdownTimeoutRef.current = setTimeout(() => {
-                          setShowAuthDropdown(false);
-                        }, 150);
-                      }}
+                      className="px-4 py-2 text-sm font-medium bg-white border rounded-lg border-gray-300 hover:border-gray-400 transition-colors flex items-center gap-2"
+                      title="Export"
                     >
-                      <button
-                        ref={authButtonRef}
-                        className="p-2 text-gray-700 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
-                        title="User account"
+                      <Download className="w-4 h-4" strokeWidth={1.5} />
+                      Export
+                    </button>
+                    {showExportMenu && exportDropdownPosition && createPortal(
+                      <div
+                        data-export-dropdown
+                        className="fixed w-48 bg-white border border-gray-200 shadow-lg z-[100] rounded-lg"
+                        style={{
+                          top: `${exportDropdownPosition.top}px`,
+                          right: `${exportDropdownPosition.right}px`
+                        }}
+                        onClick={(e) => e.stopPropagation()}
                       >
-                        <User className="w-5 h-5" strokeWidth={1.5} />
-                      </button>
-                      
-                      {showAuthDropdown && authDropdownPosition && createPortal(
-                        <div 
-                          className="fixed w-56 bg-white border border-gray-200 shadow-lg rounded-lg z-[100]"
-                          style={{
-                            top: `${authDropdownPosition.top}px`,
-                            right: `${authDropdownPosition.right}px`
-                          }}
-                          onMouseEnter={() => {
-                            // Clear close timeout when mouse enters dropdown
-                            if (authDropdownTimeoutRef.current) {
-                              clearTimeout(authDropdownTimeoutRef.current);
-                              authDropdownTimeoutRef.current = null;
-                            }
-                            setShowAuthDropdown(true);
-                          }}
-                          onMouseLeave={() => {
-                            // Close when mouse leaves dropdown
-                            setShowAuthDropdown(false);
-                          }}
-                        >
-                          <div className="px-4 py-3 border-b border-gray-200">
-                            <p className="text-sm font-medium text-gray-900">Signed in as</p>
-                            <p className="text-sm text-gray-600 truncate mt-1">
-                              {isLocalhost() && !isSupabaseConfigured() ? 'Local User' : (user?.email || '')}
-                            </p>
-                          </div>
-                          {isSupabaseConfigured() && (
-                          <div className="py-1">
-                            <button
-                              onClick={handleSignOut}
-                              className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2 transition-colors"
-                            >
-                              <LogOut className="w-4 h-4" strokeWidth={1.5} />
-                              Sign Out
-                            </button>
-                          </div>
-                          )}
-                          {isLocalhost() && !isSupabaseConfigured() && (
-                            <div className="px-4 py-2 text-xs text-gray-500 border-t border-gray-200">
-                              Local development mode
-                            </div>
-                          )}
-                        </div>,
-                        document.body
-                      )}
-                    </div>
-                  ) : (
-                    <button
-                      onClick={() => {
-                        if (isLocalhost() && !isSupabaseConfigured()) {
-                          // On localhost without Supabase, just show a message
-                          alert('Authentication is not required in local development mode.');
-                          return;
-                        }
-                        setShowAuthModal(true);
-                      }}
-                      className="px-4 py-2 text-sm font-medium bg-white border rounded-lg border-gray-300 hover:border-gray-400 text-gray-700 transition-colors flex items-center gap-2"
-                      title="Sign In / Sign Up"
-                    >
-                      <LogIn className="w-4 h-4" strokeWidth={1.5} />
-                      Sign In
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-          </div>
-      </header>
-
-      <div className="flex-1 flex h-0 min-h-0">
-        <aside className={`${sidebarCollapsed ? 'w-16' : 'w-64 sm:w-72 lg:w-80'} border-r border-gray-200 flex flex-col overflow-y-auto h-full transition-all duration-300 z-50 relative`} style={{ backgroundColor: '#FFFEFB'}}>
-          {/* Collapse/Expand Button */}
-          <div className={`${sidebarCollapsed ? 'p-2' : 'p-6'} border-b border-gray-200`}>
-            <div className={`flex ${sidebarCollapsed ? 'justify-center' : 'justify-between'} items-center`}>
-              {sidebarCollapsed ? null : (
-                <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-900">
-                  {sidebarTab === 'sitemap' ? 'Sitemap' : 'Comments'}
-                </h2>
-              )}
-              <button
-                onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-                className="p-1 hover:bg-gray-100 rounded transition-colors"
-                title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-              >
-                {sidebarCollapsed ? <Menu className="w-5 h-8" strokeWidth={1.5} /> : <X className="w-4 h-4" strokeWidth={1.5} />}
-              </button>
-            </div>
-          </div>
-
-          {/* Tab Navigation */}
-          {!sidebarCollapsed && (
-            <div className="flex border-b border-gray-200">
-              <button
-                onClick={() => setSidebarTab('sitemap')}
-                className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${
-                  sidebarTab === 'sitemap'
-                    ? 'text-gray-900 border-b-2 border-gray-900 bg-white-100'
-                    : 'text-gray-500 hover:text-gray-700 hover:bg-white-100'
-                }`}
-              >
-                Sitemap
-              </button>
-              <button
-                onClick={() => setSidebarTab('comments')}
-                className={`flex-1 px-4 py-3 text-sm font-medium transition-colors relative ${
-                  sidebarTab === 'comments'
-                    ? 'text-gray-900 border-b-2 border-gray-900 bg-white-100'
-                    : 'text-gray-500 hover:text-gray-700 hover:bg-white-100'
-                }`}
-              >
-                Comments
-                {comments.filter(c => !c.resolved).length > 0 && (
-                  <span className="absolute top-2 right-4 px-1.5 py-0.5 bg-orange-500 text-white text-xs rounded-full">
-                    {comments.filter(c => !c.resolved).length}
-                  </span>
+                        <button onClick={() => { setShowExportMenu(false); handleExport('png-white'); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm flex items-center gap-2 rounded-t-lg">
+                          <Image className="w-4 h-4 text-gray-600" strokeWidth={1.5} />
+                          PNG
+                        </button>
+                        <button onClick={() => { setShowExportMenu(false); handleExport('png'); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm flex items-center gap-2">
+                          <Layers className="w-4 h-4 text-gray-600" strokeWidth={1.5} />
+                          PNG (Transparent)
+                        </button>
+                        <button onClick={() => { setShowExportMenu(false); handleExport('csv'); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm flex items-center gap-2 rounded-b-lg">
+                          <FileText className="w-4 h-4 text-gray-600" strokeWidth={1.5} />
+                          CSV
+                        </button>
+                        <button onClick={() => { setShowExportMenu(false); handleExport('xml'); }} className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm flex items-center gap-2">
+                          <FileText className="w-4 h-4 text-gray-600" strokeWidth={1.5} />
+                          XML (Sitemap)
+                        </button>
+                      </div>,
+                      document.body
+                    )}
+                  </div>
                 )}
-              </button>
-            </div>
-          )}
-
-          {/* PRIMARY: Upload CSV Section */}
-          {!sidebarCollapsed && sidebarTab === 'sitemap' && !isViewerMode && (
-            <div className="p-6 border-b border-gray-200">
-              <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-900 mb-3">
-                Upload
-              </h2>
-              {/* CSV Upload Button - Primary CTA */}
-              <div className="mb-2">
-                <label className="flex-1 px-4 py-3 bg-[#CB6015] border border-[#B54407] shadow-md hover:shadow-md hover:bg-[#CC5500] text-white text-sm font-medium rounded-lg cursor-pointer flex items-center justify-center gap-2 transition-colors">
-                  <img width="18" height="18" src="https://img.icons8.com/fluency-systems-regular/50/upload--v1.png" alt="upload csv file" style={{filter: 'brightness(0) invert(1)'}}/>
-                  Upload CSV file
-                  <input
-                    type="file"
-                    accept=".csv"
-                    onChange={handleCsvUpload}
-                    className="hidden"
-                  />
-                </label>
-              </div>
-              <p className="text-xs text-gray-500 mb-2">
-                CSV should have columns: Page Title, Page URL, Group/Category. 
-              </p>
-              <p className="text-xs text-gray-500 mb-2">Optional: Content Type, Last Updated (DD-MM-YYYY).</p>
-
-              {/* CSV Error Display */}
-              {showCsvErrors && csvErrors.length > 0 && (
-                <div className="p-3 bg-red-50 border border-red-200 rounded">
-                  <div className="flex items-center justify-between mb-2">
-                    <h4 className="text-sm font-medium text-red-800">CSV Upload Errors</h4>
-                    <button
-                      onClick={() => setShowCsvErrors(false)}
-                      className="text-red-600 hover:text-red-800"
-                    >
-                      ✕
-                    </button>
-                  </div>
-                  <ul className="text-xs text-red-700 space-y-1">
-                    {csvErrors.map((error, index) => (
-                      <li key={index}>• {error}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* SECONDARY: Sitemap Switcher Section */}
-          {!sidebarCollapsed && sidebarTab === 'sitemap' && !isViewerMode && (
-            <div className={`${sidebarCollapsed ? 'p-2' : 'p-6'} border-b border-gray-200`}>
-              <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-600 mb-3">
-                Sitemaps
-              </h2>
-              
-              {/* Tabs for My Sitemaps vs Shared with Me */}
-              <div className="flex gap-1 mb-3 bg-gray-100 rounded-lg p-1">
+                {/* Align Guides toggle removed per request */}
                 <button
-                  onClick={() => setSitemapViewTab('my')}
-                  className={`flex-1 px-3 py-1.5 text-xs font-medium rounded transition-colors ${
-                    sitemapViewTab === 'my'
-                      ? 'bg-white text-gray-900 shadow-sm'
-                      : 'text-gray-600 hover:text-gray-900'
-                  }`}
+                  onClick={() => setShowSettings(!showSettings)}
+                  className="px-4 py-2 text-sm font-medium bg-white border rounded-lg border-gray-300 hover:border-gray-400 transition-colors flex items-center gap-2"
                 >
-                  My Sitemaps
+                  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" className="text-gray-700" viewBox="0 0 16 16">
+                    <path d="M.54 3.87.5 3a2 2 0 0 1 2-2h3.672a2 2 0 0 1 1.414.586l.828.828A2 2 0 0 0 9.828 3h3.982a2 2 0 0 1 1.992 2.181l-.637 7A2 2 0 0 1 13.174 14H2.826a2 2 0 0 1-1.991-1.819l-.637-7a2 2 0 0 1 .342-1.31zM2.19 4a1 1 0 0 0-.996 1.09l.637 7a1 1 0 0 0 .995.91h10.348a1 1 0 0 0 .995-.91l.637-7A1 1 0 0 0 13.81 4zm4.69-1.707A1 1 0 0 0 6.172 2H2.5a1 1 0 0 0-1 .981l.006.139q.323-.119.684-.12h5.396z" />
+                  </svg>
+                  Groups
                 </button>
-                <button
-                  onClick={() => setSitemapViewTab('shared')}
-                  className={`flex-1 px-3 py-1.5 text-xs font-medium rounded transition-colors ${
-                    sitemapViewTab === 'shared'
-                      ? 'bg-white text-gray-900 shadow-sm'
-                      : 'text-gray-600 hover:text-gray-900'
-                  }`}
-                >
-                  Shared with Me
-                </button>
-              </div>
-              
-              {/* Create New Sitemap Button - only show in "My Sitemaps" tab */}
-              {sitemapViewTab === 'my' && (
-              <button
-                type="button"
-                onClick={createNewSitemap}
-                  className="w-full mb-3 px-3 py-2 bg-white shadow-sm border border-gray-200 hover:shadow-md hover:bg-gray-150 text-gray-700 text-sm font-medium rounded transition-colors flex items-center justify-center gap-2"
-              >
-                <img width="16" height="16" src="https://img.icons8.com/puffy/32/add.png" alt="add"/>
-                Create New Sitemap
-              </button>
-              )}
-              
-              {/* Dropdown Button */}
-              <div className="relative">
-                <button
-                  onClick={() => setShowSitemapDropdown(!showSitemapDropdown)}
-                  className="w-full px-3 py-2 text-left text-sm border rounded-lg border-gray-300 hover:border-gray-400 bg-white rounded flex items-center justify-between gap-2"
-                >
-                  <div className="flex items-center gap-2 flex-1 min-w-0">
-                    <span className="font-medium truncate">
-                      {(() => {
-                        const activeSitemap = sitemaps.find(s => s.id === activeSitemapId);
-                        // Check if active sitemap matches current tab filter
-                        if (activeSitemap) {
-                          const matchesTab = sitemapViewTab === 'my' 
-                            ? activeSitemap.isShared !== true 
-                            : activeSitemap.isShared === true;
-                          if (matchesTab) {
-                            return activeSitemap.name;
+                {/* AI organize button removed per request */}
+                {!isViewerMode && (
+                  <button
+                    onClick={() => setShowHelp(true)}
+                    className="px-3 py-2 text-sm font-medium bg-white border rounded-lg border-gray-300 hover:border-gray-400 transition-colors flex items-center gap-2"
+                    title="Help"
+                  >
+                    <HelpCircle className="w-4 h-4" strokeWidth={1.5} />
+                    Help
+                  </button>
+                )}
+                {isViewerMode && (
+                  <button
+                    onClick={handleExitViewerMode}
+                    className="px-4 py-2 text-sm font-medium rounded-lg border transition-colors flex items-center gap-2 text-white"
+                    style={{
+                      backgroundColor: '#CB6015',
+                      borderColor: '#CB6015',
+                    }}
+                    title="Exit viewer mode"
+                  >
+                    <X className="w-4 h-4" strokeWidth={1.5} />
+                    Exit viewer mode
+                  </button>
+                )}
+
+                {/* Auth Section */}
+                {(isSupabaseConfigured() || isLocalhost()) && (
+                  <div className="flex items-center gap-2 ml-2 pl-2 border-l border-gray-300">
+                    {user || (isLocalhost() && !isSupabaseConfigured()) ? (
+                      <div
+                        className="relative"
+                        onMouseEnter={() => {
+                          // Clear any pending close timeout
+                          if (authDropdownTimeoutRef.current) {
+                            clearTimeout(authDropdownTimeoutRef.current);
+                            authDropdownTimeoutRef.current = null;
                           }
-                        }
-                        // If active sitemap doesn't match tab, show first item from filtered list or "No Sitemap"
-                        const filteredSitemaps = sitemaps.filter(sitemap => {
-                          if (sitemapViewTab === 'my') {
-                            return sitemap.isShared !== true;
-                          } else {
-                            return sitemap.isShared === true;
+
+                          if (authButtonRef.current) {
+                            const rect = authButtonRef.current.getBoundingClientRect();
+                            setAuthDropdownPosition({
+                              top: rect.bottom + 4, // Reduced gap to 4px
+                              right: window.innerWidth - rect.right
+                            });
                           }
-                        });
-                        return filteredSitemaps[0]?.name || 'No Sitemap';
-                      })()}
-                    </span>
-                  </div>
-                  <ChevronDown className={`w-4 h-4 text-gray-500 flex-shrink-0 transition-transform ${showSitemapDropdown ? 'rotate-180' : ''}`} />
-                </button>
-                
-                {/* Dropdown Menu */}
-                {showSitemapDropdown && (() => {
-                  // Filter sitemaps based on active tab
-                  const filteredSitemaps = sitemaps.filter(sitemap => {
-                    if (sitemapViewTab === 'my') {
-                      // Show owned sitemaps (not shared)
-                      return sitemap.isShared !== true;
-                    } else {
-                      // Show shared sitemaps
-                      return sitemap.isShared === true;
-                    }
-                  });
-                  
-                  return filteredSitemaps.length > 0 ? (
-                  <>
-                    <div 
-                      className="fixed inset-0 z-10" 
-                      onClick={() => setShowSitemapDropdown(false)}
-                    />
-                    <div 
-                      className="absolute left-0 right-0 mt-1 bg-white border border-gray-300 rounded shadow-lg z-20 max-h-64 overflow-y-auto"
-                      onMouseDown={(e) => e.stopPropagation()}
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      {/* Sitemap List */}
-                      <div className="py-1">
-                          {filteredSitemaps.map(sitemap => {
-                            const isShared = sitemap.isShared === true;
-                            
-                            return (
+                          setShowAuthDropdown(true);
+                        }}
+                        onMouseLeave={() => {
+                          // Add a small delay before closing to allow mouse to reach dropdown
+                          authDropdownTimeoutRef.current = setTimeout(() => {
+                            setShowAuthDropdown(false);
+                          }, 150);
+                        }}
+                      >
+                        <button
+                          ref={authButtonRef}
+                          className="p-2 text-gray-700 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
+                          title="User account"
+                        >
+                          <User className="w-5 h-5" strokeWidth={1.5} />
+                        </button>
+
+                        {showAuthDropdown && authDropdownPosition && createPortal(
                           <div
-                            key={sitemap.id}
-                            className={`group px-2 py-2 hover:bg-gray-50 flex items-center justify-between ${
-                              activeSitemapId === sitemap.id ? 'bg-blue-50' : ''
-                                } ${isShared ? 'border-l-2 border-orange-400' : ''}`}
+                            className="fixed w-56 bg-white border border-gray-200 shadow-lg rounded-lg z-[100]"
+                            style={{
+                              top: `${authDropdownPosition.top}px`,
+                              right: `${authDropdownPosition.right}px`
+                            }}
+                            onMouseEnter={() => {
+                              // Clear close timeout when mouse enters dropdown
+                              if (authDropdownTimeoutRef.current) {
+                                clearTimeout(authDropdownTimeoutRef.current);
+                                authDropdownTimeoutRef.current = null;
+                              }
+                              setShowAuthDropdown(true);
+                            }}
+                            onMouseLeave={() => {
+                              // Close when mouse leaves dropdown
+                              setShowAuthDropdown(false);
+                            }}
                           >
-                            <button
-                              className="flex items-center gap-2 flex-1 min-w-0 text-left cursor-pointer"
-                              onClick={() => {
-                                switchToSitemap(sitemap.id);
-                                setShowSitemapDropdown(false);
-                              }}
-                            >
-                                  {/* Icon */}
-                                  <div className="flex-shrink-0">
-                                    {isShared ? (
-                                      <Lock className="w-4 h-4 text-gray-600" strokeWidth={1.5} />
-                                    ) : (
-                                      <FileText className="w-4 h-4 text-gray-600" strokeWidth={1.5} />
-                                    )}
-                                  </div>
-                              <div className="flex-1 min-w-0">
-                                    <div className="flex items-center gap-2">
-                                <div className="font-medium text-sm truncate">{sitemap.name}</div>
-                                      {/* Badge for shared sitemaps */}
-                                      {isShared && sitemap.sharePermission && (
-                                        <span
-                                          className={`px-1.5 py-0.5 text-xs font-medium rounded ${
-                                            sitemap.sharePermission === 'view'
-                                              ? 'bg-orange-100 text-orange-600'
-                                              : 'bg-blue-100 text-blue-600'
-                                          }`}
-                                        >
-                                          {sitemap.sharePermission === 'view' ? 'View' : 'Edit'}
-                                        </span>
+                            <div className="px-4 py-3 border-b border-gray-200">
+                              <p className="text-sm font-medium text-gray-900">Signed in as</p>
+                              <p className="text-sm text-gray-600 truncate mt-1">
+                                {isLocalhost() && !isSupabaseConfigured() ? 'Local User' : (user?.email || '')}
+                              </p>
+                            </div>
+                            {isSupabaseConfigured() && (
+                              <div className="py-1">
+                                <button
+                                  onClick={handleSignOut}
+                                  className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2 transition-colors"
+                                >
+                                  <LogOut className="w-4 h-4" strokeWidth={1.5} />
+                                  Sign Out
+                                </button>
+                              </div>
+                            )}
+                            {isLocalhost() && !isSupabaseConfigured() && (
+                              <div className="px-4 py-2 text-xs text-gray-500 border-t border-gray-200">
+                                Local development mode
+                              </div>
+                            )}
+                          </div>,
+                          document.body
+                        )}
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => {
+                          if (isLocalhost() && !isSupabaseConfigured()) {
+                            // On localhost without Supabase, just show a message
+                            alert('Authentication is not required in local development mode.');
+                            return;
+                          }
+                          setShowAuthModal(true);
+                        }}
+                        className="px-4 py-2 text-sm font-medium bg-white border rounded-lg border-gray-300 hover:border-gray-400 text-gray-700 transition-colors flex items-center gap-2"
+                        title="Sign In / Sign Up"
+                      >
+                        <LogIn className="w-4 h-4" strokeWidth={1.5} />
+                        Sign In
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </header>
+
+        <div className="flex-1 flex h-0 min-h-0">
+          <aside className={`${sidebarCollapsed ? 'w-16' : 'w-64 sm:w-72 lg:w-80'} border-r border-gray-200 flex flex-col overflow-y-auto h-full transition-all duration-300 z-50 relative`} style={{ backgroundColor: '#FFFEFB' }}>
+            {/* Collapse/Expand Button */}
+            <div className={`${sidebarCollapsed ? 'p-2' : 'p-6'} border-b border-gray-200`}>
+              <div className={`flex ${sidebarCollapsed ? 'justify-center' : 'justify-between'} items-center`}>
+                {sidebarCollapsed ? null : (
+                  <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-900">
+                    {sidebarTab === 'sitemap' ? 'Sitemap' : 'Comments'}
+                  </h2>
+                )}
+                <button
+                  onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+                  className="p-1 hover:bg-gray-100 rounded transition-colors"
+                  title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+                >
+                  {sidebarCollapsed ? <Menu className="w-5 h-8" strokeWidth={1.5} /> : <X className="w-4 h-4" strokeWidth={1.5} />}
+                </button>
+              </div>
+            </div>
+
+            {/* Tab Navigation */}
+            {!sidebarCollapsed && (
+              <div className="flex border-b border-gray-200">
+                <button
+                  onClick={() => setSidebarTab('sitemap')}
+                  className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${sidebarTab === 'sitemap'
+                    ? 'text-gray-900 border-b-2 border-gray-900 bg-white-100'
+                    : 'text-gray-500 hover:text-gray-700 hover:bg-white-100'
+                    }`}
+                >
+                  Sitemap
+                </button>
+                <button
+                  onClick={() => setSidebarTab('comments')}
+                  className={`flex-1 px-4 py-3 text-sm font-medium transition-colors relative ${sidebarTab === 'comments'
+                    ? 'text-gray-900 border-b-2 border-gray-900 bg-white-100'
+                    : 'text-gray-500 hover:text-gray-700 hover:bg-white-100'
+                    }`}
+                >
+                  Comments
+                  {comments.filter(c => !c.resolved).length > 0 && (
+                    <span className="absolute top-2 right-4 px-1.5 py-0.5 bg-orange-500 text-white text-xs rounded-full">
+                      {comments.filter(c => !c.resolved).length}
+                    </span>
+                  )}
+                </button>
+              </div>
+            )}
+
+            {/* PRIMARY: Upload CSV Section */}
+            {!sidebarCollapsed && sidebarTab === 'sitemap' && !isViewerMode && (
+              <div className="p-6 border-b border-gray-200">
+                <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-900 mb-3">
+                  Upload
+                </h2>
+                {/* CSV Upload Button - Primary CTA */}
+                <div className="mb-2">
+                  <label className="flex-1 px-4 py-3 bg-[#CB6015] border border-[#B54407] shadow-md hover:shadow-md hover:bg-[#CC5500] text-white text-sm font-medium rounded-lg cursor-pointer flex items-center justify-center gap-2 transition-colors">
+                    <img width="18" height="18" src="https://img.icons8.com/fluency-systems-regular/50/upload--v1.png" alt="upload csv file" style={{ filter: 'brightness(0) invert(1)' }} />
+                    Upload CSV file
+                    <input
+                      type="file"
+                      accept=".csv"
+                      onChange={handleCsvUpload}
+                      className="hidden"
+                    />
+                  </label>
+                </div>
+                <p className="text-xs text-gray-500 mb-2">
+                  CSV should have columns: Page Title, Page URL, Group/Category.
+                </p>
+                <p className="text-xs text-gray-500 mb-2">Optional: Content Type, Last Updated (DD-MM-YYYY).</p>
+
+                {/* CSV Error Display */}
+                {showCsvErrors && csvErrors.length > 0 && (
+                  <div className="p-3 bg-red-50 border border-red-200 rounded">
+                    <div className="flex items-center justify-between mb-2">
+                      <h4 className="text-sm font-medium text-red-800">CSV Upload Errors</h4>
+                      <button
+                        onClick={() => setShowCsvErrors(false)}
+                        className="text-red-600 hover:text-red-800"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                    <ul className="text-xs text-red-700 space-y-1">
+                      {csvErrors.map((error, index) => (
+                        <li key={index}>• {error}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* SECONDARY: Sitemap Switcher Section */}
+            {!sidebarCollapsed && sidebarTab === 'sitemap' && !isViewerMode && (
+              <div className={`${sidebarCollapsed ? 'p-2' : 'p-6'} border-b border-gray-200`}>
+                <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-600 mb-3">
+                  Sitemaps
+                </h2>
+
+                {/* Tabs for My Sitemaps vs Shared with Me */}
+                <div className="flex gap-1 mb-3 bg-gray-100 rounded-lg p-1">
+                  <button
+                    onClick={() => setSitemapViewTab('my')}
+                    className={`flex-1 px-3 py-1.5 text-xs font-medium rounded transition-colors ${sitemapViewTab === 'my'
+                      ? 'bg-white text-gray-900 shadow-sm'
+                      : 'text-gray-600 hover:text-gray-900'
+                      }`}
+                  >
+                    My Sitemaps
+                  </button>
+                  <button
+                    onClick={() => setSitemapViewTab('shared')}
+                    className={`flex-1 px-3 py-1.5 text-xs font-medium rounded transition-colors ${sitemapViewTab === 'shared'
+                      ? 'bg-white text-gray-900 shadow-sm'
+                      : 'text-gray-600 hover:text-gray-900'
+                      }`}
+                  >
+                    Shared with Me
+                  </button>
+                </div>
+
+                {/* Create New Sitemap Button - only show in "My Sitemaps" tab */}
+                {sitemapViewTab === 'my' && (
+                  <button
+                    type="button"
+                    onClick={createNewSitemap}
+                    className="w-full mb-3 px-3 py-2 bg-white shadow-sm border border-gray-200 hover:shadow-md hover:bg-gray-150 text-gray-700 text-sm font-medium rounded transition-colors flex items-center justify-center gap-2"
+                  >
+                    <img width="16" height="16" src="https://img.icons8.com/puffy/32/add.png" alt="add" />
+                    Create New Sitemap
+                  </button>
+                )}
+
+                {/* Dropdown Button */}
+                <div className="relative">
+                  <button
+                    onClick={() => setShowSitemapDropdown(!showSitemapDropdown)}
+                    className="w-full px-3 py-2 text-left text-sm border rounded-lg border-gray-300 hover:border-gray-400 bg-white rounded flex items-center justify-between gap-2"
+                  >
+                    <div className="flex items-center gap-2 flex-1 min-w-0">
+                      <span className="font-medium truncate">
+                        {(() => {
+                          const activeSitemap = sitemaps.find(s => s.id === activeSitemapId);
+                          // Check if active sitemap matches current tab filter
+                          if (activeSitemap) {
+                            const matchesTab = sitemapViewTab === 'my'
+                              ? activeSitemap.isShared !== true
+                              : activeSitemap.isShared === true;
+                            if (matchesTab) {
+                              return activeSitemap.name;
+                            }
+                          }
+                          // If active sitemap doesn't match tab, show first item from filtered list or "No Sitemap"
+                          const filteredSitemaps = sitemaps.filter(sitemap => {
+                            if (sitemapViewTab === 'my') {
+                              return sitemap.isShared !== true;
+                            } else {
+                              return sitemap.isShared === true;
+                            }
+                          });
+                          return filteredSitemaps[0]?.name || 'No Sitemap';
+                        })()}
+                      </span>
+                    </div>
+                    <ChevronDown className={`w-4 h-4 text-gray-500 flex-shrink-0 transition-transform ${showSitemapDropdown ? 'rotate-180' : ''}`} />
+                  </button>
+
+                  {/* Dropdown Menu */}
+                  {showSitemapDropdown && (() => {
+                    // Filter sitemaps based on active tab
+                    const filteredSitemaps = sitemaps.filter(sitemap => {
+                      if (sitemapViewTab === 'my') {
+                        // Show owned sitemaps (not shared)
+                        return sitemap.isShared !== true;
+                      } else {
+                        // Show shared sitemaps
+                        return sitemap.isShared === true;
+                      }
+                    });
+
+                    return filteredSitemaps.length > 0 ? (
+                      <>
+                        <div
+                          className="fixed inset-0 z-10"
+                          onClick={() => setShowSitemapDropdown(false)}
+                        />
+                        <div
+                          className="absolute left-0 right-0 mt-1 bg-white border border-gray-300 rounded shadow-lg z-20 max-h-64 overflow-y-auto"
+                          onMouseDown={(e) => e.stopPropagation()}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {/* Sitemap List */}
+                          <div className="py-1">
+                            {filteredSitemaps.map(sitemap => {
+                              const isShared = sitemap.isShared === true;
+
+                              return (
+                                <div
+                                  key={sitemap.id}
+                                  className={`group px-2 py-2 hover:bg-gray-50 flex items-center justify-between ${activeSitemapId === sitemap.id ? 'bg-blue-50' : ''
+                                    } ${isShared ? 'border-l-2 border-orange-400' : ''}`}
+                                >
+                                  <button
+                                    className="flex items-center gap-2 flex-1 min-w-0 text-left cursor-pointer"
+                                    onClick={() => {
+                                      switchToSitemap(sitemap.id);
+                                      setShowSitemapDropdown(false);
+                                    }}
+                                  >
+                                    {/* Icon */}
+                                    <div className="flex-shrink-0">
+                                      {isShared ? (
+                                        <Lock className="w-4 h-4 text-gray-600" strokeWidth={1.5} />
+                                      ) : (
+                                        <FileText className="w-4 h-4 text-gray-600" strokeWidth={1.5} />
                                       )}
                                     </div>
-                                <div className="text-xs text-gray-500">{sitemap.nodes.length} pages</div>
-                              </div>
-                            </button>
-                            <div 
-                              className="flex items-center gap-1 opacity-0 group-hover:opacity-100 pl-2"
-                            >
-                                  {/* Conditional actions based on ownership */}
-                                  {!isShared ? (
-                                    <>
-                                      {/* Owned sitemaps: Rename, Share, Delete */}
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setShowSitemapDropdown(false);
-                                  setEditingSitemapId(sitemap.id);
-                                  setEditingSitemapName(sitemap.name);
-                                }}
-                                className="p-1.5 hover:bg-gray-200 rounded transition-colors"
-                                title="Rename"
-                                type="button"
-                              >
-                                <Edit2 className="w-4 h-4 text-gray-600" strokeWidth={1.5} />
-                              </button>
-                                      <button
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          setShowSitemapDropdown(false);
-                                          if (!activeSitemapId || activeSitemapId !== sitemap.id) {
-                                            setActiveSitemapId(sitemap.id);
-                                          }
-                                          setShowShareModal(true);
-                                        }}
-                                        className="p-1.5 hover:bg-blue-100 rounded transition-colors"
-                                        title="Share"
-                                        type="button"
-                                      >
-                                        <Share2 className="w-4 h-4 text-blue-600" strokeWidth={1.5} />
-                              </button>
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setShowSitemapDropdown(false);
-                                  setSitemapToDelete(sitemap.id);
-                                }}
-                                className="p-1.5 hover:bg-red-100 rounded transition-colors"
-                                title="Delete"
-                                type="button"
-                              >
-                                <Trash2 className="w-4 h-4 text-red-600" strokeWidth={1.5} />
-                              </button>
-                                    </>
-                                  ) : (
-                                    <>
-                                      {/* Shared sitemaps: Duplicate only */}
-                <button
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          setShowSitemapDropdown(false);
-                                          duplicateSitemap(sitemap.id);
-                                        }}
-                                        className="p-1.5 hover:bg-blue-100 rounded transition-colors"
-                                        title="Duplicate to edit"
-                                        type="button"
-                                      >
-                                        <Copy className="w-4 h-4 text-blue-600" strokeWidth={1.5} />
-                </button>
-                                    </>
-              )}
-            </div>
-                  </div>
-                            );
-                          })}
-            </div>
+                                    <div className="flex-1 min-w-0">
+                                      <div className="flex items-center gap-2">
+                                        <div className="font-medium text-sm truncate">{sitemap.name}</div>
+                                        {/* Badge for shared sitemaps */}
+                                        {isShared && sitemap.sharePermission && (
+                                          <span
+                                            className={`px-1.5 py-0.5 text-xs font-medium rounded ${sitemap.sharePermission === 'view'
+                                              ? 'bg-orange-100 text-orange-600'
+                                              : 'bg-blue-100 text-blue-600'
+                                              }`}
+                                          >
+                                            {sitemap.sharePermission === 'view' ? 'View' : 'Edit'}
+                                          </span>
+                                        )}
+                                      </div>
+                                      <div className="text-xs text-gray-500">{sitemap.nodes.length} pages</div>
+                                    </div>
+                                  </button>
+                                  <div
+                                    className="flex items-center gap-1 opacity-0 group-hover:opacity-100 pl-2"
+                                  >
+                                    {/* Conditional actions based on ownership */}
+                                    {!isShared ? (
+                                      <>
+                                        {/* Owned sitemaps: Rename, Share, Delete */}
+                                        <button
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setShowSitemapDropdown(false);
+                                            setEditingSitemapId(sitemap.id);
+                                            setEditingSitemapName(sitemap.name);
+                                          }}
+                                          className="p-1.5 hover:bg-gray-200 rounded transition-colors"
+                                          title="Rename"
+                                          type="button"
+                                        >
+                                          <Edit2 className="w-4 h-4 text-gray-600" strokeWidth={1.5} />
+                                        </button>
+                                        <button
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setShowSitemapDropdown(false);
+                                            if (!activeSitemapId || activeSitemapId !== sitemap.id) {
+                                              setActiveSitemapId(sitemap.id);
+                                            }
+                                            setShowShareModal(true);
+                                          }}
+                                          className="p-1.5 hover:bg-blue-100 rounded transition-colors"
+                                          title="Share"
+                                          type="button"
+                                        >
+                                          <Share2 className="w-4 h-4 text-blue-600" strokeWidth={1.5} />
+                                        </button>
+                                        <button
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setShowSitemapDropdown(false);
+                                            setSitemapToDelete(sitemap.id);
+                                          }}
+                                          className="p-1.5 hover:bg-red-100 rounded transition-colors"
+                                          title="Delete"
+                                          type="button"
+                                        >
+                                          <Trash2 className="w-4 h-4 text-red-600" strokeWidth={1.5} />
+                                        </button>
+                                      </>
+                                    ) : (
+                                      <>
+                                        {/* Shared sitemaps: Duplicate only */}
+                                        <button
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setShowSitemapDropdown(false);
+                                            duplicateSitemap(sitemap.id);
+                                          }}
+                                          className="p-1.5 hover:bg-blue-100 rounded transition-colors"
+                                          title="Duplicate to edit"
+                                          type="button"
+                                        >
+                                          <Copy className="w-4 h-4 text-blue-600" strokeWidth={1.5} />
+                                        </button>
+                                      </>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </>
+                    ) : (
+                      <div
+                        className="absolute left-0 right-0 mt-1 bg-white border border-gray-300 rounded shadow-lg z-20 p-4"
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <p className="text-sm text-gray-500 text-center">
+                          {sitemapViewTab === 'my' ? 'No owned sitemaps' : 'No shared sitemaps'}
+                        </p>
                       </div>
-                    </>
-                  ) : (
-                    <div 
-                      className="absolute left-0 right-0 mt-1 bg-white border border-gray-300 rounded shadow-lg z-20 p-4"
-                      onMouseDown={(e) => e.stopPropagation()}
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <p className="text-sm text-gray-500 text-center">
-                        {sitemapViewTab === 'my' ? 'No owned sitemaps' : 'No shared sitemaps'}
-                      </p>
-                    </div>
-                  );
-                })()}
-              </div>
-          </div>
-          )}
-          {(() => {
-            // Check if active sitemap matches current tab filter
-            const activeSitemap = activeSitemapId ? sitemaps.find(s => s.id === activeSitemapId) : null;
-            const matchesCurrentTab = activeSitemap && (
-              (sitemapViewTab === 'my' && activeSitemap.isShared !== true) ||
-              (sitemapViewTab === 'shared' && activeSitemap.isShared === true)
-            );
-            const shouldShowStats = nodes.length > 0 && matchesCurrentTab && !sidebarCollapsed && sidebarTab === 'sitemap';
-            
-            return shouldShowStats ? (
-            <>
-              <div className="p-6 border-b border-gray-200">
-                <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-900 mb-4">
-                  Statistics
-                </h2>
-                <div className="space-y-2">
-                  <div className="flex justify-between text-sm">
-                    <span className="text-gray-600">Total Pages</span>
-                    <span className="font-medium">{stats.total}</span>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-gray-600">Groups</span>
-                    <span className="font-medium">{stats.categories}</span>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-gray-600">Max Depth</span>
-                    <span className="font-medium">{stats.maxDepth}</span>
-                  </div>
+                    );
+                  })()}
                 </div>
               </div>
-              <div className="p-6 border-b border-gray-200">
-                <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-900 mb-3">Groups</h2>
-                <div className="space-y-1">
-                  {Array.from(groupByCategory(nodes).keys()).map(group => (
-                    <div
-                      key={group}
-                      className="flex items-center justify-between text-sm px-2 py-1 rounded hover:bg-gray-50 border border-transparent hover:border-gray-200"
-                      title="Click to move current selection; drop selected nodes to move"
-                      onClick={() => {
-                        const ids: string[] = sitemapCanvasRef.current?.getSelectedNodeIds?.() || [];
-                        if (ids.length) handleMoveNodesToGroup(ids, group);
-                      }}
-                      onDragOver={(e) => e.preventDefault()}
-                      onDrop={(e) => {
-                        e.preventDefault();
-                        const ids: string[] = sitemapCanvasRef.current?.getSelectedNodeIds?.() || [];
-                        if (ids.length) handleMoveNodesToGroup(ids, group);
-                      }}
-                    >
-                      <span className="capitalize">{group}</span>
-                      <span className="text-gray-500">{nodes.filter(n => n.category === group).length}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </>
-            ) : null;
-          })()}
+            )}
+            {(() => {
+              // Check if active sitemap matches current tab filter
+              const activeSitemap = activeSitemapId ? sitemaps.find(s => s.id === activeSitemapId) : null;
+              const matchesCurrentTab = activeSitemap && (
+                (sitemapViewTab === 'my' && activeSitemap.isShared !== true) ||
+                (sitemapViewTab === 'shared' && activeSitemap.isShared === true)
+              );
+              const shouldShowStats = nodes.length > 0 && matchesCurrentTab && !sidebarCollapsed && sidebarTab === 'sitemap';
 
-          {/* Comments Panel */}
-          {!sidebarCollapsed && sidebarTab === 'comments' && activeSitemapId && (
-            <div className="flex-1 flex flex-col overflow-hidden min-h-0">
-              <CommentsPanel
-                comments={comments}
-                filter={commentFilter}
-                onFilterChange={setCommentFilter}
-                onCommentClick={() => {
-                  // Inline editing is handled by CommentBubble component
-                  // This callback is kept for compatibility but doesn't need to do anything
-                }}
-                onResolve={async (commentId, resolved) => {
-                  // Create snapshot before comment operation
-                  setUndoStack(stack => [...stack, makeSnapshot()]);
-                  setRedoStack([]);
-                  
-                  try {
-                    const isLocal = isLocalhost();
-                    if (isLocal && !isSupabaseConfigured()) {
-                      // Update in localStorage
-                      const storageKey = `comments_${activeSitemapId}`;
-                      const comments = JSON.parse(localStorage.getItem(storageKey) || '[]');
-                      const updated = comments.map((c: Comment) => 
-                        c.id === commentId ? { ...c, resolved, updatedAt: new Date().toISOString() } : c
-                      );
-                      localStorage.setItem(storageKey, JSON.stringify(updated));
-                      setComments(updated);
-                      return;
+              return shouldShowStats ? (
+                <>
+                  <div className="p-6 border-b border-gray-200">
+                    <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-900 mb-4">
+                      Statistics
+                    </h2>
+                    <div className="space-y-2">
+                      <div className="flex justify-between text-sm">
+                        <span className="text-gray-600">Total Pages</span>
+                        <span className="font-medium">{stats.total}</span>
+                      </div>
+                      <div className="flex justify-between text-sm">
+                        <span className="text-gray-600">Groups</span>
+                        <span className="font-medium">{stats.categories}</span>
+                      </div>
+                      <div className="flex justify-between text-sm">
+                        <span className="text-gray-600">Max Depth</span>
+                        <span className="font-medium">{stats.maxDepth}</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="p-6 border-b border-gray-200">
+                    <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-900 mb-3">Groups</h2>
+                    <div className="space-y-1">
+                      {Array.from(groupByCategory(nodes).keys()).map(group => (
+                        <div
+                          key={group}
+                          className="flex items-center justify-between text-sm px-2 py-1 rounded hover:bg-gray-50 border border-transparent hover:border-gray-200"
+                          title="Click to move current selection; drop selected nodes to move"
+                          onClick={() => {
+                            const ids: string[] = sitemapCanvasRef.current?.getSelectedNodeIds?.() || [];
+                            if (ids.length) handleMoveNodesToGroup(ids, group);
+                          }}
+                          onDragOver={(e) => e.preventDefault()}
+                          onDrop={(e) => {
+                            e.preventDefault();
+                            const ids: string[] = sitemapCanvasRef.current?.getSelectedNodeIds?.() || [];
+                            if (ids.length) handleMoveNodesToGroup(ids, group);
+                          }}
+                        >
+                          <span className="capitalize">{group}</span>
+                          <span className="text-gray-500">{nodes.filter(n => n.category === group).length}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              ) : null;
+            })()}
+
+            {/* Comments Panel */}
+            {!sidebarCollapsed && sidebarTab === 'comments' && activeSitemapId && (
+              <div className="flex-1 flex flex-col overflow-hidden min-h-0">
+                <CommentsPanel
+                  comments={comments}
+                  filter={commentFilter}
+                  onFilterChange={setCommentFilter}
+                  onCommentClick={() => {
+                    // Inline editing is handled by CommentBubble component
+                    // This callback is kept for compatibility but doesn't need to do anything
+                  }}
+                  onResolve={async (commentId, resolved) => {
+                    // Create snapshot before comment operation
+                    setUndoStack(stack => [...stack, makeSnapshot()]);
+                    setRedoStack([]);
+
+                    try {
+                      const isLocal = isLocalhost();
+                      if (isLocal && !isSupabaseConfigured()) {
+                        // Update in localStorage
+                        const storageKey = `comments_${activeSitemapId}`;
+                        const comments = JSON.parse(localStorage.getItem(storageKey) || '[]');
+                        const updated = comments.map((c: Comment) =>
+                          c.id === commentId ? { ...c, resolved, updatedAt: new Date().toISOString() } : c
+                        );
+                        localStorage.setItem(storageKey, JSON.stringify(updated));
+                        setComments(updated);
+                        return;
+                      }
+                      await resolveComment(commentId, resolved, activeSitemapId || undefined);
+                      // Real-time update will handle state update
+                    } catch (err) {
+                      console.error('Failed to resolve comment:', err);
                     }
-                    await resolveComment(commentId, resolved, activeSitemapId || undefined);
-                    // Real-time update will handle state update
-                  } catch (err) {
-                    console.error('Failed to resolve comment:', err);
-                  }
-                }}
-                onDelete={async (commentId) => {
-                  // Create snapshot before comment operation
-                  setUndoStack(stack => [...stack, makeSnapshot()]);
-                  setRedoStack([]);
-                  
-                  // 1. INSTANT UI update (optimistic) - same as nodes/text deletion
-                  setComments(prev => prev.filter(c => c.id !== commentId));
-                  
-                  // 2. Save in background (non-blocking)
-                  try {
-                    const isLocal = isLocalhost();
-                    if (isLocal && !isSupabaseConfigured()) {
-                      // localStorage - update storage to match UI
-                      const storageKey = `comments_${activeSitemapId}`;
-                      const comments = JSON.parse(localStorage.getItem(storageKey) || '[]');
-                      const filtered = comments.filter((c: Comment) => c.id !== commentId);
-                      localStorage.setItem(storageKey, JSON.stringify(filtered));
-                      return;
-                    }
-                    
-                    // Supabase - fire and forget (real-time will confirm)
-                    deleteComment(commentId, activeSitemapId || undefined).catch(err => {
+                  }}
+                  onDelete={async (commentId) => {
+                    // Create snapshot before comment operation
+                    setUndoStack(stack => [...stack, makeSnapshot()]);
+                    setRedoStack([]);
+
+                    // 1. INSTANT UI update (optimistic) - same as nodes/text deletion
+                    setComments(prev => prev.filter(c => c.id !== commentId));
+
+                    // 2. Save in background (non-blocking)
+                    try {
+                      const isLocal = isLocalhost();
+                      if (isLocal && !isSupabaseConfigured()) {
+                        // localStorage - update storage to match UI
+                        const storageKey = `comments_${activeSitemapId}`;
+                        const comments = JSON.parse(localStorage.getItem(storageKey) || '[]');
+                        const filtered = comments.filter((c: Comment) => c.id !== commentId);
+                        localStorage.setItem(storageKey, JSON.stringify(filtered));
+                        return;
+                      }
+
+                      // Supabase - fire and forget (real-time will confirm)
+                      deleteComment(commentId, activeSitemapId || undefined).catch(err => {
+                        console.error('Failed to delete comment:', err);
+                        // Rollback: reload comments if delete failed
+                        if (activeSitemapId) {
+                          getComments(activeSitemapId)
+                            .then((loadedComments) => {
+                              setComments(loadedComments);
+                              setCommentsLastUpdated(new Date());
+                            })
+                            .catch(console.error);
+                        }
+                      });
+                    } catch (err) {
                       console.error('Failed to delete comment:', err);
-                      // Rollback: reload comments if delete failed
+                      // Rollback on error
                       if (activeSitemapId) {
                         getComments(activeSitemapId)
                           .then((loadedComments) => {
@@ -3250,593 +3257,610 @@ function App() {
                           })
                           .catch(console.error);
                       }
-                    });
-                  } catch (err) {
-                    console.error('Failed to delete comment:', err);
-                    // Rollback on error
+                    }
+                  }}
+                  currentUserId={isLocalhost() && !isSupabaseConfigured() ? 'localhost-user' : (user?.id)}
+                  isOwner={shareMode === 'owner' || (!isViewerMode && !(sitemaps.find(s => s.id === activeSitemapId)?.isShared === true && sitemaps.find(s => s.id === activeSitemapId)?.sharePermission === 'view'))}
+                  lastUpdated={commentsLastUpdated}
+                  onRefresh={() => {
                     if (activeSitemapId) {
                       getComments(activeSitemapId)
                         .then((loadedComments) => {
                           setComments(loadedComments);
                           setCommentsLastUpdated(new Date());
                         })
-                        .catch(console.error);
+                        .catch(err => console.error('Failed to refresh comments:', err));
                     }
-                  }
-                }}
-                currentUserId={isLocalhost() && !isSupabaseConfigured() ? 'localhost-user' : (user?.id)}
-                isOwner={shareMode === 'owner' || (!isViewerMode && !(sitemaps.find(s => s.id === activeSitemapId)?.isShared === true && sitemaps.find(s => s.id === activeSitemapId)?.sharePermission === 'view'))}
-                lastUpdated={commentsLastUpdated}
-                onRefresh={() => {
-                  if (activeSitemapId) {
-                    getComments(activeSitemapId)
-                      .then((loadedComments) => {
-                        setComments(loadedComments);
-                        setCommentsLastUpdated(new Date());
-                      })
-                      .catch(err => console.error('Failed to refresh comments:', err));
-                  }
-                }}
-              />
-            </div>
-          )}
-
-          {/* Comments empty state */}
-          {!sidebarCollapsed && sidebarTab === 'comments' && !activeSitemapId && (
-            <div className="flex-1 flex items-center justify-center p-6">
-              <div className="text-center">
-                <MessageSquare className="w-12 h-12 text-gray-300 mx-auto mb-3" strokeWidth={1.5} />
-                <p className="text-sm text-gray-500">No sitemap selected</p>
-                <p className="text-xs text-gray-400 mt-1">Select or create a sitemap to view comments</p>
+                  }}
+                />
               </div>
-            </div>
-          )}
-        </aside>
+            )}
 
-        <main className="flex-1 flex flex-col h-full overflow-hidden" style={{ backgroundColor: '#FFFEFB' }}>
-          {nodes.length === 0 ? (
-            <div className="flex-1 flex items-center justify-center">
-              <div className="text-center max-w-lg">
-                <img className="w-16 h-16 mx-auto mb-4 opacity-30" src="https://img.icons8.com/?size=100&id=82795&format=png&color=000000" alt="No sitemap yet"/>
-                <h2 className="text-xl font-semibold mb-2">No Sitemap Yet</h2>
-                <p className="text-gray-500 mb-6">
-                  Upload a CSV file to generate a sitemap with hierarchy detection
-                  and professional export formats.
-                </p>
+            {/* Comments empty state */}
+            {!sidebarCollapsed && sidebarTab === 'comments' && !activeSitemapId && (
+              <div className="flex-1 flex items-center justify-center p-6">
+                <div className="text-center">
+                  <MessageSquare className="w-12 h-12 text-gray-300 mx-auto mb-3" strokeWidth={1.5} />
+                  <p className="text-sm text-gray-500">No sitemap selected</p>
+                  <p className="text-xs text-gray-400 mt-1">Select or create a sitemap to view comments</p>
+                </div>
               </div>
-            </div>
-          ) : (
-            <div className="flex-1 relative h-full">
-              <SitemapCanvas
-                ref={sitemapCanvasRef}
-                nodes={nodes}
-                selectionGroups={selectionGroups}
-                onCreateSelectionGroup={(nodeIds, figureIds, name) => createSelectionGroup(nodeIds, figureIds, name)}
-                onUngroupSelection={(nodeIds, figureIds) => ungroupSelection(nodeIds, figureIds)}
-                snapToGuides={snapToGuides}
-                layoutType={layoutType}
-                extraLinks={extraLinks}
-                onNodeClick={node => {
-                  setSelectedNode(node);
-                  // Only clear focus if it's a different node
-                  if (focusedNode && focusedNode.id !== node.id) {
-                    setFocusedNode(null);
-                  }
-                }}
-                onNodesUpdate={handleNodesUpdate}
-                onNodesPreview={handleNodesPreview}
-                onConnectionCreate={handleConnectionCreate}
-                onExtraLinkCreate={handleExtraLinkCreate}
-                onExtraLinkDelete={handleExtraLinkDelete}
-                onAddChild={handleAddNode}
-                onAddNode={() => handleAddNode(null)}
-                onMoveNodesToGroup={handleMoveNodesToGroup}
-                onCreateGroupFromSelection={handleCreateGroupFromSelection}
-                onDeleteGroup={handleDeleteGroup}
-                onUndo={() => {
-                  if (undoStack.length > 0) {
-                    const prev = undoStack[undoStack.length - 1];
-                    setUndoStack(stack => stack.slice(0, -1));
-                    setRedoStack(stack => [...stack, makeSnapshot()]);
-                    setNodes(prev.nodes);
-                    setExtraLinks(prev.extraLinks);
-                    setLinkStyles(prev.linkStyles);
-                    setColorOverrides(prev.colorOverrides);
-                    setFigures(prev.figures);
-                    setFreeLines(prev.freeLines);
-                    setSelectionGroups(prev.selectionGroups);
-                    setComments(prev.comments);
-                  }
-                }}
-                onRedo={() => {
-                  if (redoStack.length > 0) {
-                    const next = redoStack[redoStack.length - 1];
-                    setRedoStack(stack => stack.slice(0, -1));
+            )}
+          </aside>
+
+          <main className="flex-1 flex flex-col h-full overflow-hidden" style={{ backgroundColor: '#FFFEFB' }}>
+            {nodes.length === 0 ? (
+              <div className="flex-1 flex items-center justify-center">
+                <div className="text-center max-w-lg">
+                  <img className="w-16 h-16 mx-auto mb-4 opacity-30" src="https://img.icons8.com/?size=100&id=82795&format=png&color=000000" alt="No sitemap yet" />
+                  <h2 className="text-xl font-semibold mb-2">No Sitemap Yet</h2>
+                  <p className="text-gray-500 mb-6">
+                    Upload a CSV file to generate a sitemap with hierarchy detection
+                    and professional export formats.
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="flex-1 relative h-full">
+                <SitemapCanvas
+                  activeTool={activeTool}
+                  onActiveToolChange={setActiveTool}
+                  ref={sitemapCanvasRef}
+                  nodes={nodes}
+                  selectionGroups={selectionGroups}
+                  onCreateSelectionGroup={(nodeIds, figureIds, name) => createSelectionGroup(nodeIds, figureIds, name)}
+                  onUngroupSelection={(nodeIds, figureIds) => ungroupSelection(nodeIds, figureIds)}
+                  snapToGuides={snapToGuides}
+                  layoutType={layoutType}
+                  extraLinks={extraLinks}
+                  onNodeClick={node => {
+                    setSelectedNode(node);
+                    // Only clear focus if it's a different node
+                    if (focusedNode && focusedNode.id !== node.id) {
+                      setFocusedNode(null);
+                    }
+                  }}
+                  onNodesUpdate={handleNodesUpdate}
+                  onNodesPreview={handleNodesPreview}
+                  onConnectionCreate={handleConnectionCreate}
+                  onExtraLinkCreate={handleExtraLinkCreate}
+                  onExtraLinkDelete={handleExtraLinkDelete}
+                  onAddChild={handleAddNode}
+                  onAddNode={() => handleAddNode(null)}
+                  onMoveNodesToGroup={handleMoveNodesToGroup}
+                  onCreateGroupFromSelection={handleCreateGroupFromSelection}
+                  onDeleteGroup={handleDeleteGroup}
+                  onUndo={() => {
+                    if (undoStack.length > 0) {
+                      const prev = undoStack[undoStack.length - 1];
+                      setUndoStack(stack => stack.slice(0, -1));
+                      setRedoStack(stack => [...stack, makeSnapshot()]);
+                      setNodes(prev.nodes);
+                      setExtraLinks(prev.extraLinks);
+                      setLinkStyles(prev.linkStyles);
+                      setColorOverrides(prev.colorOverrides);
+                      setFigures(prev.figures);
+                      setFreeLines(prev.freeLines);
+                      setSelectionGroups(prev.selectionGroups);
+                      setComments(prev.comments);
+                    }
+                  }}
+                  onRedo={() => {
+                    if (redoStack.length > 0) {
+                      const next = redoStack[redoStack.length - 1];
+                      setRedoStack(stack => stack.slice(0, -1));
+                      setUndoStack(stack => [...stack, makeSnapshot()]);
+                      setNodes(next.nodes);
+                      setExtraLinks(next.extraLinks);
+                      setLinkStyles(next.linkStyles);
+                      setColorOverrides(next.colorOverrides);
+                      setFigures(next.figures);
+                      setFreeLines(next.freeLines);
+                      setSelectionGroups(next.selectionGroups);
+                      setComments(next.comments);
+                    }
+                  }}
+                  searchResults={searchResults}
+                  focusedNode={focusedNode}
+                  onClearFocus={handleClearFocus}
+                  colorOverrides={colorOverrides}
+                  linkStyles={linkStyles}
+                  onLinkStyleChange={handleLinkStyleChange}
+                  figures={figures}
+                  freeLines={freeLines}
+                  onCreateFigure={handleCreateFigure}
+                  onUpdateFigure={handleUpdateFigure}
+                  onDeleteFigure={handleDeleteFigure}
+                  onCreateFreeLine={handleCreateFreeLine}
+                  onUpdateFreeLine={handleUpdateFreeLine}
+                  onDeleteFreeLine={handleDeleteFreeLine}
+                  comments={comments}
+                  onCommentClick={() => {
+                    // Inline editing is handled by CommentBubble component
+                    // This callback is kept for compatibility but doesn't need to do anything
+                  }}
+                  onCommentUpdate={async (commentId, text) => {
+                    // Create snapshot before comment operation
                     setUndoStack(stack => [...stack, makeSnapshot()]);
-                    setNodes(next.nodes);
-                    setExtraLinks(next.extraLinks);
-                    setLinkStyles(next.linkStyles);
-                    setColorOverrides(next.colorOverrides);
-                    setFigures(next.figures);
-                    setFreeLines(next.freeLines);
-                    setSelectionGroups(next.selectionGroups);
-                    setComments(next.comments);
-                  }
-                }}
-                searchResults={searchResults}
-                focusedNode={focusedNode}
-                onClearFocus={handleClearFocus}
-                colorOverrides={colorOverrides}
-                linkStyles={linkStyles}
-                onLinkStyleChange={handleLinkStyleChange}
-                figures={figures}
-                freeLines={freeLines}
-                onCreateFigure={handleCreateFigure}
-                onUpdateFigure={handleUpdateFigure}
-                onDeleteFigure={handleDeleteFigure}
-                onCreateFreeLine={handleCreateFreeLine}
-                onUpdateFreeLine={handleUpdateFreeLine}
-                onDeleteFreeLine={handleDeleteFreeLine}
-                comments={comments}
-                onCommentClick={() => {
-                  // Inline editing is handled by CommentBubble component
-                  // This callback is kept for compatibility but doesn't need to do anything
-                }}
-                onCommentUpdate={async (commentId, text) => {
-                  // Create snapshot before comment operation
-                  setUndoStack(stack => [...stack, makeSnapshot()]);
-                  setRedoStack([]);
-                  
-                  try {
-                    const isLocal = isLocalhost();
-                    if (isLocal && !isSupabaseConfigured()) {
-                      // Update in localStorage
-                      const storageKey = `comments_${activeSitemapId}`;
-                      const comments = JSON.parse(localStorage.getItem(storageKey) || '[]');
-                      const updated = comments.map((c: Comment) => 
-                        c.id === commentId ? { ...c, text, updatedAt: new Date().toISOString() } : c
-                      );
-                      localStorage.setItem(storageKey, JSON.stringify(updated));
-                      setComments(updated);
-                      return;
+                    setRedoStack([]);
+
+                    try {
+                      const isLocal = isLocalhost();
+                      if (isLocal && !isSupabaseConfigured()) {
+                        // Update in localStorage
+                        const storageKey = `comments_${activeSitemapId}`;
+                        const comments = JSON.parse(localStorage.getItem(storageKey) || '[]');
+                        const updated = comments.map((c: Comment) =>
+                          c.id === commentId ? { ...c, text, updatedAt: new Date().toISOString() } : c
+                        );
+                        localStorage.setItem(storageKey, JSON.stringify(updated));
+                        setComments(updated);
+                        return;
+                      }
+                      await updateComment(commentId, text, activeSitemapId || undefined);
+                      // Real-time update will handle state update
+                    } catch (err) {
+                      console.error('Failed to update comment:', err);
                     }
-                    await updateComment(commentId, text, activeSitemapId || undefined);
-                    // Real-time update will handle state update
-                  } catch (err) {
-                    console.error('Failed to update comment:', err);
-                  }
-                }}
-                onCommentMove={async (commentId, x, y) => {
-                  // Create snapshot before comment operation
-                  setUndoStack(stack => [...stack, makeSnapshot()]);
-                  setRedoStack([]);
-                  
-                  try {
-                    const isLocal = isLocalhost();
-                    if (isLocal && !isSupabaseConfigured()) {
-                      // Update in localStorage
-                      const storageKey = `comments_${activeSitemapId}`;
-                      const comments = JSON.parse(localStorage.getItem(storageKey) || '[]');
-                      const updated = comments.map((c: Comment) => 
-                        c.id === commentId ? { ...c, x, y, updatedAt: new Date().toISOString() } : c
-                      );
-                      localStorage.setItem(storageKey, JSON.stringify(updated));
-                      setComments(updated);
-                      return;
+                  }}
+                  onCommentMove={async (commentId, x, y) => {
+                    // Create snapshot before comment operation
+                    setUndoStack(stack => [...stack, makeSnapshot()]);
+                    setRedoStack([]);
+
+                    try {
+                      const isLocal = isLocalhost();
+                      if (isLocal && !isSupabaseConfigured()) {
+                        // Update in localStorage
+                        const storageKey = `comments_${activeSitemapId}`;
+                        const comments = JSON.parse(localStorage.getItem(storageKey) || '[]');
+                        const updated = comments.map((c: Comment) =>
+                          c.id === commentId ? { ...c, x, y, updatedAt: new Date().toISOString() } : c
+                        );
+                        localStorage.setItem(storageKey, JSON.stringify(updated));
+                        setComments(updated);
+                        return;
+                      }
+                      await updateCommentPosition(commentId, x, y, activeSitemapId || undefined);
+                      // Real-time update will handle state update
+                    } catch (err) {
+                      console.error('Failed to move comment:', err);
                     }
-                    await updateCommentPosition(commentId, x, y, activeSitemapId || undefined);
-                    // Real-time update will handle state update
-                  } catch (err) {
-                    console.error('Failed to move comment:', err);
-                  }
-                }}
-                onCommentDelete={async (commentId) => {
-                  // Create snapshot before comment operation
-                  setUndoStack(stack => [...stack, makeSnapshot()]);
-                  setRedoStack([]);
-                  
-                  // 1. INSTANT UI update (optimistic) - same as nodes/text deletion
-                  setComments(prev => prev.filter(c => c.id !== commentId));
-                  
-                  // 2. Save in background (non-blocking)
-                  try {
-                    const isLocal = isLocalhost();
-                    if (isLocal && !isSupabaseConfigured()) {
-                      // localStorage - update storage to match UI
-                      const storageKey = `comments_${activeSitemapId}`;
-                      const comments = JSON.parse(localStorage.getItem(storageKey) || '[]');
-                      const filtered = comments.filter((c: Comment) => c.id !== commentId);
-                      localStorage.setItem(storageKey, JSON.stringify(filtered));
-                      return;
-                    }
-                    
-                    // Supabase - fire and forget (real-time will confirm)
-                    deleteComment(commentId, activeSitemapId || undefined).catch(err => {
+                  }}
+                  onCommentDelete={async (commentId) => {
+                    // Create snapshot before comment operation
+                    setUndoStack(stack => [...stack, makeSnapshot()]);
+                    setRedoStack([]);
+
+                    // 1. INSTANT UI update (optimistic) - same as nodes/text deletion
+                    setComments(prev => prev.filter(c => c.id !== commentId));
+
+                    // 2. Save in background (non-blocking)
+                    try {
+                      const isLocal = isLocalhost();
+                      if (isLocal && !isSupabaseConfigured()) {
+                        // localStorage - update storage to match UI
+                        const storageKey = `comments_${activeSitemapId}`;
+                        const comments = JSON.parse(localStorage.getItem(storageKey) || '[]');
+                        const filtered = comments.filter((c: Comment) => c.id !== commentId);
+                        localStorage.setItem(storageKey, JSON.stringify(filtered));
+                        return;
+                      }
+
+                      // Supabase - fire and forget (real-time will confirm)
+                      deleteComment(commentId, activeSitemapId || undefined).catch(err => {
+                        console.error('Failed to delete comment:', err);
+                        // Rollback: reload comments if delete failed
+                        if (activeSitemapId) {
+                          getComments(activeSitemapId).then(setComments).catch(console.error);
+                        }
+                      });
+                    } catch (err) {
                       console.error('Failed to delete comment:', err);
-                      // Rollback: reload comments if delete failed
+                      // Rollback on error
                       if (activeSitemapId) {
                         getComments(activeSitemapId).then(setComments).catch(console.error);
                       }
-                    });
-                  } catch (err) {
-                    console.error('Failed to delete comment:', err);
-                    // Rollback on error
-                    if (activeSitemapId) {
-                      getComments(activeSitemapId).then(setComments).catch(console.error);
                     }
-                  }
-                }}
-                onCommentPlace={async (x, y) => {
-                  // Allow comments on localhost or in viewer mode without authentication
-                  const isLocal = isLocalhost();
-                  const allowWithoutAuth = (isLocal && !isSupabaseConfigured()) || isViewerMode;
-                  
-                  if (!activeSitemapId) {
-                    return;
-                  }
-                  
-                  // In viewer mode or localhost, allow comments without authentication (will use localStorage)
-                  // Otherwise, require authentication
-                  if (!isViewerMode && !user && !allowWithoutAuth) {
-                    if (isSupabaseConfigured()) {
-                      setShowAuthModal(true);
+                  }}
+                  onCommentPlace={async (x, y) => {
+                    console.log('App: onCommentPlace called', { x, y, activeSitemapId, isViewerMode, user: !!user });
+
+                    // Allow comments on localhost or in viewer mode without authentication
+                    const isLocal = isLocalhost();
+                    const allowWithoutAuth = (isLocal && !isSupabaseConfigured()) || isViewerMode;
+
+                    console.log('App: Auth check', { isLocal, isSupabaseConfigured: isSupabaseConfigured(), allowWithoutAuth });
+
+                    if (!activeSitemapId) {
+                      return;
                     }
-                    return;
-                  }
-                  
-                  // Create snapshot before comment operation
-                  setUndoStack(stack => [...stack, makeSnapshot()]);
-                  setRedoStack([]);
-                  
-                  try {
-                    // createComment now handles localStorage fallback automatically
-                    // Works for both authenticated users, localhost, and viewer mode
-                    const newComment = await createComment(activeSitemapId, x, y, '');
-                    // Optimistically add comment to state immediately
-                    setComments(prev => {
-                      // Check if comment already exists (from real-time update)
-                      if (prev.some(c => c.id === newComment.id)) {
-                        return prev;
+
+                    // In viewer mode or localhost, allow comments without authentication (will use localStorage)
+                    // Otherwise, require authentication
+                    if (!isViewerMode && !user && !allowWithoutAuth) {
+                      if (isSupabaseConfigured()) {
+                        setShowAuthModal(true);
                       }
-                      return [newComment, ...prev];
-                    });
-                  } catch (err) {
-                    console.error('Failed to create comment:', err);
-                    // Don't show auth modal in viewer mode or localhost
-                    if (isSupabaseConfigured() && !user && !isLocal && !isViewerMode) {
-                      setShowAuthModal(true);
+                      return;
                     }
-                  }
-                }}
-                isViewerMode={isViewerMode || (sitemaps.find(s => s.id === activeSitemapId)?.isShared === true && sitemaps.find(s => s.id === activeSitemapId)?.sharePermission === 'view')}
-                currentUserId={isLocalhost() && !isSupabaseConfigured() ? 'localhost-user' : (user?.id)}
-                isOwner={shareMode === 'owner' || (!isViewerMode && !(sitemaps.find(s => s.id === activeSitemapId)?.isShared === true && sitemaps.find(s => s.id === activeSitemapId)?.sharePermission === 'view'))}
-              />
-            </div>
-          )}
-        </main>
-                </div>
 
-      {/* Search Overlay */}
-      <SearchOverlay
-        nodes={nodes}
-        onSearchResults={handleSearchResults}
-        onClearSearch={handleClearSearch}
-        isVisible={showSearch}
-        onClose={() => setShowSearch(false)}
-        onFocusNode={handleFocusNode}
-      />
+                    // Create snapshot before comment operation
+                    setUndoStack(stack => [...stack, makeSnapshot()]);
+                    setRedoStack([]);
 
-      {/* Help Modal */}
-      {showHelp && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[999] p-4" onClick={() => setShowHelp(false)}>
-          <div className="bg-white rounded-lg shadow-lg w-1/3 max-w-2xl max-h-[85vh] overflow-visible flex flex-col" onClick={(e) => e.stopPropagation()}>
-            {/* Minimal Header */}
-            <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
-              <h2 className="text-xl font-semibold">Keyboard Shortcuts</h2>
-              <button 
-                onClick={() => setShowHelp(false)} 
-                className="text-gray-400 hover:text-gray-900 transition-colors"
-              >
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <line x1="18" y1="6" x2="6" y2="18"/>
-                  <line x1="6" y1="6" x2="18" y2="18"/>
-                </svg>
-              </button>
-            </div>
-
-            {/* Single Column Layout */}
-            <div className="overflow-y-auto overflow-x-visible flex-1 p-6">
-              <div className="space-y-6">
-                {/* Essential Shortcuts */}
-                <div>
-                  <h3 className="text-sm font-medium text-gray-900 mb-3 uppercase tracking-wide">Essential</h3>
-                  <div className="space-y-2">
-                    <ShortcutItem keys="V" label="Select mode" />
-                    <ShortcutItem keys="A" label="Add child node" info="Requires a node to be selected first" />
-                    <ShortcutItem keys="C" label="Change color" info="Requires a node to be selected first" />
-                    <ShortcutItem keys="L" label="Connection line" info="Drag from node to node" />
-                  </div>
-                </div>
-
-                {/* Selection */}
-                <div>
-                  <h3 className="text-sm font-medium text-gray-900 mb-3 uppercase tracking-wide">Selection</h3>
-                  <div className="space-y-2">
-                    <ShortcutItem
-                      keys="Shift + Drag"
-                      label="Multi-select"
-                    />
-                  </div>
-                </div>
-
-                {/* Navigation */}
-                <div>
-                  <h3 className="text-sm font-medium text-gray-900 mb-3 uppercase tracking-wide">Navigation</h3>
-                  <div className="space-y-2">
-                    <ShortcutItem keys="Ctrl/Cmd + Drag" label="Move nodes" info="Drag selected node with its parent and children" />
-                    <ShortcutItem keys="Ctrl/Cmd + Wheel" label="Zoom" />
-                    <ShortcutItem keys="Ctrl/Cmd + F" label="Search" />
-                  </div>
-                </div>
+                    try {
+                      // createComment now handles localStorage fallback automatically
+                      // Works for both authenticated users, localhost, and viewer mode
+                      const newComment = await createComment(activeSitemapId, x, y, '');
+                      console.log('App: Comment created', newComment);
+                      // Optimistically add comment to state immediately
+                      setComments(prev => {
+                        // Check if comment already exists (from real-time update)
+                        if (prev.some(c => c.id === newComment.id)) {
+                          return prev;
+                        }
+                        return [newComment, ...prev];
+                      });
+                    } catch (err) {
+                      console.error('Failed to create comment:', err);
+                      // Don't show auth modal in viewer mode or localhost
+                      if (isSupabaseConfigured() && !user && !isLocal && !isViewerMode) {
+                        setShowAuthModal(true);
+                      }
+                    }
+                  }}
+                  isViewerMode={isViewerMode || (sitemaps.find(s => s.id === activeSitemapId)?.isShared === true && sitemaps.find(s => s.id === activeSitemapId)?.sharePermission === 'view')}
+                  currentUserId={isLocalhost() && !isSupabaseConfigured() ? 'localhost-user' : (user?.id)}
+                  isOwner={shareMode === 'owner' || (!isViewerMode && !(sitemaps.find(s => s.id === activeSitemapId)?.isShared === true && sitemaps.find(s => s.id === activeSitemapId)?.sharePermission === 'view'))}
+                />
               </div>
-            </div>
-
-            {/* Minimal Footer */}
-            <div className="px-6 py-3 border-t border-gray-200 flex justify-end">
-              <button 
-                onClick={() => setShowHelp(false)} 
-                className="px-4 py-2 bg-black text-white text-sm font-medium rounded-md hover:bg-gray-800 transition-colors"
-              >
-                Close
-              </button>
-            </div>
-          </div>
+            )}
+          </main>
         </div>
-      )}
 
-      {/* Right Panel for Node Editing */}
-
-      {showSettings && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white w-full max-w-lg border border-gray-300">
-            <div className="p-6 border-b border-gray-200 flex items-center justify-between">
-              <h2 className="text-lg font-semibold">Groups</h2>
-              <button
-                onClick={() => setShowSettings(false)}
-                className="text-gray-400 hover:text-gray-900"
-              >
-                ✕
-              </button>
-            </div>
-            <div className="p-6">
-              <div className="space-y-6">
-                <div>
-                  <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-900 mb-1">
-                    Groups
-                  </h3>
-                  <p className="text-xs text-gray-500 mb-3">Source: CSV "Group/Category" column. Otherwise inferred from URL path.</p>
-                  <div className="space-y-2">
-                    {Array.from(categoryGroups.entries()).map(([category, categoryNodes]) => (
-                      <div key={category} className="flex items-center justify-between text-sm">
-                        <div className="flex items-center gap-3">
-                          <div
-                            className="w-4 h-4 border border-gray-300"
-                            style={{
-                              background:
-                                category === 'root'
-                                  ? '#000000'
-                                  : category === 'content'
-                                  ? '#1a1a1a'
-                                  : category === 'products'
-                                  ? '#333333'
-                                  : category === 'company'
-                                  ? '#4d4d4d'
-                                  : category === 'support'
-                                  ? '#666666'
-                                  : category === 'technical'
-                                  ? '#808080'
-                                  : category === 'users'
-                                  ? '#999999'
-                                  : '#b3b3b3',
-                            }}
-                          />
-                          <span className="capitalize">{category}</span>
-                        </div>
-                        <span className="text-gray-500">{categoryNodes.length} pages</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div className="p-6 border-t border-gray-200 flex justify-end">
-              <button
-                onClick={() => setShowSettings(false)}
-                className="px-6 py-2 bg-black text-white text-sm font-medium rounded-md hover:bg-gray-800 transition-colors"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Rename Sitemap Modal */}
-      {editingSitemapId && (
-        <div 
-          className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
-          onClick={() => {
-            setEditingSitemapId(null);
-            setEditingSitemapName('');
-          }}
-        >
-          <div 
-            className="bg-white rounded-lg p-6 max-w-sm w-full"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3 className="text-lg font-semibold mb-4">Rename Sitemap</h3>
-            <input
-              type="text"
-              value={editingSitemapName}
-              onChange={(e) => setEditingSitemapName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  if (editingSitemapName.trim()) {
-                    renameSitemap(editingSitemapId, editingSitemapName);
-                  }
-                  setEditingSitemapId(null);
-                  setEditingSitemapName('');
-                } else if (e.key === 'Escape') {
-                  setEditingSitemapId(null);
-                  setEditingSitemapName('');
-                }
-              }}
-              className="w-full px-3 py-2 border border-gray-300 rounded mb-4"
-              autoFocus
-            />
-            <div className="flex gap-2 justify-end">
-              <button
-                onClick={() => {
-                  setEditingSitemapId(null);
-                  setEditingSitemapName('');
-                }}
-                className="px-4 py-2 border border-gray-300 rounded hover:bg-gray-50"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => {
-                  if (editingSitemapName.trim()) {
-                    renameSitemap(editingSitemapId, editingSitemapName);
-                  }
-                  setEditingSitemapId(null);
-                  setEditingSitemapName('');
-                }}
-                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
-              >
-                Save
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Auth Modal */}
-      {isSupabaseConfigured() && (
-        <AuthModal
-          isOpen={showAuthModal}
-          onClose={() => setShowAuthModal(false)}
-          onSuccess={handleAuthSuccess}
+        {/* Search Overlay */}
+        <SearchOverlay
+          nodes={nodes}
+          onSearchResults={handleSearchResults}
+          onClearSearch={handleClearSearch}
+          isVisible={showSearch}
+          onClose={() => setShowSearch(false)}
+          onFocusNode={handleFocusNode}
         />
-      )}
 
-      {/* Delete Confirmation Modal */}
-      {sitemapToDelete && (
-        <div 
-          className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
-          onClick={() => setSitemapToDelete(null)}
-        >
-          <div 
-            className="bg-white rounded-lg p-6 max-w-sm w-full"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3 className="text-lg font-semibold mb-4">Delete Sitemap</h3>
-            <p className="text-gray-600 mb-4">
-              Are you sure you want to delete "{sitemaps.find(s => s.id === sitemapToDelete)?.name}"? This action cannot be undone.
-            </p>
-            <div className="flex gap-2 justify-end">
-              <button
-                onClick={() => setSitemapToDelete(null)}
-                className="px-4 py-2 border border-gray-300 rounded hover:bg-gray-50"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => {
-                  deleteSitemap(sitemapToDelete);
-                  setSitemapToDelete(null);
-                }}
-                className="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700"
-              >
-                Delete
-              </button>
+        {/* Help Modal */}
+        {showHelp && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[999] p-4" onClick={() => setShowHelp(false)}>
+            <div className="bg-white rounded-lg shadow-lg w-1/3 max-w-2xl max-h-[85vh] overflow-visible flex flex-col" onClick={(e) => e.stopPropagation()}>
+              {/* Minimal Header */}
+              <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+                <h2 className="text-xl font-semibold">Keyboard Shortcuts</h2>
+                <button
+                  onClick={() => setShowHelp(false)}
+                  className="text-gray-400 hover:text-gray-900 transition-colors"
+                >
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                    <line x1="6" y1="6" x2="18" y2="18" />
+                  </svg>
+                </button>
+              </div>
+
+              {/* Single Column Layout */}
+              <div className="overflow-y-auto overflow-x-visible flex-1 p-6">
+                <div className="space-y-6">
+                  {/* Essential Shortcuts */}
+                  <div>
+                    <h3 className="text-sm font-medium text-gray-900 mb-3 uppercase tracking-wide">Essential</h3>
+                    <div className="space-y-2">
+                      <ShortcutItem keys="V" label="Select mode" />
+                      <ShortcutItem keys="A" label="Add child node" info="Requires a node to be selected first" />
+                      <ShortcutItem keys="C" label="Change color" info="Requires a node to be selected first" />
+                      <ShortcutItem keys="L" label="Connection line" info="Drag from node to node" />
+                    </div>
+                  </div>
+
+                  {/* Selection */}
+                  <div>
+                    <h3 className="text-sm font-medium text-gray-900 mb-3 uppercase tracking-wide">Selection</h3>
+                    <div className="space-y-2">
+                      <ShortcutItem
+                        keys="Shift + Drag"
+                        label="Multi-select"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Navigation */}
+                  <div>
+                    <h3 className="text-sm font-medium text-gray-900 mb-3 uppercase tracking-wide">Navigation</h3>
+                    <div className="space-y-2">
+                      <ShortcutItem keys="Ctrl/Cmd + Drag" label="Move nodes" info="Drag selected node with its parent and children" />
+                      <ShortcutItem keys="Ctrl/Cmd + Wheel" label="Zoom" />
+                      <ShortcutItem keys="Ctrl/Cmd + F" label="Search" />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Minimal Footer */}
+              <div className="px-6 py-3 border-t border-gray-200 flex justify-end">
+                <button
+                  onClick={() => setShowHelp(false)}
+                  className="px-4 py-2 bg-black text-white text-sm font-medium rounded-md hover:bg-gray-800 transition-colors"
+                >
+                  Close
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* Share Modal */}
-      {showShareModal && (
-        <div 
-          className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
-          onClick={() => {
-            setShowShareModal(false);
-            setInviteEmails([]);
-            setInviteEmailInput('');
-            setInviteEmailError('');
-            setInviteSuccessMessage('');
-            setShowCopySuccess(false);
-          }}
-        >
-          {activeSitemapId ? (
-            <div 
-              className="bg-white rounded-lg p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto"
+        {/* Right Panel for Node Editing */}
+
+        {showSettings && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div className="bg-white w-full max-w-lg border border-gray-300">
+              <div className="p-6 border-b border-gray-200 flex items-center justify-between">
+                <h2 className="text-lg font-semibold">Groups</h2>
+                <button
+                  onClick={() => setShowSettings(false)}
+                  className="text-gray-400 hover:text-gray-900"
+                >
+                  ✕
+                </button>
+              </div>
+              <div className="p-6">
+                <div className="space-y-6">
+                  <div>
+                    <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-900 mb-1">
+                      Groups
+                    </h3>
+                    <p className="text-xs text-gray-500 mb-3">Source: CSV "Group/Category" column. Otherwise inferred from URL path.</p>
+                    <div className="space-y-2">
+                      {Array.from(categoryGroups.entries()).map(([category, categoryNodes]) => (
+                        <div key={category} className="flex items-center justify-between text-sm">
+                          <div className="flex items-center gap-3">
+                            <div
+                              className="w-4 h-4 border border-gray-300"
+                              style={{
+                                background:
+                                  category === 'root'
+                                    ? '#000000'
+                                    : category === 'content'
+                                      ? '#1a1a1a'
+                                      : category === 'products'
+                                        ? '#333333'
+                                        : category === 'company'
+                                          ? '#4d4d4d'
+                                          : category === 'support'
+                                            ? '#666666'
+                                            : category === 'technical'
+                                              ? '#808080'
+                                              : category === 'users'
+                                                ? '#999999'
+                                                : '#b3b3b3',
+                              }}
+                            />
+                            <span className="capitalize">{category}</span>
+                          </div>
+                          <span className="text-gray-500">{categoryNodes.length} pages</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div className="p-6 border-t border-gray-200 flex justify-end">
+                <button
+                  onClick={() => setShowSettings(false)}
+                  className="px-6 py-2 bg-black text-white text-sm font-medium rounded-md hover:bg-gray-800 transition-colors"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Rename Sitemap Modal */}
+        {editingSitemapId && (
+          <div
+            className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+            onClick={() => {
+              setEditingSitemapId(null);
+              setEditingSitemapName('');
+            }}
+          >
+            <div
+              className="bg-white rounded-lg p-6 max-w-sm w-full"
               onClick={(e) => e.stopPropagation()}
             >
-              <div className="mb-6">
-                <h2 className="text-lg font-semibold text-gray-900 mb-1">Invite team members</h2>
-                <p className="text-gray-600 text-sm">Share a view-only link so others can explore the sitemap and leave comments.</p>
-      </div>
-
-              <div className="mb-4 rounded-lg border border-orange-100 bg-orange-50/70 p-3 text-sm text-[#B54407]">
-                Viewers can navigate the canvas and add comments. Editing tools remain disabled for shared links.
+              <h3 className="text-lg font-semibold mb-4">Rename Sitemap</h3>
+              <input
+                type="text"
+                value={editingSitemapName}
+                onChange={(e) => setEditingSitemapName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    if (editingSitemapName.trim()) {
+                      renameSitemap(editingSitemapId, editingSitemapName);
+                    }
+                    setEditingSitemapId(null);
+                    setEditingSitemapName('');
+                  } else if (e.key === 'Escape') {
+                    setEditingSitemapId(null);
+                    setEditingSitemapName('');
+                  }
+                }}
+                className="w-full px-3 py-2 border border-gray-300 rounded mb-4"
+                autoFocus
+              />
+              <div className="flex gap-2 justify-end">
+                <button
+                  onClick={() => {
+                    setEditingSitemapId(null);
+                    setEditingSitemapName('');
+                  }}
+                  className="px-4 py-2 border border-gray-300 rounded hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    if (editingSitemapName.trim()) {
+                      renameSitemap(editingSitemapId, editingSitemapName);
+                    }
+                    setEditingSitemapId(null);
+                    setEditingSitemapName('');
+                  }}
+                  className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+                >
+                  Save
+                </button>
               </div>
+            </div>
+          </div>
+        )}
 
-              <div className="mb-5">
-                <label className="block text-sm font-medium text-gray-700 mb-2">Share link</label>
-                <div className="flex items-center gap-2">
-                  <div className="flex-1 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-700 flex items-center gap-2">
-                    <input
-                      type="text"
-                      readOnly
-                      value={shareLink || (shareLinkError ? 'Unable to build share link' : 'Generating link...')}
-                      className="flex-1 bg-transparent border-none outline-none text-sm text-gray-700"
-                      onClick={(e) => e.currentTarget.select()}
-                    />
-                  </div>
-                  <button
-                    onClick={handleCopyShareLink}
-                    disabled={isBuildingShareLink || !shareLink}
-                    className="px-3 py-2 rounded-lg border-2 border-gray-100 text-sm flex items-center gap-2 text-gray-700 hover:text-gray-900 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                    title={shareLinkError || (!shareLink ? 'Building share link…' : 'Copy link')}
-                  >
-                    {isBuildingShareLink ? (
-                      <>
-                        <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                        </svg>
-                        <span>Preparing…</span>
-                      </>
-                    ) : (
-                      <>
-                        <Link className="w-4 h-4" strokeWidth={1.5} />
-                        <span>Copy link</span>
-                      </>
+        {/* Auth Modal */}
+        {isSupabaseConfigured() && (
+          <AuthModal
+            isOpen={showAuthModal}
+            onClose={() => setShowAuthModal(false)}
+            onSuccess={handleAuthSuccess}
+          />
+        )}
+
+        {/* Delete Confirmation Modal */}
+        {sitemapToDelete && (
+          <div
+            className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+            onClick={() => setSitemapToDelete(null)}
+          >
+            <div
+              className="bg-white rounded-lg p-6 max-w-sm w-full"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 className="text-lg font-semibold mb-4">Delete Sitemap</h3>
+              <p className="text-gray-600 mb-4">
+                Are you sure you want to delete "{sitemaps.find(s => s.id === sitemapToDelete)?.name}"? This action cannot be undone.
+              </p>
+              <div className="flex gap-2 justify-end">
+                <button
+                  onClick={() => setSitemapToDelete(null)}
+                  className="px-4 py-2 border border-gray-300 rounded hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    deleteSitemap(sitemapToDelete);
+                    setSitemapToDelete(null);
+                  }}
+                  className="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700"
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Share Modal */}
+        {showShareModal && (
+          <div
+            className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+            onClick={() => {
+              setShowShareModal(false);
+              setInviteEmails([]);
+              setInviteEmailInput('');
+              setInviteEmailError('');
+              setInviteSuccessMessage('');
+              setShowCopySuccess(false);
+            }}
+          >
+            {activeSitemapId ? (
+              <div
+                className="bg-white rounded-lg p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="mb-6">
+                  <h2 className="text-lg font-semibold text-gray-900 mb-1">Invite team members</h2>
+                  <p className="text-gray-600 text-sm">Share a view-only link so others can explore the sitemap and leave comments.</p>
+                </div>
+
+                <div className="mb-4 rounded-lg border border-orange-100 bg-orange-50/70 p-3 text-sm text-[#B54407]">
+                  Viewers can navigate the canvas and add comments. Editing tools remain disabled for shared links.
+                </div>
+
+                <div className="mb-5">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Share link</label>
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-700 flex items-center gap-2">
+                      <input
+                        type="text"
+                        readOnly
+                        value={shareLink || (shareLinkError ? 'Unable to build share link' : 'Generating link...')}
+                        className="flex-1 bg-transparent border-none outline-none text-sm text-gray-700"
+                        onClick={(e) => e.currentTarget.select()}
+                      />
+                    </div>
+                    <button
+                      onClick={handleCopyShareLink}
+                      disabled={isBuildingShareLink || !shareLink}
+                      className="px-3 py-2 rounded-lg border-2 border-gray-100 text-sm flex items-center gap-2 text-gray-700 hover:text-gray-900 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      title={shareLinkError || (!shareLink ? 'Building share link…' : 'Copy link')}
+                    >
+                      {isBuildingShareLink ? (
+                        <>
+                          <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                          </svg>
+                          <span>Preparing…</span>
+                        </>
+                      ) : (
+                        <>
+                          <Link className="w-4 h-4" strokeWidth={1.5} />
+                          <span>Copy link</span>
+                        </>
+                      )}
+                    </button>
+                    {showCopySuccess && (
+                      <span className="text-sm text-green-600">Copied!</span>
                     )}
-                  </button>
-                  {showCopySuccess && (
-                    <span className="text-sm text-green-600">Copied!</span>
+                  </div>
+                  {shareLinkError && (
+                    <p className="text-sm text-red-600 mt-1">{shareLinkError}</p>
                   )}
                 </div>
-                {shareLinkError && (
-                  <p className="text-sm text-red-600 mt-1">{shareLinkError}</p>
-                )}
+
+
+                <div className="flex justify-end">
+                  <button
+                    onClick={() => {
+                      setShowShareModal(false);
+                      setInviteEmails([]);
+                      setInviteEmailInput('');
+                      setInviteEmailError('');
+                      setInviteSuccessMessage('');
+                      setShowCopySuccess(false);
+                    }}
+                    className="px-6 py-2 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-800 transition-colors"
+                  >
+                    Close
+                  </button>
+                </div>
               </div>
-
-
-              <div className="flex justify-end">
+            ) : (
+              <div
+                className="bg-white rounded-lg p-6 max-w-md w-full"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <h2 className="text-lg font-semibold text-gray-900 mb-4">Error</h2>
+                <p className="text-red-600 mb-4">No sitemap selected. Please select a sitemap first.</p>
                 <button
                   onClick={() => {
                     setShowShareModal(false);
@@ -3846,136 +3870,114 @@ function App() {
                     setInviteSuccessMessage('');
                     setShowCopySuccess(false);
                   }}
+                  className="px-4 py-2 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-800 transition-colors"
+                >
+                  Close
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Comment Thread Modal removed - inline editing is now handled by CommentBubble component */}
+
+        {/* Copy Fallback Modal */}
+        {showCopyFallbackModal && (
+          <div
+            className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+            onClick={() => setShowCopyFallbackModal(false)}
+          >
+            <div
+              className="bg-white rounded-lg p-8 max-w-2xl w-full mx-4"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h2 className="text-lg font-semibold mb-2">Copy Share Link</h2>
+              <p className="text-sm text-gray-600 mb-4">
+                Viewers can explore the sitemap and leave comments. Editing remains disabled.
+              </p>
+
+              {/* URL field similar to share modal */}
+              <div className="mb-4">
+                <div className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-lg p-3">
+                  <input
+                    type="text"
+                    value={copyFallbackUrl}
+                    readOnly
+                    className="flex-1 bg-transparent border-none outline-none text-sm font-mono text-gray-700"
+                    onClick={(e) => e.currentTarget.select()}
+                  />
+                  <button
+                    onClick={handleCopyFromModal}
+                    className="p-2 hover:bg-gray-100 rounded transition-colors"
+                    title="Copy link"
+                  >
+                    <Copy className="w-4 h-4 text-gray-600" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Close button matching share modal style */}
+              <div className="flex justify-end">
+                <button
+                  onClick={() => setShowCopyFallbackModal(false)}
                   className="px-6 py-2 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-800 transition-colors"
                 >
                   Close
                 </button>
               </div>
             </div>
-          ) : (
-            <div 
-              className="bg-white rounded-lg p-6 max-w-md w-full"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <h2 className="text-lg font-semibold text-gray-900 mb-4">Error</h2>
-              <p className="text-red-600 mb-4">No sitemap selected. Please select a sitemap first.</p>
-              <button
-                onClick={() => {
-                  setShowShareModal(false);
-                  setInviteEmails([]);
-                  setInviteEmailInput('');
-                  setInviteEmailError('');
-                  setInviteSuccessMessage('');
-                  setShowCopySuccess(false);
-                }}
-                className="px-4 py-2 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-800 transition-colors"
-              >
-                Close
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Comment Thread Modal removed - inline editing is now handled by CommentBubble component */}
-
-      {/* Copy Fallback Modal */}
-      {showCopyFallbackModal && (
-        <div 
-          className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
-          onClick={() => setShowCopyFallbackModal(false)}
-        >
-          <div 
-            className="bg-white rounded-lg p-8 max-w-2xl w-full mx-4"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2 className="text-lg font-semibold mb-2">Copy Share Link</h2>
-            <p className="text-sm text-gray-600 mb-4">
-              Viewers can explore the sitemap and leave comments. Editing remains disabled.
-            </p>
-            
-            {/* URL field similar to share modal */}
-            <div className="mb-4">
-              <div className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-lg p-3">
-                <input
-                  type="text"
-                  value={copyFallbackUrl}
-                  readOnly
-                  className="flex-1 bg-transparent border-none outline-none text-sm font-mono text-gray-700"
-                  onClick={(e) => e.currentTarget.select()}
-                />
-                <button
-                  onClick={handleCopyFromModal}
-                  className="p-2 hover:bg-gray-100 rounded transition-colors"
-                  title="Copy link"
-                >
-                  <Copy className="w-4 h-4 text-gray-600" />
-                </button>
-              </div>
-            </div>
-            
-            {/* Close button matching share modal style */}
-            <div className="flex justify-end">
-              <button
-                onClick={() => setShowCopyFallbackModal(false)}
-                className="px-6 py-2 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-800 transition-colors"
-              >
-                Close
-              </button>
-            </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* XML Export Warning Modal */}
-      {showXmlExportWarning && (() => {
-        const nodesWithoutUrls = nodes.filter(n => !n.url || !n.url.trim());
-        const count = nodesWithoutUrls.length;
-        return (
-          <div 
-            className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
-            onClick={() => setShowXmlExportWarning(false)}
-          >
-            <div 
-              className="bg-white rounded-lg p-6 max-w-md w-full"
-              onClick={(e) => e.stopPropagation()}
+        {/* XML Export Warning Modal */}
+        {showXmlExportWarning && (() => {
+          const nodesWithoutUrls = nodes.filter(n => !n.url || !n.url.trim());
+          const count = nodesWithoutUrls.length;
+          return (
+            <div
+              className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+              onClick={() => setShowXmlExportWarning(false)}
             >
-              <h3 className="text-lg font-semibold mb-4">Missing URLs Detected</h3>
-              {nodesWithoutUrls.length > 0 && (
-                <div className="mb-4 max-h-48 overflow-y-auto border border-gray-200 rounded p-3 bg-gray-50">
-                  <p className="text-sm font-medium text-gray-700 mb-2">
-                    {count === 1 ? '1 node is missing URL' : `${count} nodes are missing URLs`}:
-                  </p>
-                  <ul className="space-y-1">
-                    {nodesWithoutUrls.map(node => (
-                      <li key={node.id} className="text-sm text-gray-600">
-                        • {node.title || 'Untitled Node'}
-                      </li>
-                    ))}
-                  </ul>
+              <div
+                className="bg-white rounded-lg p-6 max-w-md w-full"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <h3 className="text-lg font-semibold mb-4">Missing URLs Detected</h3>
+                {nodesWithoutUrls.length > 0 && (
+                  <div className="mb-4 max-h-48 overflow-y-auto border border-gray-200 rounded p-3 bg-gray-50">
+                    <p className="text-sm font-medium text-gray-700 mb-2">
+                      {count === 1 ? '1 node is missing URL' : `${count} nodes are missing URLs`}:
+                    </p>
+                    <ul className="space-y-1">
+                      {nodesWithoutUrls.map(node => (
+                        <li key={node.id} className="text-sm text-gray-600">
+                          • {node.title || 'Untitled Node'}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                <p className="text-xs text-gray-500 mb-4">
+                  Only nodes with valid URLs will be included in the exported sitemap.
+                </p>
+                <div className="flex gap-2 justify-end">
+                  <button
+                    onClick={() => setShowXmlExportWarning(false)}
+                    className="px-4 py-2 border border-gray-800 shadow-sm rounded-lg hover:bg-gray-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleConfirmXmlExport}
+                    className="px-4 py-2 bg-black text-white text-sm font-medium rounded-lg hover:bg-gray-800 transition-colors"
+                  >
+                    Confirm Export
+                  </button>
                 </div>
-              )}
-              <p className="text-xs text-gray-500 mb-4">
-                Only nodes with valid URLs will be included in the exported sitemap.
-              </p>
-              <div className="flex gap-2 justify-end">
-                <button
-                  onClick={() => setShowXmlExportWarning(false)}
-                  className="px-4 py-2 border border-gray-800 shadow-sm rounded-lg hover:bg-gray-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleConfirmXmlExport}
-                  className="px-4 py-2 bg-black text-white text-sm font-medium rounded-lg hover:bg-gray-800 transition-colors"
-                >
-                  Confirm Export
-                </button>
               </div>
             </div>
-          </div>
-        );
-      })()}
+          );
+        })()}
       </div>
     </>
   );

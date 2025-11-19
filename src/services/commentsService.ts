@@ -43,7 +43,7 @@ export async function createComment(sitemapId: string, x: number, y: number, tex
   let userId = 'anonymous';
   let userEmail = '';
   let userName = 'Anonymous User';
-  
+
   if (supabase) {
     try {
       const { data: { user } } = await supabase.auth.getUser();
@@ -101,7 +101,7 @@ export async function createComment(sitemapId: string, x: number, y: number, tex
 
   const commentId = crypto.randomUUID();
   const now = new Date().toISOString();
-  
+
   const newComment: Comment = {
     id: commentId,
     sitemapId,
@@ -119,7 +119,13 @@ export async function createComment(sitemapId: string, x: number, y: number, tex
   // Try Supabase first if available
   if (supabase) {
     try {
-      const { data, error } = await supabase
+      // Add timeout to prevent hanging
+      const supabaseTimeout = 5000; // 5 seconds
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Supabase operation timeout')), supabaseTimeout)
+      );
+
+      const insertPromise = supabase
         .from('comments')
         .insert({
           id: commentId,
@@ -135,10 +141,12 @@ export async function createComment(sitemapId: string, x: number, y: number, tex
         .select()
         .single();
 
+      const { data, error } = await Promise.race([insertPromise, timeoutPromise]) as any;
+
       if (!error && data) {
         return rowToComment(data);
       }
-      
+
       // If error (e.g., table doesn't exist), fall through to localStorage
       console.warn('Failed to create comment in Supabase, using localStorage:', error?.message);
     } catch (err) {
@@ -157,7 +165,7 @@ export async function createComment(sitemapId: string, x: number, y: number, tex
     // The comment will exist in memory and can be saved later
     console.warn('Failed to persist comment to localStorage, comment exists in memory only:', err);
   }
-  
+
   // Always return the comment, even if persistence failed
   return newComment;
 }
@@ -167,16 +175,24 @@ export async function getComments(sitemapId: string): Promise<Comment[]> {
   // Try Supabase FIRST (for shared sitemaps, this is the source of truth)
   if (supabase) {
     try {
-      const { data, error } = await supabase
+      // Add timeout to prevent hanging
+      const supabaseTimeout = 5000; // 5 seconds
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Supabase operation timeout')), supabaseTimeout)
+      );
+
+      const selectPromise = supabase
         .from('comments')
         .select('*')
         .eq('sitemap_id', sitemapId)
         .order('created_at', { ascending: false });
 
+      const { data, error } = await Promise.race([selectPromise, timeoutPromise]) as any;
+
       if (!error && data) {
         // Success - convert and return, also sync to localStorage
         const comments = (data || []).map(rowToComment);
-        
+
         // Sync to localStorage for offline access
         try {
           const storageKey = `comments_${sitemapId}`;
@@ -184,17 +200,17 @@ export async function getComments(sitemapId: string): Promise<Comment[]> {
         } catch (err) {
           // Ignore localStorage sync errors
         }
-        
+
         return comments;
       }
-      
+
       // If error, log but continue to localStorage fallback
       console.warn('Error loading comments from Supabase:', error?.message);
     } catch (err) {
       console.warn('Failed to load comments from Supabase:', err);
     }
   }
-  
+
   // Fallback to localStorage (only if Supabase fails or not available)
   try {
     const storageKey = `comments_${sitemapId}`;
@@ -205,7 +221,7 @@ export async function getComments(sitemapId: string): Promise<Comment[]> {
   } catch (err) {
     // Ignore localStorage errors
   }
-  
+
   return [];
 }
 
@@ -214,7 +230,13 @@ export async function updateComment(commentId: string, text: string, sitemapId?:
   // Try Supabase first if available
   if (supabase) {
     try {
-      const { data, error } = await supabase
+      // Add timeout to prevent hanging
+      const supabaseTimeout = 5000; // 5 seconds
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Supabase operation timeout')), supabaseTimeout)
+      );
+
+      const updatePromise = supabase
         .from('comments')
         .update({
           text: text.trim(),
@@ -224,10 +246,12 @@ export async function updateComment(commentId: string, text: string, sitemapId?:
         .select()
         .single();
 
+      const { data, error } = await Promise.race([updatePromise, timeoutPromise]) as any;
+
       if (!error && data) {
         return rowToComment(data);
       }
-      
+
       // If error (e.g., table doesn't exist), fall through to localStorage
       console.warn('Failed to update comment in Supabase, using localStorage:', error?.message);
     } catch (err) {
@@ -247,7 +271,7 @@ export async function updateComment(commentId: string, text: string, sitemapId?:
     if (!comment) {
       throw new Error('Comment not found');
     }
-    
+
     comment.text = text.trim();
     comment.updatedAt = new Date().toISOString();
     localStorage.setItem(storageKey, JSON.stringify(comments));
@@ -263,7 +287,13 @@ export async function updateCommentPosition(commentId: string, x: number, y: num
   // Try Supabase first if available
   if (supabase) {
     try {
-      const { data, error } = await supabase
+      // Add timeout to prevent hanging
+      const supabaseTimeout = 5000; // 5 seconds
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Supabase operation timeout')), supabaseTimeout)
+      );
+
+      const updatePromise = supabase
         .from('comments')
         .update({
           x,
@@ -274,10 +304,12 @@ export async function updateCommentPosition(commentId: string, x: number, y: num
         .select()
         .single();
 
+      const { data, error } = await Promise.race([updatePromise, timeoutPromise]) as any;
+
       if (!error && data) {
         return rowToComment(data);
       }
-      
+
       // If error (e.g., table doesn't exist), fall through to localStorage
       console.warn('Failed to update comment position in Supabase, using localStorage:', error?.message);
     } catch (err) {
@@ -297,7 +329,7 @@ export async function updateCommentPosition(commentId: string, x: number, y: num
     if (!comment) {
       throw new Error('Comment not found');
     }
-    
+
     comment.x = x;
     comment.y = y;
     comment.updatedAt = new Date().toISOString();
@@ -314,7 +346,13 @@ export async function resolveComment(commentId: string, resolved: boolean, sitem
   // Try Supabase first if available
   if (supabase) {
     try {
-      const { data, error } = await supabase
+      // Add timeout to prevent hanging
+      const supabaseTimeout = 5000; // 5 seconds
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Supabase operation timeout')), supabaseTimeout)
+      );
+
+      const updatePromise = supabase
         .from('comments')
         .update({
           resolved,
@@ -324,10 +362,12 @@ export async function resolveComment(commentId: string, resolved: boolean, sitem
         .select()
         .single();
 
+      const { data, error } = await Promise.race([updatePromise, timeoutPromise]) as any;
+
       if (!error && data) {
         return rowToComment(data);
       }
-      
+
       // If error (e.g., table doesn't exist), fall through to localStorage
       console.warn('Failed to resolve comment in Supabase, using localStorage:', error?.message);
     } catch (err) {
@@ -347,7 +387,7 @@ export async function resolveComment(commentId: string, resolved: boolean, sitem
     if (!comment) {
       throw new Error('Comment not found');
     }
-    
+
     comment.resolved = resolved;
     comment.updatedAt = new Date().toISOString();
     localStorage.setItem(storageKey, JSON.stringify(comments));
@@ -361,17 +401,29 @@ export async function resolveComment(commentId: string, resolved: boolean, sitem
 // Delete a comment
 export async function deleteComment(commentId: string, sitemapId?: string): Promise<void> {
   if (supabase) {
-    const { error } = await supabase
-      .from('comments')
-      .delete()
-      .eq('id', commentId);
+    try {
+      // Add timeout to prevent hanging
+      const supabaseTimeout = 5000; // 5 seconds
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Supabase operation timeout')), supabaseTimeout)
+      );
 
-    if (error) {
-      console.error('Error deleting comment:', error);
-      throw new Error(`Failed to delete comment: ${error.message}`);
+      const deletePromise = supabase
+        .from('comments')
+        .delete()
+        .eq('id', commentId);
+
+      const { error } = await Promise.race([deletePromise, timeoutPromise]) as any;
+
+      if (error) {
+        console.error('Error deleting comment:', error);
+        // Don't throw, let it fall through to localStorage so UI updates
+      } else {
+        return; // Success - exit early
+      }
+    } catch (err) {
+      console.warn('Error deleting comment in Supabase, using localStorage:', err);
     }
-    
-    return; // Success - exit early
   }
 
   // Fallback to localStorage if Supabase is not available
@@ -383,7 +435,7 @@ export async function deleteComment(commentId: string, sitemapId?: string): Prom
   const comments = JSON.parse(localStorage.getItem(storageKey) || '[]');
   const filtered = comments.filter((c: Comment) => c.id !== commentId);
   localStorage.setItem(storageKey, JSON.stringify(filtered));
-  
+
   // Note: State update is handled by App.tsx
 }
 

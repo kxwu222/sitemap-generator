@@ -59,6 +59,8 @@ interface SitemapCanvasProps {
   isViewerMode?: boolean;
   currentUserId?: string;
   isOwner?: boolean;
+  activeTool: 'select' | 'text' | 'draw' | 'comment';
+  onActiveToolChange: (tool: 'select' | 'text' | 'draw' | 'comment') => void;
 }
 
 
@@ -74,10 +76,10 @@ const CATEGORY_COLORS: Record<string, string> = {
 };
 
 export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
-  
+
   // Helper function to create link key
   const linkKey = (sourceId: string, targetId: string) => `${sourceId}-${targetId}`;
-  
+
   // Helper function to calculate optimal elbow corner based on relative node positions
   const calculateElbowCorner = (source: PageNode, target: PageNode): { elbowX: number; elbowY: number } => {
     if (source.x === undefined || source.y === undefined || target.x === undefined || target.y === undefined) {
@@ -145,9 +147,11 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
     isViewerMode = false,
     currentUserId,
     isOwner = false,
+    activeTool,
+    onActiveToolChange,
   } = props;
 
-  
+
   // Small SVG preview for a link style option
   const MiniLinkIcon = ({
     dash = 'solid' as LineDash,
@@ -281,7 +285,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
   useImperativeHandle(ref, () => ({
     getSelectedNodeIds: () => Array.from(selectedIds),
   }), [selectedIds]);
-  
+
   // New toolbar states
   const [hoverToolbarNode, setHoverToolbarNode] = useState<PageNode | null>(null);
   const [hoverToolbarPosition, setHoverToolbarPosition] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -329,28 +333,28 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
   const [didLiveFigureDrag, setDidLiveFigureDrag] = useState(false);
   const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
   const previousCommentsRef = useRef<Comment[]>([]);
-  
+
   // Auto-enter edit mode for newly created comments (empty text)
   useEffect(() => {
     if (!comments || comments.length === 0) {
       previousCommentsRef.current = [];
       return;
     }
-    
+
     // Find newly created comments (empty text that weren't in previous comments)
     const previousCommentIds = new Set(previousCommentsRef.current.map(c => c.id));
     const newEmptyComments = comments.filter(
       c => !c.text?.trim() && !previousCommentIds.has(c.id)
     );
-    
+
     // If there's a new empty comment and no comment is currently being edited, enter edit mode
     if (newEmptyComments.length > 0 && !editingCommentId) {
       setEditingCommentId(newEmptyComments[0].id);
     }
-    
+
     previousCommentsRef.current = comments;
   }, [comments, editingCommentId]);
-  
+
   // Helper function to get connection anchor position (needs props and state, so defined after destructuring and state)
   const getConnectionAnchor = (sourceId: string, targetId: string) => {
     const s = nodes.find(n => n.id === sourceId);
@@ -372,9 +376,9 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
     const sy = rect.top + (ay * transform.scale) + transform.y - 8;
     return { x: sx, y: sy };
   };
-  
+
   // Unified draw tool state
-  const [activeTool, setActiveTool] = useState<'select' | 'text' | 'draw' | 'comment'>('select');
+  // activeTool is now controlled by parent
   const [drawKind, setDrawKind] = useState<'rect' | 'square' | 'ellipse' | 'circle' | 'line' | null>(null);
   const [newLinePath, setNewLinePath] = useState<'straight' | 'elbow'>('straight');
   const [isDrafting, setIsDrafting] = useState(false);
@@ -423,7 +427,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
     if (hoverGraceTimeoutRef.current) {
       clearTimeout(hoverGraceTimeoutRef.current);
     }
-    
+
     hoverGraceTimeoutRef.current = setTimeout(() => {
       setHoverToolbarNode(null);
     }, 300); // 300ms grace period
@@ -497,25 +501,25 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
         activeElement.tagName === 'TEXTAREA' ||
         activeElement.hasAttribute('contenteditable')
       );
-      
+
       if (e.code === 'Space' && !isSpacePressed && !isTyping) {
         e.preventDefault();
         setIsSpacePressed(true);
       }
       // V key for select mode (but not when typing in input fields)
       if ((e.key === 'v' || e.key === 'V') && !isTyping) {
-        setActiveTool('select');
+        onActiveToolChange('select');
         setDrawKind(null);
       }
       // T key for text mode
       if ((e.key === 't' || e.key === 'T') && !isTyping) {
-        setActiveTool('text');
+        onActiveToolChange('text');
         setDrawKind(null);
         setIsSpacePressed(false);
       }
       // L key for line mode
       if ((e.key === 'l' || e.key === 'L') && !isTyping) {
-        setActiveTool('draw');
+        onActiveToolChange('draw');
         setDrawKind('line');
         setIsSpacePressed(false);
       }
@@ -563,7 +567,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
             linkStyles: styles,
             figures: selectedText.map(f => ({ x: f.x, y: f.y, text: f.text, textColor: f.textColor, fontSize: f.fontSize, fontWeight: f.fontWeight }))
           };
-          (async () => { try { await navigator.clipboard.writeText(JSON.stringify(payload)); } catch {} })();
+          (async () => { try { await navigator.clipboard.writeText(JSON.stringify(payload)); } catch { } })();
           pasteBumpRef.current = 0;
           return;
         }
@@ -598,7 +602,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
             if (linkStyles[key]) styles[key] = linkStyles[key];
           });
           const payload = { type: 'sitemap-nodes', nodes: copiedNodes, extraLinks: copiedExtraLinks, linkStyles: styles };
-          (async () => { try { await navigator.clipboard.writeText(JSON.stringify(payload)); } catch {} })();
+          (async () => { try { await navigator.clipboard.writeText(JSON.stringify(payload)); } catch { } })();
           pasteBumpRef.current = 0;
           return;
         }
@@ -629,7 +633,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
             const bump = 160 + 32 * (pasteBumpRef.current++);
             const idMap = new Map<string, string>();
             const time = Date.now();
-            parsed.nodes.forEach((n: any, idx: number) => idMap.set(n.id, `node-${time}-${idx}-${Math.random().toString(36).slice(2,6)}`));
+            parsed.nodes.forEach((n: any, idx: number) => idMap.set(n.id, `node-${time}-${idx}-${Math.random().toString(36).slice(2, 6)}`));
             const newNodes = parsed.nodes.map((n: any) => {
               const id = idMap.get(n.id)!;
               const parent = n.parent && idMap.has(n.parent) ? idMap.get(n.parent)! : null;
@@ -682,7 +686,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
             const bump = 160 + 32 * (pasteBumpRef.current++);
             const idMap = new Map<string, string>();
             const time = Date.now();
-            parsed.nodes.forEach((n: any, idx: number) => idMap.set(n.id, `node-${time}-${idx}-${Math.random().toString(36).slice(2,6)}`));
+            parsed.nodes.forEach((n: any, idx: number) => idMap.set(n.id, `node-${time}-${idx}-${Math.random().toString(36).slice(2, 6)}`));
             const newNodes = parsed.nodes.map((n: any) => {
               const id = idMap.get(n.id)!;
               const parent = n.parent && idMap.has(n.parent) ? idMap.get(n.parent)! : null;
@@ -729,7 +733,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
           const bump = 160 + 32 * (pasteBumpRef.current++);
           const idMap = new Map<string, string>();
           const time = Date.now();
-          parsed.nodes.forEach((n: any, idx: number) => idMap.set(n.id, `node-${time}-${idx}-${Math.random().toString(36).slice(2,6)}`));
+          parsed.nodes.forEach((n: any, idx: number) => idMap.set(n.id, `node-${time}-${idx}-${Math.random().toString(36).slice(2, 6)}`));
           const newNodes = parsed.nodes.map((n: any) => {
             const id = idMap.get(n.id)!;
             const parent = n.parent && idMap.has(n.parent) ? idMap.get(n.parent)! : null;
@@ -784,7 +788,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
           const bump = 160 + 32 * (pasteBumpRef.current++);
           const idMap = new Map<string, string>();
           const time = Date.now();
-          parsed.nodes.forEach((n: any, idx: number) => idMap.set(n.id, `node-${time}-${idx}-${Math.random().toString(36).slice(2,6)}`));
+          parsed.nodes.forEach((n: any, idx: number) => idMap.set(n.id, `node-${time}-${idx}-${Math.random().toString(36).slice(2, 6)}`));
           const newNodes = parsed.nodes.map((n: any) => {
             const id = idMap.get(n.id)!;
             const parent = n.parent && idMap.has(n.parent) ? idMap.get(n.parent)! : null;
@@ -822,7 +826,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
         activeElement.tagName === 'TEXTAREA' ||
         activeElement.hasAttribute('contenteditable')
       );
-      
+
       if (e.code === 'Space' && !isTyping) {
         e.preventDefault();
         setIsSpacePressed(false);
@@ -837,7 +841,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
       window.removeEventListener('paste', onPasteEvent);
       window.removeEventListener('keyup', onKeyUp);
     };
-  }, [isSpacePressed, selectedIds, nodes, onAddChild, editingTextFigureId, figures, onCreateFigure, onNodesUpdate]);
+  }, [isSpacePressed, selectedIds, nodes, onAddChild, editingTextFigureId, figures, onCreateFigure, onNodesUpdate, onActiveToolChange]);
 
   // Clear pan/drag state when entering draw/text tool so cursor reflects tool use
   useEffect(() => {
@@ -875,15 +879,15 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
     // Set canvas size to match container with proper scaling for crisp text
     const rect = container.getBoundingClientRect();
     const devicePixelRatio = window.devicePixelRatio || 1;
-    
+
     canvas.width = rect.width * devicePixelRatio;
     canvas.height = rect.height * devicePixelRatio;
     canvas.style.width = rect.width + 'px';
     canvas.style.height = rect.height + 'px';
-    
+
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    
+
     ctx.scale(devicePixelRatio, devicePixelRatio);
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -895,13 +899,13 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
     // Use effective node positions during drag for real-time link movement
     const effectiveNodes: PageNode[] = (draggedNode && dragDelta && dragSelectionIds)
       ? nodes.map(n => {
-          if (!dragSelectionIds.includes(n.id)) return n;
-          const start = dragStartPositions[n.id];
-          if (!start) return n;
-          const nx = start.x + dragDelta.dx;
-          const ny = start.y + dragDelta.dy;
-          return { ...n, x: nx, y: ny };
-        })
+        if (!dragSelectionIds.includes(n.id)) return n;
+        const start = dragStartPositions[n.id];
+        if (!start) return n;
+        const nx = start.x + dragDelta.dx;
+        const ny = start.y + dragDelta.dy;
+        return { ...n, x: nx, y: ny };
+      })
       : nodes;
 
     drawLinks(ctx, effectiveNodes);
@@ -1042,7 +1046,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
 
       const rect = container.getBoundingClientRect();
       const devicePixelRatio = window.devicePixelRatio || 1;
-      
+
       canvas.width = rect.width * devicePixelRatio;
       canvas.height = rect.height * devicePixelRatio;
       canvas.style.width = rect.width + 'px';
@@ -1057,11 +1061,11 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
   const drawArrowhead = (ctx: CanvasRenderingContext2D, x: number, y: number, angle: number, style: LinkStyle) => {
     const size = style.arrowSize || 10;
     const type = style.arrowType || 'triangle';
-    
+
     ctx.save();
     ctx.translate(x, y);
     ctx.rotate(angle);
-    
+
     if (type === 'triangle') {
       ctx.beginPath();
       ctx.moveTo(0, 0);
@@ -1080,7 +1084,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
       ctx.lineTo(-size, -size * 0.6);
       ctx.stroke();
     }
-    
+
     ctx.restore();
   };
 
@@ -1128,26 +1132,26 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
 
       const path = style.path || 'elbow';
       const { elbowX, elbowY } = path === 'elbow' ? calculateElbowCorner(parent, node) : { elbowX: parent.x, elbowY: node.y };
-      
+
       ctx.beginPath();
-      
+
       if (path === 'straight') {
         ctx.moveTo(parent.x, parent.y);
         ctx.lineTo(node.x, node.y);
       } else if (path === 'elbow') {
-      ctx.moveTo(parent.x, parent.y);
-      ctx.lineTo(elbowX, elbowY);
-      ctx.lineTo(node.x, node.y);
+        ctx.moveTo(parent.x, parent.y);
+        ctx.lineTo(elbowX, elbowY);
+        ctx.lineTo(node.x, node.y);
       } else if (path === 'curved') {
         const cx = (parent.x + node.x) / 2;
         const cy = Math.min(parent.y, node.y) - 50;
         ctx.moveTo(parent.x, parent.y);
         ctx.quadraticCurveTo(cx, cy, node.x, node.y);
       }
-      
+
       ctx.stroke();
       ctx.setLineDash([]); // Reset dash
-      
+
       // Draw arrowheads
       if (style.arrowStart) {
         const startAngle = endAngleForPath(path, node.x, node.y, parent.x, parent.y, elbowX, elbowY) + Math.PI;
@@ -1163,32 +1167,32 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
     extraLinks.forEach(link => {
       const s = nodeMap.get(link.sourceId), t = nodeMap.get(link.targetId);
       if (!s || !t || s.x === undefined || s.y === undefined || t.x === undefined || t.y === undefined) return;
-      
+
       const isHighlighted = highlightedLink && highlightedLink.sourceId === link.sourceId && highlightedLink.targetId === link.targetId;
       const key = linkKey(link.sourceId, link.targetId);
       const style = linkStyles[key] || {};
-      
+
       // Apply styling (consistent defaults with new connections)
       ctx.strokeStyle = isHighlighted ? '#172038' : (style.color ?? '#111827');
       ctx.lineWidth = isHighlighted ? 3 : (style.width ?? 2);
-      
+
       // Apply dash pattern (default solid)
       const dash = style.dash ?? 'solid';
       if (dash === 'dashed') {
-      ctx.setLineDash(isHighlighted ? [] : [6, 4]);
+        ctx.setLineDash(isHighlighted ? [] : [6, 4]);
       } else if (dash === 'dotted') {
         ctx.setLineDash([2, 3]);
       } else {
         ctx.setLineDash([]);
       }
-      
+
       const path = style.path || 'straight';
       const { elbowX, elbowY } = path === 'elbow' ? calculateElbowCorner(s, t) : { elbowX: s.x, elbowY: t.y };
-      
+
       ctx.beginPath();
       if (path === 'straight') {
-      ctx.moveTo(s.x, s.y);
-      ctx.lineTo(t.x, t.y);
+        ctx.moveTo(s.x, s.y);
+        ctx.lineTo(t.x, t.y);
       } else if (path === 'elbow') {
         ctx.moveTo(s.x, s.y);
         ctx.lineTo(elbowX, elbowY);
@@ -1199,10 +1203,10 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
         ctx.moveTo(s.x, s.y);
         ctx.quadraticCurveTo(cx, cy, t.x, t.y);
       }
-      
+
       ctx.stroke();
       ctx.setLineDash([]); // Reset dash
-      
+
       // Draw arrowheads
       if (style.arrowStart) {
         const startAngle = endAngleForPath(path, t.x, t.y, s.x, s.y, elbowX, elbowY) + Math.PI;
@@ -1222,11 +1226,11 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
       const isHovered = node.id === hoveredId;
       const isSearchResult = searchResults.some(result => result.id === node.id);
       const isSelected = selectedIds.has(node.id);
-      
+
       // Don't highlight endpoint nodes when a link is highlighted
-      const isLinkEndpoint = highlightedLink && 
+      const isLinkEndpoint = highlightedLink &&
         (node.id === highlightedLink.sourceId || node.id === highlightedLink.targetId);
-      
+
       const dimensions = calculateNodeDimensions(node, ctx);
 
       // Draw shadow for hovered nodes
@@ -1249,16 +1253,16 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
         const pulseValue = Math.sin((animationTime / pulseSpeed) * Math.PI * 2) * 0.2 + 0.8;
         const glowIntensity = pulseValue;
         const fadeIntensity = Math.abs(Math.sin((animationTime / pulseSpeed) * Math.PI)); // Fade from 0 to 1
-        
+
         // Save context before drawing focus outline
         ctx.save();
-        
+
         // Draw outer shadow with less dramatic glow effect
         ctx.shadowColor = `rgba(255, 20, 147, ${0.3 * fadeIntensity})`; // Reduced shadow opacity from 0.8 to 0.3
         ctx.shadowBlur = 4 + glowIntensity * 4; // Reduced blur: pulsing between 4-8 (was 8-16)
         ctx.shadowOffsetX = 0;
         ctx.shadowOffsetY = 0;
-        
+
         // Draw a slightly larger rectangle for the glow
         drawRoundedRect(
           ctx,
@@ -1268,11 +1272,11 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
           dimensions.height + 8,
           20
         );
-        
+
         // Animated border with less dramatic pulse - from 'Search' function
         ctx.strokeStyle = '#8BD3E6'; // Light blue color
         ctx.lineWidth = 3 + glowIntensity * 1; // Pulsing line width between 3-4px
-        
+
         ctx.stroke();
         ctx.restore();
       }
@@ -1281,7 +1285,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
       const override = colorOverrides[node.id] || {};
       const nodeColor = override.customColor || node.customColor || CATEGORY_COLORS[node.category] || CATEGORY_COLORS.general;
       ctx.fillStyle = nodeColor;
-      
+
       // Apply border styling (but not for focused nodes, they get special treatment above)
       if (isFocused && !isLinkEndpoint) {
         // Skip normal border for focused nodes (already drawn with glow above)
@@ -1318,7 +1322,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
 
       // Calculate consistent width for title and URL containers
       const textContainerWidth = dimensions.width - 32;
-      
+
       // Draw content type (if exists) at the top
       if (node.contentType) {
         const contentTypeColor = (override.textColor || node.textColor)
@@ -1328,7 +1332,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
         ctx.font = '10px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        
+
         const contentTypeY = node.y - 30; // Top position
         const contentTypeText = truncateText(ctx, node.contentType, textContainerWidth);
         ctx.fillText(contentTypeText, node.x, contentTypeY);
@@ -1361,7 +1365,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
 
   const calculateNodeDimensions = (node: PageNode, ctx: CanvasRenderingContext2D): { width: number; height: number } => {
     const padding = 24;
-    const minWidth = 200; 
+    const minWidth = 200;
     const maxWidth = 380; // Maximum width to prevent nodes from becoming too wide
     const minHeight = 100;
 
@@ -1464,7 +1468,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
         }
         return;
       }
-      
+
       // For shapes, draw background
       const w = fig.width ?? 160;
       const h = fig.height ?? 80;
@@ -1481,7 +1485,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
         ctx.ellipse(fig.x, fig.y, halfW, halfH, 0, 0, 2 * Math.PI);
         ctx.fill();
       }
-      
+
       // Draw border
       if (fig.stroke) {
         ctx.strokeStyle = fig.stroke;
@@ -1494,7 +1498,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
           ctx.stroke();
         }
       }
-      
+
       // Show resize handles on hover/select (only for shapes, not text)
       const isActive = hoveredFigureId === fig.id || selectedFigureId === fig.id;
       if (isActive) {
@@ -1512,7 +1516,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
           ctx.fill();
         });
       }
-      
+
       // Draw text inside shape if present
       if (fig.text && fig.text.trim()) {
         ctx.fillStyle = fig.textColor || '#000000';
@@ -1747,22 +1751,22 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
     window.removeEventListener('mouseup', endTextEditorDrag as any);
   };
 
-  const distPointToSegment = (px:number, py:number, x1:number, y1:number, x2:number, y2:number) => {
+  const distPointToSegment = (px: number, py: number, x1: number, y1: number, x2: number, y2: number) => {
     const A = px - x1, B = py - y1, C = x2 - x1, D = y2 - y1;
-    const dot = A*C + B*D, lenSq = C*C + D*D;
+    const dot = A * C + B * D, lenSq = C * C + D * D;
     let t = lenSq ? dot / lenSq : 0;
     t = Math.max(0, Math.min(1, t));
     const x = x1 + t * C, y = y1 + t * D;
     const dx = px - x, dy = py - y;
-    return Math.sqrt(dx*dx + dy*dy);
+    return Math.sqrt(dx * dx + dy * dy);
   };
 
   // Find the closest point on a segment to a given point (in canvas coords)
-  const closestPointOnSegment = (px:number, py:number, x1:number, y1:number, x2:number, y2:number) => {
+  const closestPointOnSegment = (px: number, py: number, x1: number, y1: number, x2: number, y2: number) => {
     const vx = x2 - x1, vy = y2 - y1;
     const wx = px - x1, wy = py - y1;
-    const lenSq = vx*vx + vy*vy;
-    const t = lenSq ? Math.max(0, Math.min(1, (wx*vx + wy*vy) / lenSq)) : 0;
+    const lenSq = vx * vx + vy * vy;
+    const t = lenSq ? Math.max(0, Math.min(1, (wx * vx + wy * vy) / lenSq)) : 0;
     return { x: x1 + t * vx, y: y1 + t * vy, t };
   };
 
@@ -1772,29 +1776,29 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
   // Compute connection point on node boundary toward a given target (canvas coords)
   type NodePort = 'top' | 'right' | 'bottom' | 'left';
   function getConnectionPoint(
-    node: { x:number; y:number; width?:number; height?:number },
+    node: { x: number; y: number; width?: number; height?: number },
     towardX: number, towardY: number
   ) {
     const w = node.width ?? 150;
     const h = node.height ?? 60;
-    const left = node.x - w/2, top = node.y - h/2, right = node.x + w/2, bottom = node.y + h/2;
+    const left = node.x - w / 2, top = node.y - h / 2, right = node.x + w / 2, bottom = node.y + h / 2;
 
     const dx = towardX - node.x, dy = towardY - node.y;
     if (Math.abs(dx) > Math.abs(dy)) {
       const x = dx > 0 ? right : left;
-      const y = node.y + (h/2) * (dy / Math.max(1, Math.abs(dx)));
+      const y = node.y + (h / 2) * (dy / Math.max(1, Math.abs(dx)));
       return { x, y, port: (dx > 0 ? 'right' : 'left') as NodePort };
     } else {
       const y = dy > 0 ? bottom : top;
-      const x = node.x + (w/2) * (dx / Math.max(1, Math.abs(dy)));
+      const x = node.x + (w / 2) * (dx / Math.max(1, Math.abs(dy)));
       return { x, y, port: (dy > 0 ? 'bottom' : 'top') as NodePort };
     }
   }
 
   // Resolve a line endpoint either to free coords or to a node-edge anchor (canvas coords)
   function resolveEndpoint(
-    end: { nodeId?:string; x:number; y:number },
-    otherX:number, otherY:number,
+    end: { nodeId?: string; x: number; y: number },
+    otherX: number, otherY: number,
     nodeMap: Map<string, any>
   ) {
     if (!end.nodeId) return { x: end.x, y: end.y };
@@ -1809,15 +1813,15 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
     let best: { sourceId: string; targetId: string } | null = null;
     let bestDist = Infinity;
     const nodeMap = new Map(nodes.map(n => [n.id, n]));
-    
+
     for (const link of getLinks()) {
       const s = nodeMap.get(link.sourceId), t = nodeMap.get(link.targetId);
       if (!s || !t || s.x === undefined || s.y === undefined || t.x === undefined || t.y === undefined) continue;
-      
+
       const key = linkKey(link.sourceId, link.targetId);
       const style = linkStyles[key] || {};
       const path = style.path || (link.sourceId === t.parent ? 'elbow' : 'straight'); // Default to elbow for hierarchical links
-      
+
       let d = Infinity;
       if (path === 'straight') {
         const cp = closestPointOnSegment(cx, cy, s.x, s.y, t.x, t.y);
@@ -1837,22 +1841,22 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
         for (let i = 0; i < segments; i++) {
           const t1 = i / segments;
           const t2 = (i + 1) / segments;
-          
+
           // Approximate quadratic curve with line segments
           const x1 = s.x + t1 * (t.x - s.x);
           const y1 = s.y + t1 * (t.y - s.y);
           const x2 = s.x + t2 * (t.x - s.x);
           const y2 = s.y + t2 * (t.y - s.y);
-          
+
           const dist = distPointToSegment(cx, cy, x1, y1, x2, y2);
           minDist = Math.min(minDist, dist);
         }
         d = minDist;
       }
-      
-      if (d < tol && d < bestDist) { 
-        best = link; 
-        bestDist = d; 
+
+      if (d < tol && d < bestDist) {
+        best = link;
+        bestDist = d;
       }
     }
     return best;
@@ -1868,19 +1872,19 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
 
     return nodes.find(node => {
       if (node.x === undefined || node.y === undefined) return false;
-      
+
       // Calculate node dimensions for hit testing
       const tempCtx = canvas.getContext('2d');
       if (!tempCtx) return false;
-      
+
       const dimensions = calculateNodeDimensions(node, tempCtx);
       const nodeLeft = node.x - dimensions.width / 2;
       const nodeRight = node.x + dimensions.width / 2;
       const nodeTop = node.y - dimensions.height / 2;
       const nodeBottom = node.y + dimensions.height / 2;
 
-      return canvasX >= nodeLeft && canvasX <= nodeRight && 
-             canvasY >= nodeTop && canvasY <= nodeBottom;
+      return canvasX >= nodeLeft && canvasX <= nodeRight &&
+        canvasY >= nodeTop && canvasY <= nodeBottom;
     }) || null;
   };
 
@@ -1908,12 +1912,12 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
   // Toolbar handler functions
   const handleDeleteSelectedNodes = () => {
     if (selectedIds.size === 0 || !onNodesUpdate) return;
-    
+
     const nodesToDelete = Array.from(selectedIds);
     const confirmMsg = nodesToDelete.length === 1
       ? `Delete "${nodes.find(n => n.id === nodesToDelete[0])?.title}"?`
       : `Delete ${nodesToDelete.length} nodes?`;
-    
+
     if (window.confirm(confirmMsg)) {
       const updatedNodes = nodes.filter(n => !nodesToDelete.includes(n.id));
       onNodesUpdate(updatedNodes);
@@ -1924,7 +1928,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
   const handleColorClickForKeyboard = (x: number, y: number) => {
     const nodeIds = Array.from(selectedIds);
     if (nodeIds.length === 0) return;
-    
+
     // Store original colors before opening picker (with defaults if not set)
     // If a single node is selected, also capture its entire category so Cancel can restore group previews
     const originals: Record<string, { customColor?: string; textColor?: string }> = {};
@@ -1950,7 +1954,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
       }
     });
     setOriginalColors(originals);
-    
+
     setColorPickerNodeIds(nodeIds);
     setColorPickerPosition({ x, y });
     setShowColorPicker(true);
@@ -1965,7 +1969,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
 
   const handleColorClickFromToolbar = (nodeIds: string[], event: React.MouseEvent<HTMLButtonElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
-    
+
     // Store original colors before opening picker (with defaults if not set)
     // If a single node is chosen, also capture its entire category so Cancel can restore group previews
     const originals: Record<string, { customColor?: string; textColor?: string }> = {};
@@ -1991,7 +1995,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
       }
     });
     setOriginalColors(originals);
-    
+
     setColorPickerNodeIds(nodeIds);
     setColorPickerPosition({ x: rect.left + rect.width / 2, y: rect.bottom });
     setShowColorPicker(true);
@@ -2008,7 +2012,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
 
   const handleColorChange = (nodeIds: string[], bgColor: string, textColor: string) => {
     if (!onNodesUpdate) return;
-    
+
     const updatedNodes = nodes.map(node => {
       if (nodeIds.includes(node.id)) {
         return {
@@ -2019,7 +2023,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
       }
       return node;
     });
-    
+
     onNodesUpdate(updatedNodes);
     setShowColorPicker(false);
     // Clear original colors after successful apply
@@ -2028,14 +2032,14 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
 
   const handleLinkSave = (nodeId: string, url: string) => {
     if (!onNodesUpdate) return;
-    
+
     const updatedNodes = nodes.map(node => {
       if (node.id === nodeId) {
         return { ...node, url };
       }
       return node;
     });
-    
+
     onNodesUpdate(updatedNodes);
     setShowLinkEditor(false);
   };
@@ -2043,10 +2047,10 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
   const handleEditTitle = (nodeId: string, event?: React.MouseEvent<HTMLButtonElement>) => {
     const node = nodes.find(n => n.id === nodeId);
     if (!node) return;
-    
+
     // Close hover toolbar when opening title editor
     setHoverToolbarNode(null);
-    
+
     if (event) {
       const rect = event.currentTarget.getBoundingClientRect();
       setTitleEditorNode(nodeId);
@@ -2064,14 +2068,14 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
 
   const handleTitleSave = (nodeId: string, title: string) => {
     if (!onNodesUpdate) return;
-    
+
     const updatedNodes = nodes.map(node => {
       if (node.id === nodeId) {
         return { ...node, title };
       }
       return node;
     });
-    
+
     onNodesUpdate(updatedNodes);
     setShowTitleEditor(false);
   };
@@ -2082,16 +2086,16 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
     if (!canvas || node.x === undefined || node.y === undefined) {
       return { x: 0, y: 0 };
     }
-    
+
     const rect = canvas.getBoundingClientRect();
     const ctx = canvas.getContext('2d');
     if (!ctx) return { x: 0, y: 0 };
-    
+
     const dimensions = calculateNodeDimensions(node, ctx);
     const screenX = rect.left + (node.x * transform.scale) + transform.x;
     const screenY = rect.top + (node.y * transform.scale) + transform.y;
     const nodeTop = screenY - (dimensions.height / 2) * transform.scale;
-    
+
     return {
       x: screenX,
       y: nodeTop - 10, // 10px above the node
@@ -2132,7 +2136,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
       if (isContextMenuDragging) {
         const newX = e.clientX - contextMenuDragOffset.x;
         const newY = e.clientY - contextMenuDragOffset.y;
-        
+
         setContextMenuPosition({ x: newX, y: newY });
       }
     };
@@ -2184,7 +2188,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
         return;
       }
     }
-    
+
     // Figure select/drag (allowed in select and draw modes)
     if (activeTool === 'select' || activeTool === 'draw') {
       const f = getFigureAtPosition(e.clientX, e.clientY);
@@ -2217,27 +2221,28 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
         // Don't return - allow normal drag flow
       }
     }
-    console.log('SitemapCanvas: handleMouseDown called');
-    
+    console.log('SitemapCanvas: handleMouseDown called', { activeTool, isViewerMode, onCommentPlace: !!onCommentPlace });
+
     // Close context menu if clicking elsewhere
     if (contextMenu) {
       setContextMenu(null);
       setHighlightedLink(null);
     }
-    
+
     // PRIORITY: When comment tool is active, place new comment
     // (Comment clicks are handled by CommentBubble DOM elements)
     // Works in both normal and viewer mode
     if (activeTool === 'comment' && onCommentPlace) {
+      console.log('SitemapCanvas: Attempting to place comment');
       // Detect node early to avoid placing comment on top of node
       const node = getNodeAtPosition(e.clientX, e.clientY);
-      
+
       // Don't place comment if clicking on a node (unless in viewer mode where we allow it)
       if (node && !isViewerMode) {
         // Let the node click handler take over
         return;
       }
-      
+
       e.preventDefault();
       e.stopPropagation();
       const canvas = canvasRef.current;
@@ -2245,7 +2250,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
         const rect = canvas.getBoundingClientRect();
         const cx = (e.clientX - rect.left - transform.x) / transform.scale;
         const cy = (e.clientY - rect.top - transform.y) / transform.scale;
-        
+
         // If a comment is currently being edited, finish editing it (collapse) instead of creating new one
         if (editingCommentId && onCommentUpdate) {
           const editingComment = comments?.find(c => c.id === editingCommentId);
@@ -2256,13 +2261,13 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
             return;
           }
         }
-        
+
         // No comment being edited → create new comment
         onCommentPlace(cx, cy);
         return;
       }
     }
-    
+
     // Detect node early for use in other checks
     const node = getNodeAtPosition(e.clientX, e.clientY);
 
@@ -2341,18 +2346,18 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
         }
       }
     }
-    
+
     if (onClearFocus) {
       console.log('SitemapCanvas: handleMouseDown calling onClearFocus');
       onClearFocus();
     }
-    
+
     if (node) {
       // Check if we have a selection from marquee mode - if so, enable dragging
       if (selectedIds.size > 0 && selectedIds.has(node.id)) {
         // We have selected nodes and clicked on one of them - enable dragging all selected nodes
         const selectionIds = Array.from(selectedIds);
-        
+
         setDragSelectionIds(selectionIds);
         const pos: Record<string, { x: number; y: number }> = {};
         selectionIds.forEach(id => {
@@ -2390,7 +2395,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
       if (activeTool === 'select') {
         // Determine which nodes to drag
         let selectionIds: string[];
-        
+
         // If node belongs to a free-form group, prefer the group's members
         const group = selectionGroups.find(g => g.memberNodeIds.includes(node.id));
         if (group) {
@@ -2406,8 +2411,8 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
           // Ctrl/Cmd/Alt now expands to connected graph
           const connectedDrag = e.altKey || e.ctrlKey || e.metaKey;
           selectionIds = e.shiftKey
-          ? nodes.filter(n => n.category === node.category).map(n => n.id)
-          : (connectedDrag ? (() => {
+            ? nodes.filter(n => n.category === node.category).map(n => n.id)
+            : (connectedDrag ? (() => {
               const visited = new Set<string>();
               const queue: string[] = [node.id];
               visited.add(node.id);
@@ -2620,14 +2625,14 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
       setHoverToolbarNode(null);
     }
 
-    if (node && selectedIds.size === 0 && !draggedNode && !isDragging && !marqueeSelection?.isActive && 
-        !showLinkEditor && !showColorPicker && !showTitleEditor) {
+    if (node && selectedIds.size === 0 && !draggedNode && !isDragging && !marqueeSelection?.isActive &&
+      !showLinkEditor && !showColorPicker && !showTitleEditor) {
       // Clear any pending grace timeout
       if (hoverGraceTimeoutRef.current) {
         clearTimeout(hoverGraceTimeoutRef.current);
         hoverGraceTimeoutRef.current = null;
       }
-      
+
       // Show hover toolbar with delay
       hoverTimeoutRef.current = setTimeout(() => {
         setHoverToolbarNode(node);
@@ -2677,66 +2682,66 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
         let newX = canvasX - dragOffset.x;
         let newY = canvasY - dragOffset.y;
 
-    // Alignment guides against other nodes (center and edges)
-    const threshold = 8; // px in canvas space
-    let v: number | null = null; // guide x
-    let h: number | null = null; // guide y
-    let vRefY: number | null = null; // reference node center y
-    let hRefX: number | null = null; // reference node center x
-    const others = nodes.filter(n => n.id !== draggedNode.id && n.x != null && n.y != null);
-    const ctx = canvas.getContext('2d');
-    if (ctx) {
-      const dDims = calculateNodeDimensions(draggedNode, ctx);
-      const dHalfW = dDims.width / 2;
-      const dHalfH = dDims.height / 2;
-      const cx = newX; const cy = newY;
-      let bestDx = Infinity; let bestDy = Infinity;
-      for (const n of others) {
-        const oDims = calculateNodeDimensions(n, ctx);
-        const oHalfW = oDims.width / 2; const oHalfH = oDims.height / 2;
-        const ocx = n.x!; const ocy = n.y!;
-        // vertical: centers
-        const dxCenter = Math.abs(cx - ocx);
-        if (dxCenter <= threshold && dxCenter < bestDx) {
-          v = ocx; vRefY = ocy; bestDx = dxCenter;
-          if (snapToGuides) newX = ocx;
+        // Alignment guides against other nodes (center and edges)
+        const threshold = 8; // px in canvas space
+        let v: number | null = null; // guide x
+        let h: number | null = null; // guide y
+        let vRefY: number | null = null; // reference node center y
+        let hRefX: number | null = null; // reference node center x
+        const others = nodes.filter(n => n.id !== draggedNode.id && n.x != null && n.y != null);
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          const dDims = calculateNodeDimensions(draggedNode, ctx);
+          const dHalfW = dDims.width / 2;
+          const dHalfH = dDims.height / 2;
+          const cx = newX; const cy = newY;
+          let bestDx = Infinity; let bestDy = Infinity;
+          for (const n of others) {
+            const oDims = calculateNodeDimensions(n, ctx);
+            const oHalfW = oDims.width / 2; const oHalfH = oDims.height / 2;
+            const ocx = n.x!; const ocy = n.y!;
+            // vertical: centers
+            const dxCenter = Math.abs(cx - ocx);
+            if (dxCenter <= threshold && dxCenter < bestDx) {
+              v = ocx; vRefY = ocy; bestDx = dxCenter;
+              if (snapToGuides) newX = ocx;
+            }
+            // vertical: left edges
+            const dLeft = cx - dHalfW; const oLeft = ocx - oHalfW;
+            const dxLeft = Math.abs(dLeft - oLeft);
+            if (dxLeft <= threshold && dxLeft < bestDx) {
+              v = oLeft; vRefY = ocy; bestDx = dxLeft;
+              if (snapToGuides) newX = oLeft + dHalfW;
+            }
+            // vertical: right edges
+            const dRight = cx + dHalfW; const oRight = ocx + oHalfW;
+            const dxRight = Math.abs(dRight - oRight);
+            if (dxRight <= threshold && dxRight < bestDx) {
+              v = oRight; vRefY = ocy; bestDx = dxRight;
+              if (snapToGuides) newX = oRight - dHalfW;
+            }
+            // horizontal: centers
+            const dyCenter = Math.abs(cy - ocy);
+            if (dyCenter <= threshold && dyCenter < bestDy) {
+              h = ocy; hRefX = ocx; bestDy = dyCenter;
+              if (snapToGuides) newY = ocy;
+            }
+            // horizontal: top edges
+            const dTop = cy - dHalfH; const oTop = ocy - oHalfH;
+            const dyTop = Math.abs(dTop - oTop);
+            if (dyTop <= threshold && dyTop < bestDy) {
+              h = oTop; hRefX = ocx; bestDy = dyTop;
+              if (snapToGuides) newY = oTop + dHalfH;
+            }
+            // horizontal: bottom edges
+            const dBottom = cy + dHalfH; const oBottom = ocy + oHalfH;
+            const dyBottom = Math.abs(dBottom - oBottom);
+            if (dyBottom <= threshold && dyBottom < bestDy) {
+              h = oBottom; hRefX = ocx; bestDy = dyBottom;
+              if (snapToGuides) newY = oBottom - dHalfH;
+            }
+          }
         }
-        // vertical: left edges
-        const dLeft = cx - dHalfW; const oLeft = ocx - oHalfW;
-        const dxLeft = Math.abs(dLeft - oLeft);
-        if (dxLeft <= threshold && dxLeft < bestDx) {
-          v = oLeft; vRefY = ocy; bestDx = dxLeft;
-          if (snapToGuides) newX = oLeft + dHalfW;
-        }
-        // vertical: right edges
-        const dRight = cx + dHalfW; const oRight = ocx + oHalfW;
-        const dxRight = Math.abs(dRight - oRight);
-        if (dxRight <= threshold && dxRight < bestDx) {
-          v = oRight; vRefY = ocy; bestDx = dxRight;
-          if (snapToGuides) newX = oRight - dHalfW;
-        }
-        // horizontal: centers
-        const dyCenter = Math.abs(cy - ocy);
-        if (dyCenter <= threshold && dyCenter < bestDy) {
-          h = ocy; hRefX = ocx; bestDy = dyCenter;
-          if (snapToGuides) newY = ocy;
-        }
-        // horizontal: top edges
-        const dTop = cy - dHalfH; const oTop = ocy - oHalfH;
-        const dyTop = Math.abs(dTop - oTop);
-        if (dyTop <= threshold && dyTop < bestDy) {
-          h = oTop; hRefX = ocx; bestDy = dyTop;
-          if (snapToGuides) newY = oTop + dHalfH;
-        }
-        // horizontal: bottom edges
-        const dBottom = cy + dHalfH; const oBottom = ocy + oHalfH;
-        const dyBottom = Math.abs(dBottom - oBottom);
-        if (dyBottom <= threshold && dyBottom < bestDy) {
-          h = oBottom; hRefX = ocx; bestDy = dyBottom;
-          if (snapToGuides) newY = oBottom - dHalfH;
-        }
-      }
-    }
         setGuideV(v);
         setGuideH(h);
         setGuideVRefY(vRefY);
@@ -2761,7 +2766,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
       // Canvas panning - use initial transform as base
       const deltaX = e.clientX - dragStart.x;
       const deltaY = e.clientY - dragStart.y;
-      
+
       setTransform({
         x: initialTransform.x + deltaX,
         y: initialTransform.y + deltaY,
@@ -2788,7 +2793,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
           setIsDrafting(false);
           setDraftStart(null);
           setDraftCurrent(null);
-          setActiveTool('select'); setDrawKind(null);
+          onActiveToolChange('select'); setDrawKind(null);
           return;
         }
         // Zoom‑aware, box‑aware snapping to nodes
@@ -2828,7 +2833,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
           onLinkStyleChange?.(k, { path: newLinePath, dash: 'solid', color: '#111827', width: 2 });
         }
         // After creation, switch to Select to allow endpoint editing without starting a new line
-        setActiveTool('select'); setDrawKind(null);
+        onActiveToolChange('select'); setDrawKind(null);
         // Auto-open connection popover for the new link
         if (startNode && endNode) {
           const k = linkKey(startNode.id, endNode.id);
@@ -2870,20 +2875,27 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
 
     // Ignore right-click - only left-click should trigger text editing
     if (e.button === 2) return;
-    
+
     // No threshold/stop override; allow normal flow
-    
+
     // Handle draw mode creation FIRST (before other interactions that might set isDragging)
     // Check if we're in a draw mode and there was minimal movement (click, not drag)
     const dragDistance = Math.sqrt(
       Math.pow(e.clientX - dragStart.x, 2) + Math.pow(e.clientY - dragStart.y, 2)
     );
     const isClick = dragDistance < dragThreshold;
-    
+
+    if (isClick && activeTool === 'text' && onCreateFigure) {
+      const canvas = canvasRef.current;
+      // Switch back to select tool
+      onActiveToolChange('select');
+      setDrawKind(null);
+      return;
+    }
     if (isClick && activeTool === 'text' && onCreateFigure) {
       const canvas = canvasRef.current;
       if (!canvas) {
-        setActiveTool('select'); setDrawKind(null);
+        onActiveToolChange('select'); setDrawKind(null);
         return;
       }
       const rect = canvas.getBoundingClientRect();
@@ -2913,17 +2925,17 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
       // Set toolbar immediately (positioned above the editor)
       setFigureToolbar({ id: figure.id, x: screenX, y: screenY - 60 });
       setSelectedFigureId(figure.id);
-      
+
       // Create the figure (editor already showing)
       onCreateFigure(figure);
-      setActiveTool('select'); setDrawKind(null);
-      
+      onActiveToolChange('select'); setDrawKind(null);
+
       // Reset drag states
       setIsDragging(false);
       setDraggedNode(null);
       return;
     }
-    
+
     // End shape resize and show toolbar
     if (resizingShape) {
       const f = figures?.find(ff => ff.id === resizingShape.id);
@@ -2939,7 +2951,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
       setResizingShape(null);
       return;
     }
-    
+
     // End figure drag and open toolbar
     if (draggingFigureId) {
       const id = draggingFigureId;
@@ -2954,7 +2966,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
         setFigureToolbar({ id: f.id, x: sx, y: sy });
         setSelectedFigureId(f.id);
         setSelectedFigureIds(new Set([f.id]));
-        
+
         // Only open text editor for text figures
         if (f.type === 'text') {
           openFigureTextEditor(f);
@@ -2968,17 +2980,17 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
       if (fig) {
         const canvas = canvasRef.current;
         if (canvas) {
-        const rect = canvas.getBoundingClientRect();
-        const sx = rect.left + (fig.x * transform.scale) + transform.x;
-        const sy = rect.top + (fig.y * transform.scale) + transform.y - 60;
-        // Only open editor for text figures
-        if (fig.type === 'text') {
-          openFigureTextEditor(fig);
-        }
-        // show formatting toolbar above it
-        setFigureToolbar({ id: fig.id, x: sx, y: sy });
-        setSelectedFigureId(fig.id);
-        setSelectedFigureIds(new Set([fig.id]));
+          const rect = canvas.getBoundingClientRect();
+          const sx = rect.left + (fig.x * transform.scale) + transform.x;
+          const sy = rect.top + (fig.y * transform.scale) + transform.y - 60;
+          // Only open editor for text figures
+          if (fig.type === 'text') {
+            openFigureTextEditor(fig);
+          }
+          // show formatting toolbar above it
+          setFigureToolbar({ id: fig.id, x: sx, y: sy });
+          setSelectedFigureId(fig.id);
+          setSelectedFigureIds(new Set([fig.id]));
         }
         return;
       } else {
@@ -3041,18 +3053,18 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
         const rect = canvas.getBoundingClientRect();
         const canvasX = (e.clientX - rect.left - transform.x) / transform.scale;
         const canvasY = (e.clientY - rect.top - transform.y) / transform.scale;
-        
+
         const left = Math.min(marqueeSelection.startX, canvasX);
         const right = Math.max(marqueeSelection.startX, canvasX);
         const top = Math.min(marqueeSelection.startY, canvasY);
         const bottom = Math.max(marqueeSelection.startY, canvasY);
-        
+
         // Find nodes within marquee area
         const selectedNodes = nodes.filter(node => {
           if (node.x === undefined || node.y === undefined) return false;
           return node.x >= left && node.x <= right && node.y >= top && node.y <= bottom;
         });
-        
+
         // Find text figures within marquee area using dynamic bounds
         const selectedTextFigures: string[] = [];
         if (figures) {
@@ -3066,16 +3078,16 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
             }
           });
         }
-        
+
         // Update selection and clear any highlighted links
         const newSelectedNodeIds = selectedNodes.map(n => n.id);
         setSelectedIds(new Set(newSelectedNodeIds));
-        
+
         // Find and select text figures overlapping with selected nodes (using helper function)
-        const overlappingTextFigures = newSelectedNodeIds.length > 0 
+        const overlappingTextFigures = newSelectedNodeIds.length > 0
           ? findTextFiguresOverlappingNodes(newSelectedNodeIds)
           : selectedTextFigures;
-        
+
         // Select text figures if any were found
         if (overlappingTextFigures.length > 0) {
           setSelectedFigureId(overlappingTextFigures[0]); // Select first one for toolbar
@@ -3093,7 +3105,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
           setSelectedFigureIds(new Set());
           setFigureToolbar(null);
         }
-        
+
         setHighlightedLink(null); // Clear link highlighting when nodes are selected
       }
       setMarqueeSelection(null);
@@ -3102,7 +3114,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
       const dragDistance = Math.sqrt(
         Math.pow(e.clientX - dragStart.x, 2) + Math.pow(e.clientY - dragStart.y, 2)
       );
-      
+
       if (dragDelta && dragSelectionIds) {
         const updatedNodes = nodes.map(n => {
           if (!dragSelectionIds.includes(n.id)) return n;
@@ -3131,7 +3143,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
         // After dragging, keep the selection and find overlapping text figures
         const newSelectedIds = Array.from(dragSelectionIds);
         setSelectedIds(new Set(newSelectedIds));
-        
+
         // Find and select text figures overlapping with selected nodes
         const overlappingTextFigures = findTextFiguresOverlappingNodes(newSelectedIds);
         if (overlappingTextFigures.length > 0 && figures && canvasRef.current) {
@@ -3149,17 +3161,17 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
       } else if (dragDistance < dragThreshold) {
         // Only trigger click if it wasn't a significant drag
         // Use dragSelectionIds if available (for Shift/Ctrl+click), otherwise just the dragged node
-        const nodeIdsToSelect = dragSelectionIds && dragSelectionIds.length > 0 
-          ? dragSelectionIds 
+        const nodeIdsToSelect = dragSelectionIds && dragSelectionIds.length > 0
+          ? dragSelectionIds
           : [draggedNode.id];
-        
+
         if (onNodeClick) {
           onNodeClick(draggedNode);
         }
-        
+
         const newSelectedIds = new Set(nodeIdsToSelect);
         setSelectedIds(newSelectedIds);
-        
+
         // Find and select text figures overlapping with selected nodes
         const overlappingTextFigures = findTextFiguresOverlappingNodes(nodeIdsToSelect);
         if (overlappingTextFigures.length > 0 && figures && canvasRef.current) {
@@ -3178,7 +3190,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
           setSelectedFigureIds(new Set());
           setFigureToolbar(null);
         }
-        
+
         setHighlightedLink(null);
       }
     } else if (isDragging && !draggedNode) {
@@ -3186,7 +3198,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
       const dragDistance = Math.sqrt(
         Math.pow(e.clientX - dragStart.x, 2) + Math.pow(e.clientY - dragStart.y, 2)
       );
-      
+
       if (dragDistance < dragThreshold) {
         // Small movement = background click - clear selection
         console.log('SitemapCanvas: Background click detected, clearing selection');
@@ -3198,96 +3210,71 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
       // Large movement = canvas pan, no action needed
     } else if (!isDragging && !draggedNode) {
       // Handle click when no node was being dragged and no canvas panning
-    const dragDistance = Math.hypot(e.clientX - dragStart.x, e.clientY - dragStart.y);
-    if (dragDistance < dragThreshold) {
-      // PRIORITY: When comment tool is active, handle comment placement logic
-      // Flow: 1st click → create & edit, 2nd click → finish editing (collapse), 3rd click → create new
-      if (activeTool === 'comment' && onCommentPlace) {
-        const canvas = canvasRef.current;
-        if (canvas) {
-          const rect = canvas.getBoundingClientRect();
-          const cx = (e.clientX - rect.left - transform.x) / transform.scale;
-          const cy = (e.clientY - rect.top - transform.y) / transform.scale;
-          
-          // If a comment is currently being edited, finish editing it (collapse) instead of creating new one
-          if (editingCommentId && onCommentUpdate) {
-            const editingComment = comments?.find(c => c.id === editingCommentId);
-            if (editingComment) {
-              // Finish editing: update with current text and collapse
-              onCommentUpdate(editingCommentId, editingComment.text || '');
-              setEditingCommentId(null);
-              return;
-            }
-          }
-          
-          // No comment being edited → create new comment
-          onCommentPlace(cx, cy);
-          return;
-        }
-      }
-
-      // In viewer mode, allow comment placement on empty canvas (only when comment tool is active)
-      if (isViewerMode && activeTool === 'comment' && onCommentPlace) {
-        const clickedNode = getNodeAtPosition(e.clientX, e.clientY);
-        if (!clickedNode) {
+      const dragDistance = Math.hypot(e.clientX - dragStart.x, e.clientY - dragStart.y);
+      if (dragDistance < dragThreshold) {
+        // PRIORITY: When comment tool is active, handle comment placement logic
+        // Flow: 1st click → create & edit, 2nd click → finish editing (collapse), 3rd click → create new
+        if (activeTool === 'comment' && onCommentPlace) {
           const canvas = canvasRef.current;
           if (canvas) {
             const rect = canvas.getBoundingClientRect();
             const cx = (e.clientX - rect.left - transform.x) / transform.scale;
             const cy = (e.clientY - rect.top - transform.y) / transform.scale;
+
+            // If a comment is currently being edited, finish editing it (collapse) instead of creating new one
+            if (editingCommentId && onCommentUpdate) {
+              const editingComment = comments?.find(c => c.id === editingCommentId);
+              if (editingComment) {
+                // Finish editing: update with current text and collapse
+                onCommentUpdate(editingCommentId, editingComment.text || '');
+                setEditingCommentId(null);
+                return;
+              }
+            }
+
+            // No comment being edited → create new comment
             onCommentPlace(cx, cy);
             return;
           }
         }
-      }
 
-      // 1) Try link first, but ignore clicks inside node boxes to avoid edge misclicks
-      const tolPxUp = 14; const tolCanvasUp = tolPxUp / transform.scale;
-      if (!isInsideNodeBox(e.clientX, e.clientY)) {
-        const link = getLinkAtPosition(e.clientX, e.clientY, tolCanvasUp);
-        if (link) {
-          const k = linkKey(link.sourceId, link.targetId);
-          const anchor = getConnectionAnchor(link.sourceId, link.targetId);
-          if (anchor) setConnectionPopover({ linkKey: k, sourceId: link.sourceId, targetId: link.targetId, x: anchor.x, y: anchor.y });
-          setHighlightedLink(null);
-          return;
-        }
-      }
-
-      // 2) Otherwise try free line: open the inline pill toolbar at closest point (zoom-aware)
-      if (freeLines && freeLines.length > 0) {
-        const { cx, cy } = pointToCanvas(e.clientX, e.clientY);
-        const tolPx = 14; // screen px tolerance
-        const tolCanvas = tolPx / transform.scale; // convert to canvas distance
-
-        const nodeMap = new Map(nodes.map(n => [n.id, n]));
-        let best: { id: string; d: number; anchorX: number; anchorY: number } | null = null;
-
-        for (const line of freeLines) {
-          const sNode = line.startNodeId ? nodeMap.get(line.startNodeId) : undefined;
-          const tNode = line.endNodeId ? nodeMap.get(line.endNodeId) : undefined;
-          const x1 = (sNode && sNode.x !== undefined) ? sNode.x : line.x1;
-          const y1 = (sNode && sNode.y !== undefined) ? sNode.y : line.y1;
-          const x2 = (tNode && tNode.x !== undefined) ? tNode.x : line.x2;
-          const y2 = (tNode && tNode.y !== undefined) ? tNode.y : line.y2;
-
-          if (line.style.path === 'straight') {
-            const cp = closestPointOnSegment(cx, cy, x1, y1, x2, y2);
-            const d = Math.hypot(cx - cp.x, cy - cp.y);
-            if (d <= tolCanvas && (!best || d < best.d)) best = { id: line.id, d, anchorX: cp.x, anchorY: cp.y };
-          } else {
-            const cp1 = closestPointOnSegment(cx, cy, x1, y1, x2, y1);
-            const cp2 = closestPointOnSegment(cx, cy, x2, y1, x2, y2);
-            const d1 = Math.hypot(cx - cp1.x, cy - cp1.y);
-            const d2 = Math.hypot(cx - cp2.x, cy - cp2.y);
-            if (d1 <= tolCanvas && (!best || d1 < best.d)) best = { id: line.id, d: d1, anchorX: cp1.x, anchorY: cp1.y };
-            if (d2 <= tolCanvas && (!best || d2 < best.d)) best = { id: line.id, d: d2, anchorX: cp2.x, anchorY: cp2.y };
+        // In viewer mode, allow comment placement on empty canvas (only when comment tool is active)
+        if (isViewerMode && activeTool === 'comment' && onCommentPlace) {
+          const clickedNode = getNodeAtPosition(e.clientX, e.clientY);
+          if (!clickedNode) {
+            const canvas = canvasRef.current;
+            if (canvas) {
+              const rect = canvas.getBoundingClientRect();
+              const cx = (e.clientX - rect.left - transform.x) / transform.scale;
+              const cy = (e.clientY - rect.top - transform.y) / transform.scale;
+              onCommentPlace(cx, cy);
+              return;
+            }
           }
         }
 
-        // Fallback: still anchor to the nearest segment midpoint if click is near a line but outside tolerance
-        if (!best) {
-          let nearest: { id: string; d: number; anchorX: number; anchorY: number } | null = null;
+        // 1) Try link first, but ignore clicks inside node boxes to avoid edge misclicks
+        const tolPxUp = 14; const tolCanvasUp = tolPxUp / transform.scale;
+        if (!isInsideNodeBox(e.clientX, e.clientY)) {
+          const link = getLinkAtPosition(e.clientX, e.clientY, tolCanvasUp);
+          if (link) {
+            const k = linkKey(link.sourceId, link.targetId);
+            const anchor = getConnectionAnchor(link.sourceId, link.targetId);
+            if (anchor) setConnectionPopover({ linkKey: k, sourceId: link.sourceId, targetId: link.targetId, x: anchor.x, y: anchor.y });
+            setHighlightedLink(null);
+            return;
+          }
+        }
+
+        // 2) Otherwise try free line: open the inline pill toolbar at closest point (zoom-aware)
+        if (freeLines && freeLines.length > 0) {
+          const { cx, cy } = pointToCanvas(e.clientX, e.clientY);
+          const tolPx = 14; // screen px tolerance
+          const tolCanvas = tolPx / transform.scale; // convert to canvas distance
+
+          const nodeMap = new Map(nodes.map(n => [n.id, n]));
+          let best: { id: string; d: number; anchorX: number; anchorY: number } | null = null;
+
           for (const line of freeLines) {
             const sNode = line.startNodeId ? nodeMap.get(line.startNodeId) : undefined;
             const tNode = line.endNodeId ? nodeMap.get(line.endNodeId) : undefined;
@@ -3299,51 +3286,76 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
             if (line.style.path === 'straight') {
               const cp = closestPointOnSegment(cx, cy, x1, y1, x2, y2);
               const d = Math.hypot(cx - cp.x, cy - cp.y);
-              if (!nearest || d < nearest.d) nearest = { id: line.id, d, anchorX: cp.x, anchorY: cp.y };
+              if (d <= tolCanvas && (!best || d < best.d)) best = { id: line.id, d, anchorX: cp.x, anchorY: cp.y };
             } else {
-              const mx = x2, my = y1; // elbow corner midpoint
-              const d = Math.hypot(cx - mx, cy - my);
-              if (!nearest || d < nearest.d) nearest = { id: line.id, d, anchorX: mx, anchorY: my };
+              const cp1 = closestPointOnSegment(cx, cy, x1, y1, x2, y1);
+              const cp2 = closestPointOnSegment(cx, cy, x2, y1, x2, y2);
+              const d1 = Math.hypot(cx - cp1.x, cy - cp1.y);
+              const d2 = Math.hypot(cx - cp2.x, cy - cp2.y);
+              if (d1 <= tolCanvas && (!best || d1 < best.d)) best = { id: line.id, d: d1, anchorX: cp1.x, anchorY: cp1.y };
+              if (d2 <= tolCanvas && (!best || d2 < best.d)) best = { id: line.id, d: d2, anchorX: cp2.x, anchorY: cp2.y };
             }
           }
-          best = nearest || null;
-        }
 
-        if (best) {
-          // Free line inline editing removed; no UI on click for free lines
-          return;
-        }
-      }
+          // Fallback: still anchor to the nearest segment midpoint if click is near a line but outside tolerance
+          if (!best) {
+            let nearest: { id: string; d: number; anchorX: number; anchorY: number } | null = null;
+            for (const line of freeLines) {
+              const sNode = line.startNodeId ? nodeMap.get(line.startNodeId) : undefined;
+              const tNode = line.endNodeId ? nodeMap.get(line.endNodeId) : undefined;
+              const x1 = (sNode && sNode.x !== undefined) ? sNode.x : line.x1;
+              const y1 = (sNode && sNode.y !== undefined) ? sNode.y : line.y1;
+              const x2 = (tNode && tNode.x !== undefined) ? tNode.x : line.x2;
+              const y2 = (tNode && tNode.y !== undefined) ? tNode.y : line.y2;
 
-      // 2) Fallback to node click (only if not in comment tool mode)
-      const clickedNode = activeTool !== 'comment' ? getNodeAtPosition(e.clientX, e.clientY) : null;
-      if (clickedNode && onNodeClick) {
-        onNodeClick(clickedNode);
-        const newSelectedIds = new Set([clickedNode.id]);
-        setSelectedIds(newSelectedIds);
-        
-        // Find and select text figures overlapping with this node
-        const overlappingTextFigures = findTextFiguresOverlappingNodes([clickedNode.id]);
-        if (overlappingTextFigures.length > 0 && figures) {
-          const firstFig = figures.find(f => f.id === overlappingTextFigures[0]);
-          if (firstFig && canvasRef.current) {
-            const canvas = canvasRef.current;
-            const rect = canvas.getBoundingClientRect();
-            const sx = rect.left + (firstFig.x * transform.scale) + transform.x;
-            const sy = rect.top + (firstFig.y * transform.scale) + transform.y - 60;
-            setSelectedFigureId(overlappingTextFigures[0]);
-            setFigureToolbar({ id: firstFig.id, x: sx, y: sy });
+              if (line.style.path === 'straight') {
+                const cp = closestPointOnSegment(cx, cy, x1, y1, x2, y2);
+                const d = Math.hypot(cx - cp.x, cy - cp.y);
+                if (!nearest || d < nearest.d) nearest = { id: line.id, d, anchorX: cp.x, anchorY: cp.y };
+              } else {
+                const mx = x2, my = y1; // elbow corner midpoint
+                const d = Math.hypot(cx - mx, cy - my);
+                if (!nearest || d < nearest.d) nearest = { id: line.id, d, anchorX: mx, anchorY: my };
+              }
+            }
+            best = nearest || null;
           }
-        } else {
-          setSelectedFigureId(null);
-          setFigureToolbar(null);
+
+          if (best) {
+            // Free line inline editing removed; no UI on click for free lines
+            return;
+          }
         }
-        
-        setHighlightedLink(null);
-      }
+
+        // 2) Fallback to node click (only if not in comment tool mode)
+        const clickedNode = activeTool !== 'comment' ? getNodeAtPosition(e.clientX, e.clientY) : null;
+        if (clickedNode && onNodeClick) {
+          onNodeClick(clickedNode);
+          const newSelectedIds = new Set([clickedNode.id]);
+          setSelectedIds(newSelectedIds);
+
+          // Find and select text figures overlapping with this node
+          const overlappingTextFigures = findTextFiguresOverlappingNodes([clickedNode.id]);
+          if (overlappingTextFigures.length > 0 && figures) {
+            const firstFig = figures.find(f => f.id === overlappingTextFigures[0]);
+            if (firstFig && canvasRef.current) {
+              const canvas = canvasRef.current;
+              const rect = canvas.getBoundingClientRect();
+              const sx = rect.left + (firstFig.x * transform.scale) + transform.x;
+              const sy = rect.top + (firstFig.y * transform.scale) + transform.y - 60;
+              setSelectedFigureId(overlappingTextFigures[0]);
+              setFigureToolbar({ id: firstFig.id, x: sx, y: sy });
+            }
+          } else {
+            setSelectedFigureId(null);
+            setFigureToolbar(null);
+          }
+
+          setHighlightedLink(null);
+        }
       }
     }
-    
+
     // Always reset these states
     setIsDragging(false);
     setDraggedNode(null);
@@ -3381,7 +3393,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
     // Cursor mode shortcuts
     switch (e.key) {
       case 'v':
-        setActiveTool('select');
+        onActiveToolChange('select');
         setDrawKind(null);
         break;
       case 'Delete':
@@ -3422,13 +3434,13 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
 
   const handleWheel = (e: WheelEvent) => {
     e.preventDefault();
-    
+
     // Clear focus when zooming/panning
     if (onClearFocus) {
       console.log('SitemapCanvas: handleWheel calling onClearFocus');
       onClearFocus();
     }
-    
+
     // Check if Ctrl/Cmd key is pressed for zoom, otherwise pan
     if (e.ctrlKey || e.metaKey) {
       // Zoom behavior in discrete 1% steps snapping to 0.1..2.0 for finer traversal
@@ -3454,7 +3466,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
       const panSpeed = 1;
       const deltaX = e.deltaX * panSpeed;
       const deltaY = e.deltaY * panSpeed;
-      
+
       setTransform(prev => ({
         ...prev,
         x: prev.x - deltaX,
@@ -3493,7 +3505,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
         const metrics = ctx.measureText(fig.text ?? 'Text');
         textWidth = Math.max(40, metrics.width);
         ctx.restore();
-      } catch {}
+      } catch { }
     }
     const paddingX = 28;
     const paddingY = 16;
@@ -3535,7 +3547,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
     return null;
   };
 
-  
+
 
   // Get shape resize handle at position
   const getShapeHandleAtPosition = (clientX: number, clientY: number): null | { id: string; corner: 0 | 1 | 2 | 3 } => {
@@ -3693,9 +3705,9 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
       style={{
         cursor:
           activeTool === 'text' ? 'text' :
-          (activeTool === 'draw' ? 'crosshair' :
-          (activeTool === 'comment' ? 'crosshair' :
-          (isSpacePressed ? 'grab' : ((draggedNode || isDragging) ? 'grabbing' : (marqueeSelection?.isActive ? 'crosshair' : 'default'))))),
+            (activeTool === 'draw' ? 'crosshair' :
+              (activeTool === 'comment' ? 'crosshair' :
+                (isSpacePressed ? 'grab' : ((draggedNode || isDragging) ? 'grabbing' : (marqueeSelection?.isActive ? 'crosshair' : 'default'))))),
         WebkitTapHighlightColor: 'transparent'
       }}
     >
@@ -3706,13 +3718,13 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
       )} */}
       <canvas
         ref={canvasRef}
-          style={{
-            cursor:
-              activeTool === 'text' ? 'text' :
+        style={{
+          cursor:
+            activeTool === 'text' ? 'text' :
               (activeTool === 'draw' ? 'crosshair' :
-              (activeTool === 'comment' ? 'crosshair' :
-              (isSpacePressed ? 'grab' : ((draggedNode || isDragging) ? 'grabbing' : (marqueeSelection?.isActive ? 'crosshair' : 'default')))))
-          }}
+                (activeTool === 'comment' ? 'crosshair' :
+                  (isSpacePressed ? 'grab' : ((draggedNode || isDragging) ? 'grabbing' : (marqueeSelection?.isActive ? 'crosshair' : 'default')))))
+        }}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
@@ -3735,7 +3747,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
           }
         }}
       />
-      
+
       {/* Selected text figures overlay outlines (hide while editing) */}
       {selectedFigureIds.size > 0 && !editingTextFigureId && figures && canvasRef.current && (() => {
         const canvas = canvasRef.current!;
@@ -3775,7 +3787,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
           {contextMenu.link && (() => {
             const selectedKey = linkKey(contextMenu.link.sourceId, contextMenu.link.targetId);
             const cur = linkStyles[selectedKey] || {};
-            
+
             const applyLinkStyle = (style: LinkStyle) => {
               if (onLinkStyleChange) {
                 onLinkStyleChange(selectedKey, style);
@@ -3790,7 +3802,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
                 }
               }
             };
-            
+
             return (
               <>
                 <div
@@ -3799,7 +3811,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
                 >
                   <span className="text-xs text-gray-600 font-medium">Link Style</span>
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-gray-400">
-                    <path d="M8 6h8M8 12h8M8 18h8"/>
+                    <path d="M8 6h8M8 12h8M8 18h8" />
                   </svg>
                 </div>
 
@@ -3842,57 +3854,56 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
                 </div>
 
                 {/* Delete Link */}
-          <button
-            onClick={() => {
-              if (contextMenu.link) {
-                // Check if it's an extra link or hierarchical link
-                const targetNode = nodes.find(n => n.id === contextMenu.link!.targetId);
-                const isExtraLink = extraLinks.some(l => 
-                  l.sourceId === contextMenu.link!.sourceId && 
-                  l.targetId === contextMenu.link!.targetId
-                );
-                const isHierarchicalLink = targetNode?.parent === contextMenu.link!.sourceId;
-                
-                if (isExtraLink && onExtraLinkDelete) {
-                  // Delete extra link
-                  onExtraLinkDelete(contextMenu.link.sourceId, contextMenu.link.targetId);
-                } else if (isHierarchicalLink && onNodesUpdate) {
-                  // Delete hierarchical link
-                  const updatedNodes = nodes.map(node => {
-                    if (node.id === contextMenu.link!.targetId) {
-                      return { ...node, parent: null };
-                    } else if (node.id === contextMenu.link!.sourceId) {
-                      // Remove from parent's children array
-                      return { ...node, children: node.children.filter(id => id !== contextMenu.link!.targetId) };
+                <button
+                  onClick={() => {
+                    if (contextMenu.link) {
+                      // Check if it's an extra link or hierarchical link
+                      const targetNode = nodes.find(n => n.id === contextMenu.link!.targetId);
+                      const isExtraLink = extraLinks.some(l =>
+                        l.sourceId === contextMenu.link!.sourceId &&
+                        l.targetId === contextMenu.link!.targetId
+                      );
+                      const isHierarchicalLink = targetNode?.parent === contextMenu.link!.sourceId;
+
+                      if (isExtraLink && onExtraLinkDelete) {
+                        // Delete extra link
+                        onExtraLinkDelete(contextMenu.link.sourceId, contextMenu.link.targetId);
+                      } else if (isHierarchicalLink && onNodesUpdate) {
+                        // Delete hierarchical link
+                        const updatedNodes = nodes.map(node => {
+                          if (node.id === contextMenu.link!.targetId) {
+                            return { ...node, parent: null };
+                          } else if (node.id === contextMenu.link!.sourceId) {
+                            // Remove from parent's children array
+                            return { ...node, children: node.children.filter(id => id !== contextMenu.link!.targetId) };
+                          }
+                          return node;
+                        });
+                        onNodesUpdate(updatedNodes);
+                      }
                     }
-                    return node;
-                  });
-                  onNodesUpdate(updatedNodes);
-                }
-              }
-              setContextMenu(null);
-              setHighlightedLink(null);
-            }}
-            className="w-full text-sm px-4 py-2 text-left hover:bg-gray-50 text-red-600"
-          >
-            Delete Link
-          </button>
+                    setContextMenu(null);
+                    setHighlightedLink(null);
+                  }}
+                  className="w-full text-sm px-4 py-2 text-left hover:bg-gray-50 text-red-600"
+                >
+                  Delete Link
+                </button>
               </>
             );
           })()}
         </div>
       )}
-      
+
       {/* Center Toolbar */}
       <div className="fixed bottom-8 left-1/2 transform -translate-x-1/2 flex items-center gap-1 bg-white border border-gray-300 rounded-lg shadow-lg px-2 py-1 z-50">
         {/* Select - always visible, even in viewer mode */}
         <button
-          onClick={() => { setActiveTool('select'); setDrawKind(null); }}
-          className={`w-8 h-8 flex items-center justify-center rounded transition-colors group relative ${
-            activeTool === 'select' 
-              ? 'bg-orange-100 text-orange-600 border border-orange-200' 
-              : 'bg-gray-100 hover:bg-gray-200 text-gray-600'
-          }`}
+          onClick={() => { onActiveToolChange('select'); setDrawKind(null); }}
+          className={`w-8 h-8 flex items-center justify-center rounded transition-colors group relative ${activeTool === 'select'
+            ? 'bg-orange-100 text-orange-600 border border-orange-200'
+            : 'bg-gray-100 hover:bg-gray-200 text-gray-600'
+            }`}
         >
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M3 11 L22 2 L13 21 L11 13 L3 11 Z" />
@@ -3901,7 +3912,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
             Select (V)
           </span>
         </button>
-        
+
         {!isViewerMode && (
           <>
             <button
@@ -3922,7 +3933,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
                 Add Node (A)
               </span>
             </button>
-            
+
             {/* Text (T) */}
             <button
               onClick={() => {
@@ -3949,13 +3960,13 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
 
                 // Open editor at screen center
                 setEditingTextFigureId(figure.id);
-            setTextEditorPosition({ x: rect.left + centerX, y: rect.top + centerY });
+                setTextEditorPosition({ x: rect.left + centerX, y: rect.top + centerY });
                 setTextEditorText('Text');
               }}
               className={"w-8 h-8 flex items-center justify-center rounded transition-colors group relative bg-gray-100 hover:bg-gray-200 text-gray-600"}
             >
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M4 7h16M12 7v10"/>
+                <path d="M4 7h16M12 7v10" />
               </svg>
               <span className="absolute -top-10 left-1/2 -translate-x-1/2 px-2 py-1 bg-gray-900 text-white text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
                 Text
@@ -3972,25 +3983,24 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
             <div className="relative">
               <button
                 onClick={() => {
-              // Default to straight; immediately enter draw mode
-              setNewLinePath('straight');
-              setActiveTool('draw');
-              setDrawKind('line');
+                  // Default to straight; immediately enter draw mode
+                  setNewLinePath('straight');
+                  onActiveToolChange('draw');
+                  setDrawKind('line');
                   setIsSpacePressed(false);
                   setIsDragging(false);
                   setDraggedNode(null);
                   backgroundDownRef.current = null;
-                  setTimeout(() => { try { canvasRef.current?.focus(); } catch {} }, 0);
+                  setTimeout(() => { try { canvasRef.current?.focus(); } catch { } }, 0);
                 }}
                 aria-pressed={activeTool === 'draw' && drawKind === 'line'}
-                className={`w-8 h-8 flex items-center justify-center rounded transition-colors group relative ${
-                  activeTool === 'draw' && drawKind === 'line'
-                    ? 'bg-orange-100 text-orange-600 border border-orange-200 ring-orange-400 ring-offset-1'
-                    : 'bg-gray-100 hover:bg-gray-200 text-gray-600 focus-visible: focus-visible:ring-blue-500'
-                }`}
+                className={`w-8 h-8 flex items-center justify-center rounded transition-colors group relative ${activeTool === 'draw' && drawKind === 'line'
+                  ? 'bg-orange-100 text-orange-600 border border-orange-200 ring-orange-400 ring-offset-1'
+                  : 'bg-gray-100 hover:bg-gray-200 text-gray-600 focus-visible: focus-visible:ring-blue-500'
+                  }`}
               >
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M4 18L18 4"/>
+                  <path d="M4 18L18 4" />
                 </svg>
                 <span className="absolute -top-10 left-1/2 -translate-x-1/2 px-2 py-1 bg-gray-900 text-white text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
                   Connection line (L) - drag from node to node
@@ -4007,22 +4017,21 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
             <div className="w-px h-6 bg-gray-300 mx-1"></div>
             <button
               onClick={() => {
-                setActiveTool(activeTool === 'comment' ? 'select' : 'comment');
+                onActiveToolChange(activeTool === 'comment' ? 'select' : 'comment');
                 setDrawKind(null);
                 setIsSpacePressed(false);
                 setIsDragging(false);
                 setDraggedNode(null);
                 backgroundDownRef.current = null;
               }}
-              className={`w-8 h-8 flex items-center justify-center rounded transition-colors group relative ${
-                activeTool === 'comment'
-                  ? 'bg-orange-100 text-orange-600 border border-orange-200 shadow-sm'
-                  : 'bg-gray-100 hover:bg-gray-200 text-gray-600 border border-transparent'
-              }`}
+              className={`w-8 h-8 flex items-center justify-center rounded transition-colors group relative ${activeTool === 'comment'
+                ? 'bg-orange-100 text-orange-600 border border-orange-200 shadow-sm'
+                : 'bg-gray-100 hover:bg-gray-200 text-gray-600 border border-transparent'
+                }`}
               title="Add comment - Click on canvas to place"
             >
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
               </svg>
               <span className="absolute -top-10 left-1/2 -translate-x-1/2 px-2 py-1 bg-gray-900 text-white text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50">
                 Comment - Click on canvas to add
@@ -4030,33 +4039,33 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
             </button>
           </>
         )}
-        
+
         {!isViewerMode && (
           <>
             <div className="w-px h-6 bg-gray-300 mx-1"></div>
-            
+
             <button
               onClick={() => { if (onUndo) onUndo(); }}
               disabled={!onUndo}
               className="w-8 h-8 flex items-center justify-center bg-gray-100 hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed rounded transition-colors group relative"
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M3 7v6h6"/>
-                <path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/>
+                <path d="M3 7v6h6" />
+                <path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13" />
               </svg>
               <span className="absolute -top-10 left-1/2 -translate-x-1/2 px-2 py-1 bg-gray-900 text-white text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
                 Undo (Ctrl+Z)
               </span>
             </button>
-            
+
             <button
               onClick={() => { if (onRedo) onRedo(); }}
               disabled={!onRedo}
               className="w-8 h-8 flex items-center justify-center bg-gray-100 hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed rounded transition-colors group relative"
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 7v6h-6"/>
-                <path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3L21 13"/>
+                <path d="M21 7v6h-6" />
+                <path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3L21 13" />
               </svg>
               <span className="absolute -top-10 left-1/2 -translate-x-1/2 px-2 py-1 bg-gray-900 text-white text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
                 Redo (Ctrl+Y)
@@ -4075,16 +4084,16 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
           title="Zoom In"
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="11" cy="11" r="8"/>
-            <path d="M21 21l-4.35-4.35"/>
-            <line x1="11" y1="8" x2="11" y2="14"/>
-            <line x1="8" y1="11" x2="14" y2="11"/>
+            <circle cx="11" cy="11" r="8" />
+            <path d="M21 21l-4.35-4.35" />
+            <line x1="11" y1="8" x2="11" y2="14" />
+            <line x1="8" y1="11" x2="14" y2="11" />
           </svg>
           <span className="absolute -top-10 left-1/2 -translate-x-1/2 px-2 py-1 bg-gray-900 text-white text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
             Zoom In
           </span>
         </button>
-        <div 
+        <div
           className="px-3 py-1 text-sm font-medium text-gray-700 min-w-[60px] text-center cursor-pointer hover:bg-gray-100 rounded transition-colors relative zoom-dropdown-container group"
           onClick={() => setShowZoomDropdown(!showZoomDropdown)}
           title="Set zoom level"
@@ -4110,9 +4119,9 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
           title="Zoom Out"
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="11" cy="11" r="8"/>
-            <path d="M21 21l-4.35-4.35"/>
-            <line x1="8" y1="11" x2="14" y2="11"/>
+            <circle cx="11" cy="11" r="8" />
+            <path d="M21 21l-4.35-4.35" />
+            <line x1="8" y1="11" x2="14" y2="11" />
           </svg>
           <span className="absolute -top-10 left-1/2 -translate-x-1/2 px-2 py-1 bg-gray-900 text-white text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
             Zoom Out
@@ -4147,14 +4156,14 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
       {selectedIds.size > 0 && !draggedNode && (() => {
         const selectedNodesArray = Array.from(selectedIds).map(id => nodes.find(n => n.id === id)).filter(Boolean) as PageNode[];
         if (selectedNodesArray.length === 0) return null;
-        
+
         // Calculate bounding box center for multi-selection
         const avgX = selectedNodesArray.reduce((sum, n) => sum + (n.x || 0), 0) / selectedNodesArray.length;
         const avgY = selectedNodesArray.reduce((sum, n) => sum + (n.y || 0), 0) / selectedNodesArray.length;
-        
+
         const canvas = canvasRef.current;
         if (!canvas) return null;
-        
+
         const rect = canvas.getBoundingClientRect();
         const screenX = rect.left + (avgX * transform.scale) + transform.x;
         const screenY = rect.top + (avgY * transform.scale) + transform.y;
@@ -4165,7 +4174,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
           if (g.memberNodeIds.length !== selNodeIds.size || g.memberFigureIds.length !== selFigureIds.size) return false;
           return g.memberNodeIds.every(id => selNodeIds.has(id)) && g.memberFigureIds.every(id => selFigureIds.has(id));
         });
-        
+
         return (
           <SelectionToolbar
             selectedNodes={selectedNodesArray}
@@ -4236,7 +4245,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
       {showLinkEditor && linkEditorNode && (() => {
         const node = nodes.find(n => n.id === linkEditorNode);
         if (!node) return null;
-        
+
         return (
           <LinkEditorPopover
             nodeId={linkEditorNode}
@@ -4287,7 +4296,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
       {showTitleEditor && titleEditorNode && (() => {
         const node = nodes.find(n => n.id === titleEditorNode);
         if (!node) return null;
-        
+
         return (
           <TitleEditorPopover
             nodeId={titleEditorNode}
@@ -4363,7 +4372,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
                 e.preventDefault();
                 e.clipboardData?.setData('text/plain', JSON.stringify(payload));
                 pasteBumpRef.current = 0;
-              } catch {}
+              } catch { }
             }}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
@@ -4416,7 +4425,7 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
                   }
                   return;
                 }
-              } catch {}
+              } catch { }
               // Default: insert plain text into editor
               e.preventDefault();
               document.execCommand('insertText', false, raw);
@@ -4467,56 +4476,56 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
         const f = figures.find(ff => ff.id === editingTextFigureId) || ({ id: editingTextFigureId } as any);
         const currentFontSize = f.fontSize ?? 18;
         return (
-            <div
-              className="fixed z-20 bg-white border border-gray-200 rounded-lg shadow-md px-2 py-1 flex items-center gap-1"
+          <div
+            className="fixed z-20 bg-white border border-gray-200 rounded-lg shadow-md px-2 py-1 flex items-center gap-1"
             style={{ left: textEditorPosition.x, top: textEditorPosition.y - 30, transform: 'translate(-50%, -100%)' }}
             onClick={(e) => e.stopPropagation()}
-            >
-      <button 
-        className="px-2 py-1 text-xs rounded hover:bg-gray-100" 
-        onMouseDown={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  onUpdateFigure?.(f.id, { fontSize: Math.max(10, currentFontSize - 2) });
-                }}
-              >–</button>
-      <span className="px-1 tabular-nums text-[11px] text-gray-600">{currentFontSize}</span>
-      <button 
-        className="px-2 py-1 text-xs rounded hover:bg-gray-100" 
-        onMouseDown={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  onUpdateFigure?.(f.id, { fontSize: Math.min(64, currentFontSize + 2) });
-                }}
-              >+</button>
-      <button 
-        className={`px-2 py-1 text-xs rounded hover:bg-gray-100 ${f.fontWeight === 'bold' ? 'bg-gray-100' : ''}`} 
-        onMouseDown={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  onUpdateFigure?.(f.id, { fontWeight: f.fontWeight === 'bold' ? 'normal' : 'bold' });
-                }}
-              >B</button>
-      <button 
-        className={`px-2 py-1 text-xs rounded hover:bg-gray-100 ${f.underline ? 'bg-gray-100' : ''}`} 
-        onMouseDown={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  onUpdateFigure?.(f.id, { underline: !f.underline });
-                }}
-              ><span style={{ textDecoration: 'underline' }}>U</span></button>
-             <button
-               className="ml-1 px-2 py-1 text-xs rounded hover:bg-red-50 text-red-600"
-               onMouseDown={(e) => {
-                 e.preventDefault();
-                 e.stopPropagation();
-                 const id = editingTextFigureId || f.id;
-                 onDeleteFigure?.(id);
-                 setEditingTextFigureId(null);
-                 setFigureToolbar(null);
-                 isEditingTextRef.current = false;
-               }}
-          >Delete</button>
+          >
+            <button
+              className="px-2 py-1 text-xs rounded hover:bg-gray-100"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onUpdateFigure?.(f.id, { fontSize: Math.max(10, currentFontSize - 2) });
+              }}
+            >–</button>
+            <span className="px-1 tabular-nums text-[11px] text-gray-600">{currentFontSize}</span>
+            <button
+              className="px-2 py-1 text-xs rounded hover:bg-gray-100"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onUpdateFigure?.(f.id, { fontSize: Math.min(64, currentFontSize + 2) });
+              }}
+            >+</button>
+            <button
+              className={`px-2 py-1 text-xs rounded hover:bg-gray-100 ${f.fontWeight === 'bold' ? 'bg-gray-100' : ''}`}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onUpdateFigure?.(f.id, { fontWeight: f.fontWeight === 'bold' ? 'normal' : 'bold' });
+              }}
+            >B</button>
+            <button
+              className={`px-2 py-1 text-xs rounded hover:bg-gray-100 ${f.underline ? 'bg-gray-100' : ''}`}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onUpdateFigure?.(f.id, { underline: !f.underline });
+              }}
+            ><span style={{ textDecoration: 'underline' }}>U</span></button>
+            <button
+              className="ml-1 px-2 py-1 text-xs rounded hover:bg-red-50 text-red-600"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const id = editingTextFigureId || f.id;
+                onDeleteFigure?.(id);
+                setEditingTextFigureId(null);
+                setFigureToolbar(null);
+                isEditingTextRef.current = false;
+              }}
+            >Delete</button>
           </div>
         );
       })()}
@@ -4539,8 +4548,8 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
               onClick={(e) => e.stopPropagation()}
             >
               {/* Group/Ungroup removed from text toolbar to avoid confusion */}
-              <button 
-                className="px-2 py-1 text-xs rounded hover:bg-gray-100" 
+              <button
+                className="px-2 py-1 text-xs rounded hover:bg-gray-100"
                 onClick={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
@@ -4548,16 +4557,16 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
                 }}
               >–</button>
               <span className="px-1 tabular-nums text-[11px] text-gray-600">{currentFontSize}</span>
-              <button 
-                className="px-2 py-1 text-xs rounded hover:bg-gray-100" 
+              <button
+                className="px-2 py-1 text-xs rounded hover:bg-gray-100"
                 onClick={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
                   targetIds.forEach(id => onUpdateFigure?.(id, { fontSize: Math.min(64, (figures.find(ff => ff.id === id)?.fontSize ?? currentFontSize) + 2) }));
                 }}
               >+</button>
-              <button 
-                className={`px-2 py-1 text-xs rounded hover:bg-gray-100 ${f.fontWeight === 'bold' ? 'bg-gray-100' : ''}`} 
+              <button
+                className={`px-2 py-1 text-xs rounded hover:bg-gray-100 ${f.fontWeight === 'bold' ? 'bg-gray-100' : ''}`}
                 onClick={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
@@ -4567,8 +4576,8 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
                   });
                 }}
               >B</button>
-              <button 
-                className={`px-2 py-1 text-xs rounded hover:bg-gray-100 ${f.underline ? 'bg-gray-100' : ''}`} 
+              <button
+                className={`px-2 py-1 text-xs rounded hover:bg-gray-100 ${f.underline ? 'bg-gray-100' : ''}`}
                 onClick={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
@@ -4578,13 +4587,13 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
                   });
                 }}
               ><span style={{ textDecoration: 'underline' }}>U</span></button>
-              <button 
-                className="ml-1 px-2 py-1 text-xs rounded hover:bg-red-50 text-red-600" 
+              <button
+                className="ml-1 px-2 py-1 text-xs rounded hover:bg-red-50 text-red-600"
                 onClick={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
-                  targetIds.forEach(id => onDeleteFigure?.(id)); 
-                  setFigureToolbar(null); 
+                  targetIds.forEach(id => onDeleteFigure?.(id));
+                  setFigureToolbar(null);
                   setEditingTextFigureId(null);
                 }}
               >Delete</button>
@@ -4609,9 +4618,8 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
                 {fillColors.map(c => (
                   <button
                     key={c}
-                    className={`w-5 h-5 rounded border-2 transition-all ${
-                      (f.fill || '#ffffff') === c ? 'ring-2 ring-blue-500' : 'border-gray-300'
-                    }`}
+                    className={`w-5 h-5 rounded border-2 transition-all ${(f.fill || '#ffffff') === c ? 'ring-2 ring-blue-500' : 'border-gray-300'
+                      }`}
                     style={{ backgroundColor: c }}
                     onClick={(e) => {
                       e.preventDefault();
@@ -4629,9 +4637,8 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
                 {strokeColors.map(c => (
                   <button
                     key={c}
-                    className={`w-5 h-5 rounded border-2 transition-all ${
-                      (f.stroke || '#000000') === c ? 'ring-2 ring-blue-500' : 'border-gray-300'
-                    }`}
+                    className={`w-5 h-5 rounded border-2 transition-all ${(f.stroke || '#000000') === c ? 'ring-2 ring-blue-500' : 'border-gray-300'
+                      }`}
                     style={{ backgroundColor: c }}
                     onClick={(e) => {
                       e.preventDefault();
@@ -4649,9 +4656,8 @@ export const SitemapCanvas = forwardRef((props: SitemapCanvasProps, ref) => {
                 {widths.map(w => (
                   <button
                     key={w}
-                    className={`px-2 py-0.5 text-xs rounded transition-all ${
-                      w === (f.strokeWidth ?? 2) ? 'bg-blue-100 border-2 border-blue-500' : 'border border-gray-300 hover:bg-gray-50'
-                    }`}
+                    className={`px-2 py-0.5 text-xs rounded transition-all ${w === (f.strokeWidth ?? 2) ? 'bg-blue-100 border-2 border-blue-500' : 'border border-gray-300 hover:bg-gray-50'
+                      }`}
                     onClick={(e) => {
                       e.preventDefault();
                       e.stopPropagation();
