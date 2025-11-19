@@ -64,7 +64,7 @@ Run the following SQL to create the `comments` table:
 CREATE TABLE IF NOT EXISTS comments (
   id TEXT PRIMARY KEY,
   sitemap_id TEXT NOT NULL REFERENCES sitemaps(id) ON DELETE CASCADE,
-  user_id TEXT NOT NULL REFERENCES auth.users(id),
+  user_id TEXT NOT NULL,  -- Changed: Removed REFERENCES auth.users(id) to allow anonymous IDs
   user_name TEXT,  -- Store user name for display
   user_email TEXT,  -- Store user email for display
   x REAL NOT NULL,  -- Canvas X coordinate
@@ -75,6 +75,9 @@ CREATE TABLE IF NOT EXISTS comments (
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
+-- Remove foreign key constraint if it exists (allows anonymous user IDs)
+ALTER TABLE comments DROP CONSTRAINT IF EXISTS comments_user_id_fkey;
+
 -- Create indexes for faster queries
 CREATE INDEX IF NOT EXISTS idx_comments_sitemap_id ON comments(sitemap_id);
 CREATE INDEX IF NOT EXISTS idx_comments_created_at ON comments(created_at DESC);
@@ -82,8 +85,8 @@ CREATE INDEX IF NOT EXISTS idx_comments_created_at ON comments(created_at DESC);
 -- Enable Row Level Security (RLS)
 ALTER TABLE comments ENABLE ROW LEVEL SECURITY;
 
--- Policy: Users can read all comments for shared sitemaps
-CREATE POLICY "Users can read comments for shared sitemaps" ON comments
+-- Policy: Users can read all comments for shared sitemaps (works for everyone, including anonymous)
+CREATE POLICY "Allow read comments for shared sitemaps" ON comments
   FOR SELECT
   USING (
     EXISTS (
@@ -93,26 +96,44 @@ CREATE POLICY "Users can read comments for shared sitemaps" ON comments
     )
   );
 
--- Policy: Users can create their own comments
-CREATE POLICY "Users can create their own comments" ON comments
+-- Policy: Users can create comments for shared sitemaps (works for everyone, including anonymous)
+-- IMPORTANT: Removed auth.uid() requirement to allow anonymous users
+CREATE POLICY "Allow create comments for shared sitemaps" ON comments
   FOR INSERT
-  WITH CHECK (auth.uid()::text = user_id);
-
--- Policy: Users can update their own comments
-CREATE POLICY "Users can update their own comments" ON comments
-  FOR UPDATE
-  USING (auth.uid()::text = user_id)
-  WITH CHECK (auth.uid()::text = user_id);
-
--- Policy: Users can delete their own comments, or sitemap owners can delete any comment
-CREATE POLICY "Users can delete their own comments or owners can delete any" ON comments
-  FOR DELETE
-  USING (
-    auth.uid()::text = user_id OR
+  WITH CHECK (
     EXISTS (
       SELECT 1 FROM sitemaps 
       WHERE sitemaps.id = comments.sitemap_id 
-      AND sitemaps.user_id = auth.uid()::text
+      AND sitemaps.share_token IS NOT NULL
+    )
+  );
+
+-- Policy: Users can update comments for shared sitemaps
+CREATE POLICY "Allow update comments for shared sitemaps" ON comments
+  FOR UPDATE
+  USING (
+    EXISTS (
+      SELECT 1 FROM sitemaps 
+      WHERE sitemaps.id = comments.sitemap_id 
+      AND sitemaps.share_token IS NOT NULL
+    )
+  )
+  WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM sitemaps 
+      WHERE sitemaps.id = comments.sitemap_id 
+      AND sitemaps.share_token IS NOT NULL
+    )
+  );
+
+-- Policy: Users can delete comments for shared sitemaps
+CREATE POLICY "Allow delete comments for shared sitemaps" ON comments
+  FOR DELETE
+  USING (
+    EXISTS (
+      SELECT 1 FROM sitemaps 
+      WHERE sitemaps.id = comments.sitemap_id 
+      AND sitemaps.share_token IS NOT NULL
     )
   );
 ```

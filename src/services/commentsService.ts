@@ -39,7 +39,7 @@ function rowToComment(row: CommentRow): Comment {
 
 // Create a new comment
 export async function createComment(sitemapId: string, x: number, y: number, text: string): Promise<Comment> {
-  // Get user info (try Supabase, fallback to localStorage)
+  // Get user info (try Supabase, fallback to localStorage/anonymous)
   let userId = 'anonymous';
   let userEmail = '';
   let userName = 'Anonymous User';
@@ -51,25 +51,51 @@ export async function createComment(sitemapId: string, x: number, y: number, tex
         userId = user.id;
         userEmail = user.email || '';
         userName = user.user_metadata?.name || user.email?.split('@')[0] || `User ${user.id.slice(0, 8)}`;
+      } else {
+        // No authenticated user - use anonymous ID
+        // Generate a consistent anonymous ID for this browser session
+        let anonymousId = localStorage.getItem('anonymous_user_id');
+        if (!anonymousId) {
+          anonymousId = `anon-${crypto.randomUUID()}`;
+          localStorage.setItem('anonymous_user_id', anonymousId);
+        }
+        userId = anonymousId;
+        userName = 'Anonymous User';
       }
     } catch (err) {
-      // Fallback to localStorage user
+      // Fallback to localStorage user or anonymous
       const localUser = localStorage.getItem('localUser');
       if (localUser) {
         const user = JSON.parse(localUser);
         userId = user.id || 'local-user';
         userEmail = user.email || '';
         userName = user.name || 'Local User';
+      } else {
+        // Generate consistent anonymous ID
+        let anonymousId = localStorage.getItem('anonymous_user_id');
+        if (!anonymousId) {
+          anonymousId = `anon-${crypto.randomUUID()}`;
+          localStorage.setItem('anonymous_user_id', anonymousId);
+        }
+        userId = anonymousId;
       }
     }
   } else {
-    // Use localStorage user
+    // No Supabase - use localStorage or anonymous
     const localUser = localStorage.getItem('localUser');
     if (localUser) {
       const user = JSON.parse(localUser);
       userId = user.id || 'local-user';
       userEmail = user.email || '';
       userName = user.name || 'Local User';
+    } else {
+      // Generate consistent anonymous ID
+      let anonymousId = localStorage.getItem('anonymous_user_id');
+      if (!anonymousId) {
+        anonymousId = `anon-${crypto.randomUUID()}`;
+        localStorage.setItem('anonymous_user_id', anonymousId);
+      }
+      userId = anonymousId;
     }
   }
 
@@ -138,7 +164,38 @@ export async function createComment(sitemapId: string, x: number, y: number, tex
 
 // Get all comments for a sitemap
 export async function getComments(sitemapId: string): Promise<Comment[]> {
-  // Try localStorage first (works without Supabase)
+  // Try Supabase FIRST (for shared sitemaps, this is the source of truth)
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from('comments')
+        .select('*')
+        .eq('sitemap_id', sitemapId)
+        .order('created_at', { ascending: false });
+
+      if (!error && data) {
+        // Success - convert and return, also sync to localStorage
+        const comments = (data || []).map(rowToComment);
+        
+        // Sync to localStorage for offline access
+        try {
+          const storageKey = `comments_${sitemapId}`;
+          localStorage.setItem(storageKey, JSON.stringify(comments));
+        } catch (err) {
+          // Ignore localStorage sync errors
+        }
+        
+        return comments;
+      }
+      
+      // If error, log but continue to localStorage fallback
+      console.warn('Error loading comments from Supabase:', error?.message);
+    } catch (err) {
+      console.warn('Failed to load comments from Supabase:', err);
+    }
+  }
+  
+  // Fallback to localStorage (only if Supabase fails or not available)
   try {
     const storageKey = `comments_${sitemapId}`;
     const stored = localStorage.getItem(storageKey);
@@ -148,41 +205,7 @@ export async function getComments(sitemapId: string): Promise<Comment[]> {
   } catch (err) {
     // Ignore localStorage errors
   }
-
-  // Try Supabase if available
-  if (supabase) {
-    try {
-      const { data, error } = await supabase
-        .from('comments')
-        .select('*')
-        .eq('sitemap_id', sitemapId)
-        .order('created_at', { ascending: false });
-
-      if (error) {
-        // If table doesn't exist or other error, fall back to localStorage
-        console.warn('Error loading comments from Supabase, using localStorage:', error.message);
-        const storageKey = `comments_${sitemapId}`;
-        const stored = localStorage.getItem(storageKey);
-        if (stored) {
-          return JSON.parse(stored);
-        }
-        return [];
-      }
-
-      // Convert all rows to comments
-      return (data || []).map(rowToComment);
-    } catch (err) {
-      // Catch any unexpected errors (e.g., table doesn't exist)
-      console.warn('Failed to load comments from Supabase, using localStorage:', err);
-      const storageKey = `comments_${sitemapId}`;
-      const stored = localStorage.getItem(storageKey);
-      if (stored) {
-        return JSON.parse(stored);
-      }
-      return [];
-    }
-  }
-
+  
   return [];
 }
 
